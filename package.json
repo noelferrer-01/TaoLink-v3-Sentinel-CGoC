@@ -13,6 +13,7 @@
     "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx drizzle/migrate.ts",
+    "db:seed-compliance": "tsx scripts/seed-compliance.ts",
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
