@@ -1,6 +1,6 @@
 # 0004 — Applicant-pool legal classification (paid vs unpaid callback list)
 
-**Status:** OPEN
+**Status:** PARTIALLY RESOLVED (2026-05-23) — hybrid model per Noel: some are paid (relievers/floaters), new applicants not paid until deployed. Labor-lawyer review still recommended before lock.
 **Filed:** 2026-05-23
 **Touches:** Phase 1 (HR) employee state machine; Phase 5 (Recruitment) applicant pool; payroll boundary.
 
@@ -59,7 +59,38 @@ The Commander Group meeting notes do **not** explicitly confirm CG's practice on
 
 ## Resolution
 
-_(Pending.)_
+**Hybrid model (Option C — model what CG actually does), 2026-05-23, partially resolved by Noel.**
+
+Noel's confirmation: "i think there are some paid, and others, specially the new ones are not paid until they are deployed to clients."
+
+**Working model — three distinct populations:**
+
+| Population | Status | Employed? | Paid? | Lives in |
+|---|---|---|---|---|
+| New applicant (just applied) | Pre-screening | No | No | Recruitment |
+| Cleared applicant (callback list) | Cleared, awaiting deployment | No | No | Recruitment |
+| Reliever / Floater | Active employee, between assignments | Yes | Yes (agency cost) | HR + Recruitment (assignment owner) |
+| Active employee — Deployed | Posted at a client | Yes | Yes (billable) | HR + Recruitment (assignment owner) |
+| Active employee — On Leave | VL/SL/maternity | Yes | Depends on leave type | HR |
+
+The lifecycle transition `Cleared applicant → Deployed/Reliever` is the moment of employment AND first pay. Until then, the person is in Recruitment with no payroll record.
+
+**Still open — needs labor-lawyer confirmation:**
+- Is the "Cleared applicant" status legally defensible under PH labor law? (DOLE has historically hit agencies for non-payment of workers under contract.)
+- Are reliever/floater pay rates compliant with minimum-wage and night-shift differential rules even when not posted?
+- Does the agency have written policy distinguishing these populations? If not, that's a documentation gap to fix.
+
+**Consequences:**
+- HR state machine includes explicit `reliever` and `floating` statuses (paid, no current deployment).
+- Recruitment owns the `cleared-callback` status (unpaid, pre-employee).
+- The Recruitment → HR transition fires `HR.EmployeeCreated` AND triggers the first payroll record.
+- Audit trail captures the exact moment of employment transition for each guard — this is the legal-defense artifact in a DOLE inquiry.
+
+## Open follow-ups
+
+- [ ] Labor-lawyer consult (one-time, billable to project).
+- [ ] Confirm CG's written policy on each status (or help them write one).
+- [ ] Questionnaire Part D8–10 + E7–8 still recommended for explicit documentation.
 
 ## Cross-references
 

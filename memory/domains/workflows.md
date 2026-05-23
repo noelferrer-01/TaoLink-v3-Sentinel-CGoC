@@ -21,33 +21,39 @@ Deployment receives demand
 Shortfall? → Recruitment.HiringRequisitionOpened
 ```
 
-⚠ **Commander Group practice diverges** — Recruitment may own the entire chain including assignment creation. See `../../wiki/decisions/0001-recruitment-vs-deployment-ownership.md`.
+⚠ **RESOLVED 2026-05-23 — Commander Group practice adopted:** Recruitment owns the entire chain including assignment creation. The "Deployment" actor below is actually a logical role within Recruitment; Operations can only file `Operations.TransferRequested` events. See [`../../wiki/decisions/0001-recruitment-vs-operations-ownership.md`](../../wiki/decisions/0001-recruitment-vs-operations-ownership.md) + [`../../wiki/decisions/0011-operations-role-pivot.md`](../../wiki/decisions/0011-operations-role-pivot.md).
 
-## Reshuffle (internal guard reassignment)
+## Reshuffle (internal guard reassignment) — UPDATED 2026-05-23
 
 ```
-Operations triggers reshuffle (manual or system-suggested)
+Operations files Operations.TransferRequested (optional — Recruitment may initiate directly too)
+    ↓ approval gate
+Recruitment reviews → approve / reject
+    ↓ (if approved)
+Recruitment.AssignmentEnded (Guard A leaves Detachment 1)
     ↓
-Deployment.AssignmentEnded (Guard A leaves Detachment 1)
-    ↓
-Deployment.AssignmentCreated (Guard A starts at Detachment 2)
-    ↓
-Inventory check: does Guard A's assets match Detachment 2 needs?
+Recruitment.AssignmentCreated (Guard A starts at Detachment 2)
+    ↓ event bus
+Inventory subscribes: does Guard A's assets match Detachment 2 needs?
     ↓ (if mismatch)
 Inventory.AssetIssuanceRequired
 ```
 
-## Hiring → Deployment
+Per [0001](../../wiki/decisions/0001-recruitment-vs-operations-ownership.md) + [0011](../../wiki/decisions/0011-operations-role-pivot.md): Operations cannot execute transfers, only request them. Per [0010](../../wiki/decisions/0010-inventory-seamlessness.md): Inventory subscribes via the event bus.
+
+## Hiring → Assignment (via Recruitment) — UPDATED 2026-05-23
 
 ```
-Recruitment.CandidateHired
+Recruitment.HireDecided (applicant cleared and offered)
     ↓
-HR.EmployeeCreated (status: training)
+HR.EmployeeCreated (status: hired — may be training, reliever, floating, or directly assignable)
     ↓
-Training complete → status: bench/floating/deployable
+Training complete (if applicable) → status update via HR.changeStatus()
     ↓
-Deployment picks up → status: deployed at Client X
+Recruitment.AssignmentCreated (status: deployed at Client X)
 ```
+
+Per [0009](../../wiki/decisions/0009-hr-starter-and-recruitment-as-entry-point.md): Recruitment calls `HR.createEmployee()` to push hires into HR-starter, then owns the assignment that puts them at a client. Per [0004](../../wiki/decisions/0004-applicant-pool-legal-classification.md): some hires start paid immediately (relievers/floaters); pure callback-list applicants are not paid until deployed.
 
 ## DTR → Payroll
 

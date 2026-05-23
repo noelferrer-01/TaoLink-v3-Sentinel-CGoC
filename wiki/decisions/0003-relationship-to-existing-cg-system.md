@@ -1,6 +1,6 @@
 # 0003 — Relationship between Sentinel and Commander Group's existing partial HRIS
 
-**Status:** OPEN
+**Status:** RESOLVED (2026-05-23) — CG's existing partial HRIS has **no relationship** to Sentinel, per Noel. Sentinel is a fresh build that runs in parallel and may eventually deprecate them.
 **Filed:** 2026-05-23
 **Touches:** Project scope, migration strategy, Phase 0 data-loading approach, cutover plan.
 
@@ -57,7 +57,20 @@ Each shapes Phase 0 differently:
 
 ## Resolution
 
-_(Pending.)_
+**No relationship, 2026-05-23, confirmed by Noel.**
+
+Noel's confirmation: "the partial HRIS the CGoC has, have no relationship on Sentinel."
+
+- CG has several existing systems (mentioned in the meeting transcript): a partial HRIS, an inventory/firearms light system, an executive system.
+- **Sentinel does NOT integrate with, migrate from, or sync to any of them.** It is a parallel, independent build.
+- CG's existing systems may be deprecated by CG at their own pace once Sentinel ships the equivalent functionality.
+- Data ingestion for Sentinel is a clean-room exercise — initial employee/client load happens via CSV import or manual entry, scoped per phase.
+
+**Consequences:**
+- Phase 0 does NOT need integration adapters to legacy systems.
+- Phase 0 DOES need bulk-import tooling for the initial 10k+ guard onboarding into HR-starter.
+- The cutover plan is "Sentinel goes live, CG decides what to retire and when" — not a hard migration.
+- No data-sync contracts to design. No legacy system reverse-engineering required.
 
 ## Cross-references
 

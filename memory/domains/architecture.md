@@ -1,6 +1,17 @@
 # Architecture — Sentinel
 
-> **Status: REFERENCE-ONLY until v3 makes its own architectural calls.** Everything below is prior thinking from the v1/v2/Sentinel brainstorming captured in `../../ref/sentinel-docs/`. v3 may adopt, modify, or replace any of it. Treat as input, not commitment.
+> **Status: PARTIALLY HARDENED.** Resolutions on 2026-05-23 (see [`../../wiki/decisions/`](../../wiki/decisions/) ADRs 0001, 0002, 0003, 0004, 0009, 0010, 0011) have moved several architectural calls from reference to commitment. Remaining items below (stack, DB, multi-tenancy, exact phase order) are still REFERENCE-ONLY pending Noel's calls.
+>
+> **Resolved calls so far:**
+> - Recruitment owns assignments + transfers + reshuffles (not Operations/Deployment).
+> - Marketing is a real department; build the full Marketing module.
+> - No relationship to CG's existing partial systems — Sentinel is a parallel fresh build.
+> - Applicant pool is hybrid (relievers paid, new callbacks unpaid).
+> - HR is "starter" (minimal) in Phase 1; Recruitment ships in Phase 2 as the entry point.
+> - Inventory integrates via event bus, standalone-capable.
+> - Operations role pivots to logistics/client-comms/monitoring.
+>
+> **Still open:** phase order revision proposal in [`../../wiki/decisions/0012-phase-order-revision.md`](../../wiki/decisions/0012-phase-order-revision.md).
 
 ## Stack (OPEN)
 - **Lean A:** TypeScript + Next.js (App Router) + Postgres + Drizzle + custom worker. Continuity with v1/v2.
@@ -29,22 +40,25 @@ This is a *refinement* of the generic `modules/` pattern in `AGENTS.md` — `cor
 5. **Audit everything regulator-touchable.** Firearm assignments, payroll runs, DTR adjustments, salary changes — immutable audit logs.
 6. **Single source of truth per fact.** Employee status lives in HR, period.
 
-## Phase order (prior thinking, revised in /ref/)
+## Phase order — STALE; see proposed revision
+
+**The phase order below is stale** because of resolutions on [0001](../../wiki/decisions/0001-recruitment-vs-operations-ownership.md) (Recruitment ownership) and [0009](../../wiki/decisions/0009-hr-starter-and-recruitment-as-entry-point.md) (HR-starter pattern). The replacement proposal is in [`../../wiki/decisions/0012-phase-order-revision.md`](../../wiki/decisions/0012-phase-order-revision.md) — Recruitment promoted to Phase 2, Deployment dissolved into Recruitment, Inventory promoted to Phase 5.
+
+**Old order (kept for traceability):**
+
 | Phase | Module |
 |---|---|
 | 0 | Auth (action-RBAC + scopes + approvals primitive) + Audit log + Event bus + repo/CI/CD/DB scaffolding |
 | 1 | HR (employee master, 201 file) + Marketing/Contracts + Client/Detachment master |
-| 2 | Deployment / Manpower Pool (split from Recruitment) |
+| 2 | ~~Deployment / Manpower Pool~~ — dissolved into Recruitment |
 | 3 | DTR (per-client, per-assignment-window) |
 | 4 | Payroll |
-| 5 | Recruitment (hiring pipeline + applicant pool) |
+| 5 | Recruitment — **PROMOTED to Phase 2** under the proposed revision |
 | 6 | Inventory (firearms, radios, uniforms, vehicles) |
 | 7 | Loans / Cash Advance |
 | 8 | Billing |
 | 9 | Compliance & Reporting |
 | 10 | AI Copilot (LangGraph) |
-
-⚠ **Open contradiction:** Phase 2 ("Deployment" as separate module) conflicts with Commander Group's actual practice where **Recruitment owns guard-transfer authority**. See `../../wiki/decisions/0001-recruitment-vs-deployment-ownership.md`.
 
 ## Identity, Access & Audit (Phase 0)
 - Three concepts kept separate: Authentication (who) / Authorization (what) / Scope (which data).

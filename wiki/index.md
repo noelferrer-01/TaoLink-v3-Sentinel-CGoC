@@ -10,14 +10,18 @@
 
 ## Decisions
 - [decisions/index.md](decisions/index.md) — all open and resolved architectural / scope calls
-  - [0001 — Recruitment vs Operations: who owns guard transfers and reshuffles?](decisions/0001-recruitment-vs-operations-ownership.md) — OPEN
-  - [0002 — Marketing department shape at Commander Group](decisions/0002-marketing-department-shape.md) — OPEN
-  - [0003 — Relationship between Sentinel and Commander Group's existing system](decisions/0003-relationship-to-existing-cg-system.md) — OPEN
-  - [0004 — Applicant-pool legal classification](decisions/0004-applicant-pool-legal-classification.md) — OPEN
+  - [0001 — Recruitment vs Operations: who owns guard transfers and reshuffles?](decisions/0001-recruitment-vs-operations-ownership.md) — **RESOLVED**
+  - [0002 — Marketing department shape at Commander Group](decisions/0002-marketing-department-shape.md) — **RESOLVED**
+  - [0003 — Relationship between Sentinel and Commander Group's existing system](decisions/0003-relationship-to-existing-cg-system.md) — **RESOLVED**
+  - [0004 — Applicant-pool legal classification](decisions/0004-applicant-pool-legal-classification.md) — **PARTIALLY RESOLVED**
   - [0005 — Stack: TypeScript vs Python](decisions/0005-stack.md) — OPEN (lean TS)
   - [0006 — Database: MySQL continuation vs Postgres](decisions/0006-database.md) — OPEN (lean Postgres)
   - [0007 — Multi-tenancy: internal-only vs licensable](decisions/0007-multi-tenancy.md) — OPEN
   - [0008 — Dev environment: Docker vs native](decisions/0008-dev-environment.md) — OPEN (lean Docker Compose)
+  - [0009 — HR-starter + Recruitment-as-entry-point pattern](decisions/0009-hr-starter-and-recruitment-as-entry-point.md) — **RESOLVED**
+  - [0010 — Inventory: standalone-capable but seamless via events](decisions/0010-inventory-seamlessness.md) — **RESOLVED**
+  - [0011 — Operations role pivot after Recruitment takes transfer authority](decisions/0011-operations-role-pivot.md) — **RESOLVED**
+  - [0012 — Phase order revision (proposed post-resolutions)](decisions/0012-phase-order-revision.md) — OPEN (awaiting Noel's review)
 
 ## Runbooks
 - [runbooks/README.md](runbooks/README.md) — convention; populated as ops procedures emerge.

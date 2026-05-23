@@ -13,14 +13,23 @@
 | 5 | Hosting: on-prem / cloud / hybrid | OPEN | Questionnaire Part R |
 | 6 | Dev environment: Docker vs native | OPEN (lean Docker Compose) | [Decision 0008](../decisions/0008-dev-environment.md) |
 
-## Open contradictions with Commander Group practice
+## Resolved contradictions (2026-05-23, all confirmed by Noel)
 
-| # | ADR | Summary |
+| # | ADR | Resolution |
 |---|---|---|
-| 0001 | [Recruitment vs Operations ownership](../decisions/0001-recruitment-vs-operations-ownership.md) | Sentinel splits Deployment from Recruitment; CG fuses them under Recruitment. |
-| 0002 | [Marketing department shape](../decisions/0002-marketing-department-shape.md) | Sentinel assumes a Marketing dept; CG mentions one person ("Jen") in passing. |
-| 0003 | [Relationship to existing CG system](../decisions/0003-relationship-to-existing-cg-system.md) | Replace? Migrate from? Augment? Undefined. |
-| 0004 | [Applicant-pool legal classification](../decisions/0004-applicant-pool-legal-classification.md) | Gray area. Needs labor-lawyer review with CG. |
+| 0001 | [Recruitment vs Operations ownership](../decisions/0001-recruitment-vs-operations-ownership.md) | Recruitment owns all transfers/reshuffles. Operations request-only. |
+| 0002 | [Marketing department shape](../decisions/0002-marketing-department-shape.md) | Marketing exists (Jen). Build full Marketing module. |
+| 0003 | [Relationship to existing CG system](../decisions/0003-relationship-to-existing-cg-system.md) | No relationship. Parallel fresh build. |
+| 0004 | [Applicant-pool legal classification](../decisions/0004-applicant-pool-legal-classification.md) | Hybrid model (relievers paid, new callbacks unpaid). Lawyer review still recommended. |
+| 0009 | [HR-starter + Recruitment-as-entry-point](../decisions/0009-hr-starter-and-recruitment-as-entry-point.md) | HR-starter Phase 1 + Recruitment Phase 2; both ship early. |
+| 0010 | [Inventory seamlessness](../decisions/0010-inventory-seamlessness.md) | Event-bus subscription pattern (standalone code, seamless UX). |
+| 0011 | [Operations role pivot](../decisions/0011-operations-role-pivot.md) | Operations pivots to logistics + client liaison + monitoring + transfer requests. |
+
+## Open architectural decisions
+
+| # | ADR | Status |
+|---|---|---|
+| 0012 | [Phase order revision](../decisions/0012-phase-order-revision.md) | Proposed by Claude 2026-05-24; awaiting Noel's review. |
 
 ## Immediate next-action menu (from resume point §8)
 

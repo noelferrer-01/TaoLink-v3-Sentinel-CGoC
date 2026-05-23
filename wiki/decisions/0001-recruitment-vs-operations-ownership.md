@@ -1,6 +1,6 @@
 # 0001 — Recruitment vs Operations: who owns guard transfers and reshuffles?
 
-**Status:** OPEN
+**Status:** RESOLVED (2026-05-23) — adopt source B (Commander Group practice). See [0011](0011-operations-role-pivot.md) for the consequence (Operations role pivots, not eliminated).
 **Filed:** 2026-05-23
 **Touches:** Phase 1 (HR + Marketing) + Phase 2 (Deployment) + Phase 5 (Recruitment) phase order; module ownership of `Deployment.AssignmentCreated`, `Deployment.AssignmentEnded`, reshuffle flows.
 
@@ -56,7 +56,18 @@ If we ship Sentinel's model to Commander Group as-is, the access control will be
 
 ## Resolution
 
-_(Pending.)_
+**Adopted source B (Commander Group practice), 2026-05-23, confirmed by Noel.**
+
+- **Recruitment owns all assignment writes** — create, end, transfer, reshuffle. Single source of truth for who-is-where.
+- **Operations cannot execute transfers.** They can *request* a transfer (filed as an event), but Recruitment is the only role with the permission to fulfill it.
+- This matches the meeting transcript explicitly: "Hindi ka naman pwede maglipat from A to B. Pag walang papel" ("You can't transfer A to B without papers"). The bug CG wants Sentinel to fix is that Operations sometimes does ad-hoc transfers today without paperwork, and Recruitment loses track.
+- Option C (configuration-driven) deferred — if Sentinel is ever licensed to a different agency with different ownership, this becomes a configuration concern. For now, hard-code CG's model.
+
+**Consequences:**
+- The Sentinel Phase-2 "Deployment" module collapses or becomes a thin assignment-storage layer owned by Recruitment. See [0012](0012-phase-order-revision.md).
+- RBAC permissions for transfer/reshuffle attach to Recruitment roles only.
+- Operations roles get logistics, inventory, and client-comms permissions instead. See [0011](0011-operations-role-pivot.md).
+- All assignment events still carry `marketing_request_id` for SLA tracking.
 
 ## Cross-references
 

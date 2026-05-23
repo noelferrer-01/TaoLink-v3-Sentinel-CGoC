@@ -48,11 +48,25 @@
 - One team member (operations/admin) regularly works until midnight–1am — highly dedicated. Useful signal for adoption-load estimates.
 
 ## Meta — provenance of the meeting notes
-- **The current `ref/sentinel-docs/commander-group-meeting-notes.md` is a Claude-generated summary** (from web chat), NOT Noel's raw notes.
-- **Possible gaps:** inferred details, missing nuance, possible inaccuracies.
-- **Full meeting transcription available** if needed — Noel will drop it in `ref/sentinel-docs/*.txt` on request.
-- **Exclude:** email-system portions of the meeting — that's a separate completed project.
-- The Figma flowchart (https://www.figma.com/board/4NVg61o7uorJRXtlcWDBVH/Commander-Group-HRIS-Full-Suite-Workflow) was also Claude-derived from the same context; Noel uses it as a starting point, not a binding spec.
+- **The summary `ref/sentinel-docs/commander-group-meeting-notes.md` is Claude-generated** (from web chat), NOT Noel's raw notes.
+- **Raw meeting transcripts (added 2026-05-24):**
+  - `ref/sentinel-docs/IMG_6844 (transcribed on 08-May-2026 15-32-51).txt` — 36 KB, Tagalog-English mix, primary content.
+  - `ref/sentinel-docs/IMG_6846 (transcribed on 08-May-2026 15-32-31).txt` — 4 KB, addendum.
+- **Exclude from analysis:** email-system portions of the transcripts (separate completed project).
+- The Figma flowchart (https://www.figma.com/board/4NVg61o7uorJRXtlcWDBVH/Commander-Group-HRIS-Full-Suite-Workflow) was also Claude-derived; Noel uses it as a starting point, not a binding spec.
+
+## Transcript-confirmed insights (added 2026-05-24)
+
+- **Recruitment is THE entry point** — explicitly stated multiple times by CG: "Sa recruitment, yun yung wala eh. Yun yung kailangan pumasok sa HRIS niyo na mga bagong empleyado." Confirms [decision 0009](../../wiki/decisions/0009-hr-starter-and-recruitment-as-entry-point.md).
+- **The bug Sentinel must fix:** Operations sometimes makes ad-hoc transfers today without paperwork ("Hindi ka naman pwede maglipat from A to B. Pag walang papel"). Recruitment loses track. Centralizing authority in Recruitment (per [0001](../../wiki/decisions/0001-recruitment-vs-operations-ownership.md)) fixes this.
+- **Operations role pivots, doesn't disappear** — under the new model, Ops does logistics + client liaison + monitoring + transfer requests. See [0011](../../wiki/decisions/0011-operations-role-pivot.md).
+- **"Calculation is simple, allocation is hard"** — payroll math is trivial (A + B); the real complexity is tracking which guard was at which client for how many days at what rate.
+- **Detachment admin presence varies** — some detachments have admin staff who handle clock-in entry; others don't. Clock-in workflow must handle both.
+- **CG has multiple existing systems** — partial HRIS, light inventory/firearms, executive system. Per [0003](../../wiki/decisions/0003-relationship-to-existing-cg-system.md), Sentinel does NOT integrate with any of them; they may be deprecated by CG at their own pace.
+- **Hundreds of clients, each with own rate templates** — different break schedules, OT rules, night-shift differentials, Saturday premiums, emergency rates. Rate tables are per-client, not per-guard. Guard's billing rate = the client's rate (regardless of guard's base rate).
+- **Guard turnover & wealth nuance** — some guards are wealthy ("mga mayayaman na guards"); turnover is not purely income-driven. System tone should respect that.
+- **CG has third parties (suppliers) in the system** — not only employees. The data model must accommodate non-employee parties.
+- **"Movement like Shopee logistics"** — Noel's vision for guard-tracking UI, explicitly reaffirmed in the transcript.
 
 ## Open questions for Commander Group department heads
 See the full questionnaire at `../../ref/sentinel-docs/sentinel-client-questionnaire.md`. Hard-blocking items before any Phase-0 code:
