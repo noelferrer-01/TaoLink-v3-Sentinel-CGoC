@@ -1,0 +1,9 @@
+node_modules
+.next
+dist
+build
+ref
+wiki
+memory
+drizzle/migrations
+pnpm-lock.yaml

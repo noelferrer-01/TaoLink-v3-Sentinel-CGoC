@@ -17,7 +17,7 @@
 
 ## Daily logs
 - [daily/2026-05-23.md](daily/2026-05-23.md) — project init, memory + wiki scaffold
-- [daily/2026-05-24.md](daily/2026-05-24.md) — meeting transcripts ingested, 4 ADRs resolved, 4 new ADRs filed (0009–0012)
+- [daily/2026-05-24.md](daily/2026-05-24.md) — meeting transcripts ingested, ADRs 0001-0016 closed, Slice 0 implemented end-to-end (16/16 tests, manual login round-trip)
 
 ## Canonical project brief
 - **`../ref/00-RESUME-POINT.md`** — the canonical handoff brief. Any fresh session reads this first.

@@ -1,0 +1,17 @@
+node_modules
+.next
+dist
+build
+.git
+.github
+.env
+.env.*
+!.env.example
+ref
+wiki
+memory
+.memsearch
+.obsidian
+.tmp
+*.log
+.DS_Store

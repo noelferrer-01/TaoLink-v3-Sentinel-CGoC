@@ -1,6 +1,6 @@
 # Sentinel — Status
 
-**As of 2026-05-24: Pre-Slice-0.** All blocking architectural calls locked. Slice 0 scaffolding is the next concrete work.
+**As of 2026-05-24 (late): Slice 0 implemented locally.** Repo scaffolded, 4 primitives shipped (auth + audit + approvals + events), typecheck / lint / 16-test suite / build all green, end-to-end login round-trip verified manually. Awaiting GitHub push to confirm CI green; then Slice 1 begins.
 
 ## Hard gates — ALL closed
 
@@ -42,18 +42,27 @@
 |---|---|---|
 | 0012 | [Phase order revision](../decisions/0012-phase-order-revision.md) | Proposed by Claude 2026-05-24; awaiting Noel's review. |
 
-## Immediate next-action menu (from resume point §8)
+## Slice 0 — done locally (2026-05-24)
 
-- **(a)** Send the client questionnaire to Commander Group department heads.
-- **(b)** Lock the stack call ([0005](../decisions/0005-stack.md)).
-- **(c)** Write the Sentinel v2 architecture doc folding in agreed corrections.
-- **(d)** Phase 0 implementation plan — only after a/b/c.
-- **(e)** Demo runbook for v1 (so the imminent CG demo is safe; separate from v3 work).
-- **(f)** Something else.
+See [wiki/slices/0-foundation.md](../slices/0-foundation.md) for the contract.
+
+- Repo: Next.js 15 + TypeScript + pnpm + Drizzle + Vitest, `core/` + `modules/` + `directives/` layout.
+- Docker Compose (postgres:16-alpine + app), multi-stage Dockerfile.
+- Migration `0001_init.sql` + custom runner. Tables: users, sessions, audit_log (immutable via DB triggers), approval_requests/steps/decisions, event_log.
+- Modules: auth (argon2id + DB sessions), audit (append-only), approvals (single rule), events (in-process + persistent log).
+- CI: `.github/workflows/ci.yml` (install / migrate / typecheck / lint / test / build).
+- Verified: typecheck ✅, lint ✅, 16/16 tests ✅, build ✅, manual login round-trip ✅.
+
+## Immediate next-action menu
+
+- **(a)** Noel pushes local commits to `github.com/noelferrer-01/TaoLink-v3-Sentinel-CGoC` and confirms CI green.
+- **(b)** Start Slice 1 — HR-starter + Client/Detachment + Assignment + manual DTR + basic Payroll + SSS R3 / BIR 2316 export.
+- **(c)** Send client questionnaire to CG dept heads (validation, no longer blocking).
+- **(d)** Labor-lawyer consult on ADR 0004.
 
 ## What's NOT in scope right now
 
-- Writing v3 code (gated on stack call + questionnaire).
 - Touching v1 (PayrollCentral) on the VPS.
 - Touching v2 (TaoLink) on GitHub.
 - Email system work (separate, already done by Noel).
+- Slice 1 features beyond what the Slice 1 contract will list.
