@@ -7,9 +7,9 @@
  * numeric column contract.
  */
 
-import { and, between, count, eq, inArray, notInArray } from 'drizzle-orm';
+import { and, between, count, desc, eq, inArray, notInArray } from 'drizzle-orm';
 import { getDb } from '@/core/db';
-import { payRuns, payslips, type PayRun } from './schema';
+import { payRuns, payslips, type PayRun, type Payslip } from './schema';
 import { computePayrollLine, type PayrollRates } from './compute';
 import { employees } from '@/modules/hr/schema';
 import { dtrEntries } from '@/modules/dtr/schema';
@@ -253,4 +253,49 @@ export async function lockPayRun(
   });
 
   return locked;
+}
+
+/**
+ * getPayslip — fetch a single payslip by its primary key.
+ * Returns null if not found; never throws on a missing row.
+ */
+export async function getPayslip(id: string): Promise<Payslip | null> {
+  const db = getDb();
+  const rows = await db.select().from(payslips).where(eq(payslips.id, id));
+  return rows[0] ?? null;
+}
+
+/**
+ * listPayslips — list payslips matching the provided filter.
+ *
+ * - { payRunId }           → all payslips for that pay run.
+ * - { employeeId }         → all payslips for that employee, newest first.
+ * - { payRunId, employeeId } → typically 0–1 rows (unique constraint).
+ * - {}                     → throws (listing all payslips ever is not a real use case).
+ */
+export async function listPayslips(filter: {
+  payRunId?: string;
+  employeeId?: string;
+}): Promise<Payslip[]> {
+  if (!filter.payRunId && !filter.employeeId) {
+    throw new Error(
+      'listPayslips requires at least one of payRunId or employeeId',
+    );
+  }
+
+  const db = getDb();
+
+  // Build the WHERE clause from whichever filter keys are present.
+  const conditions = [];
+  if (filter.payRunId) conditions.push(eq(payslips.payRunId, filter.payRunId));
+  if (filter.employeeId) conditions.push(eq(payslips.employeeId, filter.employeeId));
+
+  const where = conditions.length === 1 ? conditions[0]! : and(...conditions);
+
+  // When querying by employee across pay runs, return most-recent first.
+  if (filter.employeeId && !filter.payRunId) {
+    return db.select().from(payslips).where(where).orderBy(desc(payslips.createdAt));
+  }
+
+  return db.select().from(payslips).where(where);
 }

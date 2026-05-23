@@ -28,7 +28,7 @@ import { auditLog } from '@/modules/audit/schema';
 import { eventLog } from '@/modules/events/schema';
 import { hr } from '@/modules/hr/index';
 import { seedComplianceRates } from '@/modules/compliance/seed';
-import { runPayroll, lockPayRun, initPayrollSubscriptions, _resetPayrollSubscriptionsForTests } from './index';
+import { runPayroll, lockPayRun, getPayslip, listPayslips, initPayrollSubscriptions, _resetPayrollSubscriptionsForTests } from './index';
 import { dtr } from '@/modules/dtr/index';
 import { events, _resetEventsForTests } from '@/modules/events/index';
 
@@ -543,6 +543,118 @@ describe('payroll module — subscriptions (dtr.period.closed → runPayroll)', 
     // No pay_runs row should exist.
     const payRunRows = await db.select().from(payRuns);
     expect(payRunRows).toHaveLength(0);
+  });
+});
+
+// ─── getPayslip / listPayslips suite ─────────────────────────────────────────
+
+describe('payroll module — getPayslip / listPayslips', () => {
+  const db = getDb();
+
+  beforeAll(async () => {
+    await seedComplianceRates({ effectiveDate: '2026-01-01' });
+  });
+
+  beforeEach(async () => {
+    // FK-ordered wipe (same order as the other suites).
+    await db.delete(payslips);
+    await db.delete(payRuns);
+    await db.delete(dtrEntries);
+    await db.delete(dtrPeriodCloses);
+    await db.delete(assignmentsTable);
+    await db.delete(detachments);
+    await db.delete(clients);
+    await db.delete(employees);
+    await db.delete(eventLog);
+  });
+
+  // ─── Test R1: getPayslip happy path ──────────────────────────────────────
+  it('getPayslip happy path: fetches the correct payslip by id', async () => {
+    const emp = await makeEmployee('CG-R001');
+    await makeDtrEntries(emp.id, ['2026-05-16', '2026-05-17', '2026-05-18']);
+
+    const run = await runPayroll('2026-05-16', '2026-05-31');
+
+    // Pull the persisted payslip id from the DB.
+    const dbRows = await db
+      .select()
+      .from(payslips)
+      .where(eq(payslips.payRunId, run.id));
+    expect(dbRows).toHaveLength(1);
+    const payslipId = dbRows[0]!.id;
+
+    // Now use the accessor.
+    const result = await getPayslip(payslipId);
+
+    expect(result).not.toBeNull();
+    expect(result!.id).toBe(payslipId);
+    expect(result!.employeeId).toBe(emp.id);
+    expect(result!.payRunId).toBe(run.id);
+    expect(Number(result!.daysWorked)).toBe(3);
+  });
+
+  // ─── Test R2: getPayslip not found → null ─────────────────────────────────
+  it('getPayslip returns null for a non-existent id (no throw)', async () => {
+    const fakeId = '00000000-0000-0000-0000-000000000000';
+    const result = await getPayslip(fakeId);
+    expect(result).toBeNull();
+  });
+
+  // ─── Test R3: listPayslips by payRunId ────────────────────────────────────
+  it('listPayslips({ payRunId }) returns all payslips for that pay run', async () => {
+    const empA = await makeEmployee('CG-R003A');
+    const empB = await makeEmployee('CG-R003B');
+    await makeDtrEntries(empA.id, ['2026-05-16', '2026-05-17']);
+    await makeDtrEntries(empB.id, ['2026-05-16', '2026-05-17']);
+
+    const run = await runPayroll('2026-05-16', '2026-05-31');
+
+    const results = await listPayslips({ payRunId: run.id });
+
+    expect(results).toHaveLength(2);
+    const empIds = results.map((r) => r.employeeId);
+    expect(empIds).toContain(empA.id);
+    expect(empIds).toContain(empB.id);
+  });
+
+  // ─── Test R4: listPayslips by employeeId, ordered newest first ───────────
+  it('listPayslips({ employeeId }) returns all payslips across runs, ordered by createdAt DESC', async () => {
+    const emp = await makeEmployee('CG-R004');
+    await makeDtrEntries(emp.id, ['2026-05-01', '2026-05-02', '2026-05-03']);
+    await makeDtrEntries(emp.id, ['2026-05-16', '2026-05-17', '2026-05-18']);
+
+    // First cut (May 1–15): not a final cut, so isFinalCutOfMonth = false.
+    await runPayroll('2026-05-01', '2026-05-15', { isFinalCutOfMonth: false });
+    // Second cut (May 16–31): final cut.
+    await runPayroll('2026-05-16', '2026-05-31', { isFinalCutOfMonth: true });
+
+    const results = await listPayslips({ employeeId: emp.id });
+
+    expect(results).toHaveLength(2);
+    // Newest first: May 16–31 payslip should come before May 1–15 payslip.
+    expect(results[0]!.createdAt >= results[1]!.createdAt).toBe(true);
+  });
+
+  // ─── Test R5: listPayslips by payRunId + employeeId ──────────────────────
+  it('listPayslips({ payRunId, employeeId }) returns exactly 1 row for that employee', async () => {
+    const empA = await makeEmployee('CG-R005A');
+    const empB = await makeEmployee('CG-R005B');
+    await makeDtrEntries(empA.id, ['2026-05-16', '2026-05-17']);
+    await makeDtrEntries(empB.id, ['2026-05-16', '2026-05-17']);
+
+    const run = await runPayroll('2026-05-16', '2026-05-31');
+
+    const results = await listPayslips({ payRunId: run.id, employeeId: empA.id });
+
+    expect(results).toHaveLength(1);
+    expect(results[0]!.employeeId).toBe(empA.id);
+  });
+
+  // ─── Test R6: listPayslips({}) throws ────────────────────────────────────
+  it('listPayslips({}) throws "requires at least one" error without hitting the DB', async () => {
+    await expect(listPayslips({})).rejects.toThrow(
+      'listPayslips requires at least one of payRunId or employeeId',
+    );
   });
 });
 
