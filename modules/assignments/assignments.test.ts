@@ -4,6 +4,8 @@ import { closeDb, getDb } from '@/core/db';
 import { assignments as assignmentsTable } from './schema';
 import { detachments as detachmentsTable, clients as clientsTable } from '@/modules/clients/schema';
 import { employees as employeesTable } from '@/modules/hr/schema';
+import { dtrEntries, dtrPeriodCloses } from '@/modules/dtr/schema';
+import { payslips, payRuns } from '@/modules/payroll/schema';
 import { eventLog } from '@/modules/events/schema';
 import { hr } from '@/modules/hr/index';
 import { clients } from '@/modules/clients/index';
@@ -25,7 +27,12 @@ async function makeFixtures() {
 
 describe('assignments module', () => {
   beforeEach(async () => {
-    // FK order: assignments → detachments → clients → employees
+    // FK order: payslips → pay_runs → dtr_entries → dtr_period_closes →
+    //           assignments → detachments → clients → employees
+    await getDb().delete(payslips);
+    await getDb().delete(payRuns);
+    await getDb().delete(dtrEntries);
+    await getDb().delete(dtrPeriodCloses);
     await getDb().delete(assignmentsTable);
     await getDb().delete(detachmentsTable);
     await getDb().delete(clientsTable);

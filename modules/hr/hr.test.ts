@@ -2,11 +2,17 @@ import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import { closeDb, getDb } from '@/core/db';
 import { employees } from './schema';
 import { assignments as assignmentsTable } from '@/modules/assignments/schema';
+import { dtrEntries, dtrPeriodCloses } from '@/modules/dtr/schema';
+import { payslips, payRuns } from '@/modules/payroll/schema';
 import { hr } from './index';
 
 describe('hr.createEmployee + state machine', () => {
   beforeEach(async () => {
-    // FK order: assignments → employees
+    // FK order: payslips → pay_runs → dtr_entries → dtr_period_closes → assignments → employees
+    await getDb().delete(payslips);
+    await getDb().delete(payRuns);
+    await getDb().delete(dtrEntries);
+    await getDb().delete(dtrPeriodCloses);
     await getDb().delete(assignmentsTable);
     await getDb().delete(employees);
   });
@@ -43,7 +49,11 @@ describe('hr.createEmployee + state machine', () => {
 
 describe('hr.bulkImportEmployees', () => {
   beforeEach(async () => {
-    // FK order: assignments → employees
+    // FK order: payslips → pay_runs → dtr_entries → dtr_period_closes → assignments → employees
+    await getDb().delete(payslips);
+    await getDb().delete(payRuns);
+    await getDb().delete(dtrEntries);
+    await getDb().delete(dtrPeriodCloses);
     await getDb().delete(assignmentsTable);
     await getDb().delete(employees);
   });

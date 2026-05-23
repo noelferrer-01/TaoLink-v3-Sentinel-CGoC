@@ -1,0 +1,308 @@
+/**
+ * payroll.test.ts — integration tests for runPayroll against real Postgres.
+ *
+ * Cleanup order respects FK constraints:
+ *   payslips → pay_runs → dtr_entries → dtr_period_closes →
+ *   assignments → detachments → clients → employees
+ *
+ * audit_log is append-only (DB-level immutability trigger blocks DELETE).
+ * We capture a timestamp before each test and filter audit_log assertions
+ * by createdAt >= testStart so prior-test rows don't pollute assertions.
+ *
+ * event_log has no immutability trigger and IS wiped in beforeEach.
+ *
+ * Compliance tables are intentionally NOT wiped; we call seedComplianceRates
+ * once in beforeAll. The seed function is idempotent (clears by effectiveDate
+ * before re-inserting), so running the suite multiple times is safe.
+ */
+
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+import { and, eq, gte } from 'drizzle-orm';
+import { closeDb, getDb } from '@/core/db';
+import { payRuns, payslips } from './schema';
+import { dtrEntries, dtrPeriodCloses } from '@/modules/dtr/schema';
+import { assignments as assignmentsTable } from '@/modules/assignments/schema';
+import { detachments, clients } from '@/modules/clients/schema';
+import { employees } from '@/modules/hr/schema';
+import { auditLog } from '@/modules/audit/schema';
+import { eventLog } from '@/modules/events/schema';
+import { hr } from '@/modules/hr/index';
+import { seedComplianceRates } from '@/modules/compliance/seed';
+import { runPayroll } from './index';
+
+// ─── Fixture helpers ──────────────────────────────────────────────────────────
+
+async function makeEmployee(
+  code: string,
+  opts: { salary?: number; status?: string; payFrequency?: 'MONTHLY' | 'SEMI_MONTHLY' } = {},
+) {
+  const db = getDb();
+  const emp = await hr.createEmployee({
+    employeeCode: code,
+    firstName: 'Juan',
+    lastName: 'Dela Cruz',
+    basicSalary: opts.salary ?? 18000,
+    hiredOn: '2026-05-01',
+    payFrequency: opts.payFrequency ?? 'SEMI_MONTHLY',
+  });
+
+  // If we need a non-default status, update directly (hr service has transition guards).
+  if (opts.status && opts.status !== 'hired') {
+    await db
+      .update(employees)
+      .set({ status: opts.status as any })
+      .where(eq(employees.id, emp.id));
+    return { ...emp, status: opts.status as any };
+  }
+  return emp;
+}
+
+async function makeDtrEntries(
+  employeeId: string,
+  dates: string[],
+  status: 'worked' | 'absent' | 'leave' | 'holiday_worked' | 'restday_worked' = 'worked',
+) {
+  const db = getDb();
+  if (dates.length === 0) return;
+  await db.insert(dtrEntries).values(
+    dates.map((date) => ({ employeeId, date, status })),
+  );
+}
+
+// ─── Suite ───────────────────────────────────────────────────────────────────
+
+describe('payroll module — runPayroll', () => {
+  const db = getDb();
+
+  // Timestamp captured at the start of each test for filtering audit_log.
+  let testStart: Date;
+
+  beforeAll(async () => {
+    // Seed compliance rates once for the whole suite (idempotent).
+    await seedComplianceRates({ effectiveDate: '2026-01-01' });
+  });
+
+  beforeEach(async () => {
+    testStart = new Date();
+
+    // FK-ordered wipe. Compliance tables are intentionally excluded.
+    // audit_log is intentionally excluded (append-only DB trigger blocks DELETE).
+    await db.delete(payslips);
+    await db.delete(payRuns);
+    await db.delete(dtrEntries);
+    await db.delete(dtrPeriodCloses);
+    await db.delete(assignmentsTable);
+    await db.delete(detachments);
+    await db.delete(clients);
+    await db.delete(employees);
+    // event_log has no immutability trigger — safe to wipe.
+    await db.delete(eventLog);
+  });
+
+  afterAll(async () => {
+    await closeDb();
+  });
+
+  // ─── Test 1: Happy path ───────────────────────────────────────────────────
+  it('happy path: 1 employee (₱18k SEMI_MONTHLY) × 13 worked days → correct payslip', async () => {
+    const emp = await makeEmployee('CG-P001');
+
+    // 13 worked days across May 16–31
+    const workDays = [
+      '2026-05-16', '2026-05-17', '2026-05-18', '2026-05-19', '2026-05-20',
+      '2026-05-21', '2026-05-22', '2026-05-23', '2026-05-25', '2026-05-26',
+      '2026-05-27', '2026-05-28', '2026-05-29',
+    ];
+    await makeDtrEntries(emp.id, workDays);
+
+    const run = await runPayroll('2026-05-16', '2026-05-31');
+
+    // PayRun assertions
+    expect(run.status).toBe('calculated');
+    expect(run.periodStart).toBe('2026-05-16');
+    expect(run.periodEnd).toBe('2026-05-31');
+
+    // Payslip assertions
+    const slips = await db
+      .select()
+      .from(payslips)
+      .where(and(eq(payslips.payRunId, run.id), eq(payslips.employeeId, emp.id)));
+
+    expect(slips).toHaveLength(1);
+    const slip = slips[0]!;
+
+    expect(Number(slip.daysWorked)).toBe(13);
+    // grossPay = 18000/26 * 13 = 9000 exactly
+    expect(Number(slip.grossPay)).toBeCloseTo(9000, 2);
+    // Final cut (May 31 >= 28): full statutory applied
+    // SSS at MSC 18000 (no WISP since 18000 < 20000): eeRegular=900, eeWisp=0 → sssEE=900
+    expect(Number(slip.sssEE)).toBeCloseTo(900, 2);
+    // PhilHealth: min(max(18000,10000),100000)*0.05/2 = 450
+    expect(Number(slip.philhealthEE)).toBeCloseTo(450, 2);
+    // Pag-IBIG: min(18000,10000)*0.02 = 200
+    expect(Number(slip.pagibigEE)).toBeCloseTo(200, 2);
+    // WTAX SEMI_MONTHLY: taxable = 9000-900-450-200 = 7450 < 10417 → 0
+    expect(Number(slip.birWtax)).toBe(0);
+    // Net = 9000 - 900 - 450 - 200 = 7450
+    expect(Number(slip.netPay)).toBeCloseTo(7450, 2);
+
+    // audit_log: filter by createdAt >= testStart (append-only, can't wipe)
+    const auditRows = await db
+      .select()
+      .from(auditLog)
+      .where(gte(auditLog.createdAt, testStart));
+    const actions = auditRows.map((r) => r.action);
+    expect(actions).toContain('payroll.line.computed');
+    expect(actions).toContain('payroll.run.completed');
+
+    // event_log (wiped in beforeEach)
+    const eventRows = await db.select().from(eventLog);
+    const topics = eventRows.map((r) => r.topic);
+    expect(topics).toContain('payslip.generated');
+    expect(topics).toContain('payroll.run.completed');
+  });
+
+  // ─── Test 2: Re-run wipes prior payslips ─────────────────────────────────
+  it('re-run wipes prior payslips and recomputes; same pay_run id re-used', async () => {
+    const emp = await makeEmployee('CG-P002');
+
+    // First run: 13 worked days
+    const initialDays = [
+      '2026-05-16', '2026-05-17', '2026-05-18', '2026-05-19', '2026-05-20',
+      '2026-05-21', '2026-05-22', '2026-05-23', '2026-05-24', '2026-05-25',
+      '2026-05-26', '2026-05-27', '2026-05-28',
+    ];
+    await makeDtrEntries(emp.id, initialDays);
+
+    const run1 = await runPayroll('2026-05-16', '2026-05-31');
+    expect(run1.status).toBe('calculated');
+
+    const slips1 = await db.select().from(payslips).where(eq(payslips.payRunId, run1.id));
+    expect(slips1).toHaveLength(1);
+    expect(Number(slips1[0]!.daysWorked)).toBe(13);
+
+    // Remove one DTR entry to simulate a change.
+    await db.delete(dtrEntries).where(
+      and(eq(dtrEntries.employeeId, emp.id), eq(dtrEntries.date, '2026-05-28')),
+    );
+
+    // Second run on the same period.
+    const run2 = await runPayroll('2026-05-16', '2026-05-31');
+
+    // Same pay_run id (re-used, not new).
+    expect(run2.id).toBe(run1.id);
+    expect(run2.status).toBe('calculated');
+
+    // Still exactly 1 payslip (old one was deleted + re-inserted).
+    const slips2 = await db.select().from(payslips).where(eq(payslips.payRunId, run2.id));
+    expect(slips2).toHaveLength(1);
+    // daysWorked updated to 12 (one entry removed).
+    expect(Number(slips2[0]!.daysWorked)).toBe(12);
+  });
+
+  // ─── Test 3: Employee with zero DTR rows completes without aborting run ───
+  it('employee with zero DTR rows in period gets grossPay=0 and run still completes', async () => {
+    const empA = await makeEmployee('CG-P003A');
+    const empB = await makeEmployee('CG-P003B');
+
+    // empA has worked days; empB has none.
+    await makeDtrEntries(empA.id, ['2026-05-16', '2026-05-17', '2026-05-18']);
+
+    const run = await runPayroll('2026-05-16', '2026-05-31');
+    expect(run.status).toBe('calculated');
+
+    // Both employees should have payslips.
+    const allSlips = await db.select().from(payslips).where(eq(payslips.payRunId, run.id));
+    expect(allSlips).toHaveLength(2);
+
+    const slipA = allSlips.find((s) => s.employeeId === empA.id)!;
+    const slipB = allSlips.find((s) => s.employeeId === empB.id)!;
+
+    expect(slipA).toBeDefined();
+    expect(Number(slipA.daysWorked)).toBe(3);
+
+    // empB: zero days → grossPay = 0.
+    // For SEMI_MONTHLY final cut: statutory is still computed but netPay clamped to 0.
+    expect(slipB).toBeDefined();
+    expect(Number(slipB.daysWorked)).toBe(0);
+    expect(Number(slipB.grossPay)).toBe(0);
+    expect(Number(slipB.netPay)).toBe(0);
+  });
+
+  // ─── Test 4: Status filter — applicant and terminated excluded ────────────
+  it('applicant and terminated employees are excluded from the payroll run', async () => {
+    const activeEmp = await makeEmployee('CG-P004A');
+    const applicantEmp = await makeEmployee('CG-P004B', { status: 'applicant' });
+    const terminatedEmp = await makeEmployee('CG-P004C', { status: 'terminated' });
+
+    // Give all three employees DTR entries so we can confirm only the active one is processed.
+    await makeDtrEntries(activeEmp.id, ['2026-05-16', '2026-05-17']);
+    await makeDtrEntries(applicantEmp.id, ['2026-05-16', '2026-05-17']);
+    await makeDtrEntries(terminatedEmp.id, ['2026-05-16', '2026-05-17']);
+
+    const run = await runPayroll('2026-05-16', '2026-05-31');
+    expect(run.status).toBe('calculated');
+
+    const allSlips = await db.select().from(payslips).where(eq(payslips.payRunId, run.id));
+    // Only the active employee gets a payslip.
+    expect(allSlips).toHaveLength(1);
+    expect(allSlips[0]!.employeeId).toBe(activeEmp.id);
+  });
+
+  // ─── Test 5a: 15th-cut period → no statutory deductions ──────────────────
+  it('15th-cut period (periodEnd day < 28): statutory deductions are zero', async () => {
+    const emp = await makeEmployee('CG-P005A');
+    await makeDtrEntries(emp.id, [
+      '2026-05-01', '2026-05-02', '2026-05-03', '2026-05-04', '2026-05-05',
+      '2026-05-06', '2026-05-07', '2026-05-08', '2026-05-09', '2026-05-10',
+      '2026-05-11', '2026-05-12', '2026-05-13',
+    ]);
+
+    // No isFinalCutOfMonth override — heuristic: day 15 < 28 → false.
+    const run = await runPayroll('2026-05-01', '2026-05-15');
+    expect(run.status).toBe('calculated');
+
+    const slips = await db
+      .select()
+      .from(payslips)
+      .where(and(eq(payslips.payRunId, run.id), eq(payslips.employeeId, emp.id)));
+    expect(slips).toHaveLength(1);
+
+    const slip = slips[0]!;
+    // First cut → statutory should all be 0.
+    expect(Number(slip.sssEE)).toBe(0);
+    expect(Number(slip.philhealthEE)).toBe(0);
+    expect(Number(slip.pagibigEE)).toBe(0);
+    expect(Number(slip.birWtax)).toBe(0);
+    // grossPay ≈ netPay (no deductions).
+    expect(Number(slip.netPay)).toBeCloseTo(Number(slip.grossPay), 2);
+  });
+
+  // ─── Test 5b: Final-cut period → full statutory deductions ───────────────
+  it('final-cut period (periodEnd day >= 28): full statutory deductions applied', async () => {
+    const emp = await makeEmployee('CG-P005B');
+    await makeDtrEntries(emp.id, [
+      '2026-05-16', '2026-05-17', '2026-05-18', '2026-05-19', '2026-05-20',
+      '2026-05-21', '2026-05-22', '2026-05-23', '2026-05-24', '2026-05-25',
+      '2026-05-26', '2026-05-27', '2026-05-28',
+    ]);
+
+    // No override — heuristic: day 31 >= 28 → true.
+    const run = await runPayroll('2026-05-16', '2026-05-31');
+    expect(run.status).toBe('calculated');
+
+    const slips = await db
+      .select()
+      .from(payslips)
+      .where(and(eq(payslips.payRunId, run.id), eq(payslips.employeeId, emp.id)));
+    expect(slips).toHaveLength(1);
+
+    const slip = slips[0]!;
+    // Final cut → statutory deductions should be non-zero.
+    expect(Number(slip.sssEE)).toBeGreaterThan(0);
+    expect(Number(slip.philhealthEE)).toBeGreaterThan(0);
+    expect(Number(slip.pagibigEE)).toBeGreaterThan(0);
+    // netPay < grossPay because deductions were applied.
+    expect(Number(slip.netPay)).toBeLessThan(Number(slip.grossPay));
+  });
+});

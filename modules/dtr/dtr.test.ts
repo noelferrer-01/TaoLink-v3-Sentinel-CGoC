@@ -5,6 +5,7 @@ import { dtrEntries, dtrPeriodCloses } from './schema';
 import { assignments as assignmentsTable } from '@/modules/assignments/schema';
 import { detachments, clients } from '@/modules/clients/schema';
 import { employees } from '@/modules/hr/schema';
+import { payslips, payRuns } from '@/modules/payroll/schema';
 import { eventLog } from '@/modules/events/schema';
 import { hr } from '@/modules/hr/index';
 import { clients as clientsModule } from '@/modules/clients/index';
@@ -39,7 +40,10 @@ describe('dtr module', () => {
   const db = getDb();
 
   beforeEach(async () => {
-    // FK order: dtr_entries → dtr_period_closes → assignments → detachments → clients → employees
+    // FK order: payslips → pay_runs → dtr_entries → dtr_period_closes →
+    //           assignments → detachments → clients → employees
+    await db.delete(payslips);
+    await db.delete(payRuns);
     await db.delete(dtrEntries);
     await db.delete(dtrPeriodCloses);
     await db.delete(assignmentsTable);
