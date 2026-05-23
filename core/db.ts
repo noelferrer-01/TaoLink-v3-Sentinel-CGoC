@@ -7,6 +7,7 @@ import * as auditSchema from '@/modules/audit/schema';
 import * as approvalsSchema from '@/modules/approvals/schema';
 import * as eventsSchema from '@/modules/events/schema';
 import * as complianceSchema from '@/modules/compliance/schema';
+import * as hrSchema from '@/modules/hr/schema';
 
 const schema = {
   ...authSchema,
@@ -14,6 +15,7 @@ const schema = {
   ...approvalsSchema,
   ...eventsSchema,
   ...complianceSchema,
+  ...hrSchema,
 };
 
 let sqlClient: ReturnType<typeof postgres> | null = null;
