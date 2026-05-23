@@ -1,4 +1,6 @@
 import { eq } from 'drizzle-orm';
+import Papa from 'papaparse';
+import { z } from 'zod';
 import { getDb } from '@/core/db';
 import { employees, type Employee, type NewEmployee } from './schema';
 import { audit } from '@/modules/audit';
@@ -86,4 +88,85 @@ export async function changeStatus(
   });
   await events.publish('hr.employee.status_changed', { id, from: current.status, to: next });
   return updated;
+}
+
+// ─── Bulk import ─────────────────────────────────────────────────────────────
+
+const csvRowSchema = z.object({
+  employee_code: z.string().min(1, 'employee_code is required'),
+  first_name:    z.string().min(1, 'first name is required'),
+  last_name:     z.string().min(1, 'last name is required'),
+  email:         z.string().email('the email address looks wrong — check for typos').optional().or(z.literal('')),
+  basic_salary:  z.string().refine(
+    (v) => !Number.isNaN(parseFloat(v)) && parseFloat(v) > 0,
+    'basic salary must be a positive number',
+  ),
+  pay_frequency: z.enum(['MONTHLY', 'SEMI_MONTHLY']).default('SEMI_MONTHLY'),
+  hired_on:      z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'hired_on must be YYYY-MM-DD'),
+});
+
+export type BulkImportResult = {
+  imported: number;
+  errors: Array<{ row: number; reason: string }>;
+};
+
+export async function bulkImportEmployees(
+  csvText: string,
+  opts: { actorUserId?: string | null } = {},
+): Promise<BulkImportResult> {
+  const parsed = Papa.parse<Record<string, string>>(csvText, { header: true, skipEmptyLines: true });
+  const errors: BulkImportResult['errors'] = [];
+
+  const db = getDb();
+  const existingEmailRows = await db.select({ email: employees.email }).from(employees);
+  const existingEmails = new Set<string>(
+    existingEmailRows.map((r) => r.email).filter((e): e is string => typeof e === 'string'),
+  );
+
+  const seenInBatch = new Set<string>();
+  const toInsert: NewEmployee[] = [];
+
+  parsed.data.forEach((raw, idx) => {
+    const row = idx + 1;
+    const parse = csvRowSchema.safeParse(raw);
+    if (!parse.success) {
+      errors.push({ row, reason: parse.error.issues.map((i) => i.message).join('; ') });
+      return;
+    }
+    const r = parse.data;
+    if (r.email && existingEmails.has(r.email)) {
+      errors.push({ row, reason: `email ${r.email} already exists in HR — pick a different one or remove this row.` });
+      return;
+    }
+    if (r.email && seenInBatch.has(r.email)) {
+      errors.push({ row, reason: `email ${r.email} appears twice in the same file — keep one row.` });
+      return;
+    }
+    if (r.email) seenInBatch.add(r.email);
+    toInsert.push({
+      employeeCode: r.employee_code,
+      firstName: r.first_name,
+      lastName: r.last_name,
+      email: r.email || null,
+      basicSalary: String(parseFloat(r.basic_salary)),
+      payFrequency: r.pay_frequency,
+      hiredOn: r.hired_on,
+    });
+  });
+
+  let imported = 0;
+  if (toInsert.length > 0) {
+    const created = await db.insert(employees).values(toInsert).returning();
+    imported = created.length;
+    for (const e of created) {
+      await audit.record({
+        actor: opts.actorUserId ?? null,
+        action: 'hr.employee.created',
+        target: { kind: 'hr_employee', id: e.id },
+        payload: { employeeCode: e.employeeCode, viaBulkImport: true },
+      });
+      await events.publish('hr.employee.created', { id: e.id, employeeCode: e.employeeCode });
+    }
+  }
+  return { imported, errors };
 }
