@@ -1,11 +1,13 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import { closeDb, getDb } from '@/core/db';
 import { clients as clientsTable, detachments as detachmentsTable } from './schema';
+import { assignments as assignmentsTable } from '@/modules/assignments/schema';
 import { clients } from './index';
 
 describe('clients module', () => {
   beforeEach(async () => {
-    // FK order: delete detachments first, then clients
+    // FK order: assignments → detachments → clients
+    await getDb().delete(assignmentsTable);
     await getDb().delete(detachmentsTable);
     await getDb().delete(clientsTable);
   });

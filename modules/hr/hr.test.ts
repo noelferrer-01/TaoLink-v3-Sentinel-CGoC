@@ -1,10 +1,13 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import { closeDb, getDb } from '@/core/db';
 import { employees } from './schema';
+import { assignments as assignmentsTable } from '@/modules/assignments/schema';
 import { hr } from './index';
 
 describe('hr.createEmployee + state machine', () => {
   beforeEach(async () => {
+    // FK order: assignments → employees
+    await getDb().delete(assignmentsTable);
     await getDb().delete(employees);
   });
   afterAll(async () => { await closeDb(); });
@@ -40,6 +43,8 @@ describe('hr.createEmployee + state machine', () => {
 
 describe('hr.bulkImportEmployees', () => {
   beforeEach(async () => {
+    // FK order: assignments → employees
+    await getDb().delete(assignmentsTable);
     await getDb().delete(employees);
   });
   afterAll(async () => { await closeDb(); });

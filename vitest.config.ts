@@ -8,6 +8,10 @@ export default defineConfig({
     exclude: ['node_modules', '.next', 'dist', 'build', 'ref', 'wiki', 'memory'],
     testTimeout: 15_000,
     hookTimeout: 15_000,
+    // Serialize test files: all test files share a single Postgres container,
+    // so concurrent file execution causes FK conflicts between beforeEach
+    // cleanup in one file wiping rows another file just created.
+    fileParallelism: false,
   },
   resolve: {
     alias: {
