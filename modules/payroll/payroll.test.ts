@@ -28,7 +28,7 @@ import { auditLog } from '@/modules/audit/schema';
 import { eventLog } from '@/modules/events/schema';
 import { hr } from '@/modules/hr/index';
 import { seedComplianceRates } from '@/modules/compliance/seed';
-import { runPayroll } from './index';
+import { runPayroll, lockPayRun } from './index';
 
 // ─── Fixture helpers ──────────────────────────────────────────────────────────
 
@@ -97,10 +97,6 @@ describe('payroll module — runPayroll', () => {
     await db.delete(employees);
     // event_log has no immutability trigger — safe to wipe.
     await db.delete(eventLog);
-  });
-
-  afterAll(async () => {
-    await closeDb();
   });
 
   // ─── Test 1: Happy path ───────────────────────────────────────────────────
@@ -305,4 +301,110 @@ describe('payroll module — runPayroll', () => {
     // netPay < grossPay because deductions were applied.
     expect(Number(slip.netPay)).toBeLessThan(Number(slip.grossPay));
   });
+});
+
+// ─── lockPayRun suite ─────────────────────────────────────────────────────────
+
+describe('payroll module — lockPayRun', () => {
+  const db = getDb();
+
+  // Timestamp captured at the start of each test for filtering audit_log.
+  let testStart: Date;
+
+  beforeAll(async () => {
+    // Compliance rates must exist for runPayroll (used in the happy-path test).
+    await seedComplianceRates({ effectiveDate: '2026-01-01' });
+  });
+
+  beforeEach(async () => {
+    testStart = new Date();
+
+    // FK-ordered wipe (same order as the runPayroll suite).
+    await db.delete(payslips);
+    await db.delete(payRuns);
+    await db.delete(dtrEntries);
+    await db.delete(dtrPeriodCloses);
+    await db.delete(assignmentsTable);
+    await db.delete(detachments);
+    await db.delete(clients);
+    await db.delete(employees);
+    await db.delete(eventLog);
+  });
+
+  // Note: closeDb is called once by the runPayroll suite's afterAll above.
+  // A second closeDb here would end the shared connection before this suite runs.
+
+  // ─── Test L1: Empty-run guard ─────────────────────────────────────────────
+  it('rejects locking a pay run that has no payslips', async () => {
+    // Insert a pay_run row directly (no payslips).
+    const [run] = await db
+      .insert(payRuns)
+      .values({ periodStart: '2026-05-16', periodEnd: '2026-05-31', status: 'calculated', workDaysPerMonth: 26 })
+      .returning();
+
+    await expect(lockPayRun(run!.id)).rejects.toThrow(
+      'This pay run has no payslips. Run the calculation first before locking.',
+    );
+  });
+
+  // ─── Test L2: Pay-run-not-found ───────────────────────────────────────────
+  it('rejects locking a non-existent pay run id', async () => {
+    const fakeId = '00000000-0000-0000-0000-000000000000';
+    await expect(lockPayRun(fakeId)).rejects.toThrow(`Pay run not found: ${fakeId}`);
+  });
+
+  // ─── Test L3: Happy path ──────────────────────────────────────────────────
+  it('happy path: locks a calculated pay run and emits audit + event', async () => {
+    const emp = await makeEmployee('CG-L003');
+    await makeDtrEntries(emp.id, [
+      '2026-05-16', '2026-05-17', '2026-05-18', '2026-05-19', '2026-05-20',
+    ]);
+
+    const payRun = await runPayroll('2026-05-16', '2026-05-31');
+    expect(payRun.status).toBe('calculated');
+
+    const locked = await lockPayRun(payRun.id, { actorUserId: null });
+
+    // Returned row reflects the new status.
+    expect(locked.status).toBe('locked');
+    expect(locked.lockedAt).not.toBeNull();
+    expect(locked.id).toBe(payRun.id);
+
+    // audit_log: filter by testStart (append-only, cannot DELETE).
+    const auditRows = await db
+      .select()
+      .from(auditLog)
+      .where(gte(auditLog.createdAt, testStart));
+    const actions = auditRows.map((r) => r.action);
+    expect(actions).toContain('payroll.run.locked');
+
+    // Spot-check payload shape.
+    const lockRow = auditRows.find((r) => r.action === 'payroll.run.locked')!;
+    expect(lockRow).toBeDefined();
+    expect((lockRow.payload as any).payslipCount).toBeGreaterThan(0);
+
+    // event_log (wiped in beforeEach).
+    const eventRows = await db.select().from(eventLog);
+    const topics = eventRows.map((r) => r.topic);
+    expect(topics).toContain('payroll.run.locked');
+  });
+
+  // ─── Test L4: Already-locked guard ───────────────────────────────────────
+  it('rejects locking a pay run that is already locked', async () => {
+    const emp = await makeEmployee('CG-L004');
+    await makeDtrEntries(emp.id, ['2026-05-16', '2026-05-17', '2026-05-18']);
+
+    const payRun = await runPayroll('2026-05-16', '2026-05-31');
+    await lockPayRun(payRun.id);
+
+    // Second lock attempt must throw.
+    await expect(lockPayRun(payRun.id)).rejects.toThrow(
+      'This pay run is already locked',
+    );
+  });
+});
+
+// Close the shared DB connection once, after all suites in this file finish.
+afterAll(async () => {
+  await closeDb();
 });

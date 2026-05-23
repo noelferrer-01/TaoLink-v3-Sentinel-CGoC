@@ -7,7 +7,7 @@
  * numeric column contract.
  */
 
-import { and, between, eq, inArray, notInArray } from 'drizzle-orm';
+import { and, between, count, eq, inArray, notInArray } from 'drizzle-orm';
 import { getDb } from '@/core/db';
 import { payRuns, payslips, type PayRun } from './schema';
 import { computePayrollLine, type PayrollRates } from './compute';
@@ -197,4 +197,60 @@ export async function runPayroll(
   await events.publish('payroll.run.completed', { payRunId: run.id, periodStart, periodEnd });
 
   return run;
+}
+
+export async function lockPayRun(
+  payRunId: string,
+  opts: { actorUserId?: string | null } = {},
+): Promise<PayRun> {
+  const db = getDb();
+
+  // ── Step 1: Look up the pay_run ───────────────────────────────────────────
+  const runs = await db.select().from(payRuns).where(eq(payRuns.id, payRunId));
+  const run = runs[0];
+  if (!run) throw new Error(`Pay run not found: ${payRunId}`);
+
+  // ── Step 2: Guard — already locked ───────────────────────────────────────
+  if (run.status === 'locked') {
+    throw new Error(
+      `This pay run is already locked (locked at ${run.lockedAt?.toISOString() ?? 'unknown'}).`,
+    );
+  }
+
+  // ── Step 3: Guard — empty run (v2 fix ISSUE-C) ───────────────────────────
+  const countRows = await db
+    .select({ n: count() })
+    .from(payslips)
+    .where(eq(payslips.payRunId, payRunId));
+  const payslipCount = Number(countRows[0]?.n ?? 0);
+
+  if (payslipCount === 0) {
+    throw new Error(
+      'This pay run has no payslips. Run the calculation first before locking.',
+    );
+  }
+
+  // ── Step 4: Lock it ───────────────────────────────────────────────────────
+  const [locked] = await db
+    .update(payRuns)
+    .set({ status: 'locked', lockedAt: new Date() })
+    .where(eq(payRuns.id, payRunId))
+    .returning();
+
+  if (!locked) throw new Error('[payroll/lockPayRun] update pay_run returned no row');
+
+  // ── Step 5: Audit + event ─────────────────────────────────────────────────
+  await audit.record({
+    actor: opts.actorUserId ?? null,
+    action: 'payroll.run.locked',
+    target: { kind: 'pay_run', id: payRunId },
+    payload: { periodStart: locked.periodStart, periodEnd: locked.periodEnd, payslipCount },
+  });
+  await events.publish('payroll.run.locked', {
+    payRunId,
+    periodStart: locked.periodStart,
+    periodEnd: locked.periodEnd,
+  });
+
+  return locked;
 }
