@@ -12,6 +12,7 @@ const MODULE_DEPS: Record<string, string[]> = {
   audit: ['DATABASE_URL'],
   approvals: ['DATABASE_URL'],
   events: ['DATABASE_URL'],
+  compliance: ['DATABASE_URL'],
 };
 
 export function validateBoot(): ModuleDependencyReport[] {

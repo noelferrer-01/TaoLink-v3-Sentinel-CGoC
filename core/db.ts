@@ -6,12 +6,14 @@ import * as authSchema from '@/modules/auth/schema';
 import * as auditSchema from '@/modules/audit/schema';
 import * as approvalsSchema from '@/modules/approvals/schema';
 import * as eventsSchema from '@/modules/events/schema';
+import * as complianceSchema from '@/modules/compliance/schema';
 
 const schema = {
   ...authSchema,
   ...auditSchema,
   ...approvalsSchema,
   ...eventsSchema,
+  ...complianceSchema,
 };
 
 let sqlClient: ReturnType<typeof postgres> | null = null;
