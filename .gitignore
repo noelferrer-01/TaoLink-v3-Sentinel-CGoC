@@ -1,0 +1,63 @@
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+credentials.json
+token.json
+*.pem
+*.key
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Obsidian (personal vault config — if Noel wants to share later, un-ignore specific files)
+.obsidian/
+
+# Intermediates
+.tmp/
+*.log
+*.pid
+
+# Memsearch local index (reproducible from source markdown)
+.memsearch/
+
+# Per-session resume file (created on demand by /getres)
+memory/resume.md
+
+# Node / TypeScript (when stack is locked, populated)
+node_modules/
+dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Python (when stack is locked, populated)
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Docker (when introduced)
+.docker/
+docker-compose.override.yml
+
+# Local Claude Code settings (project settings.json stays committed; .local does not)
+.claude/settings.local.json

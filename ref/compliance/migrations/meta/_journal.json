@@ -1,0 +1,195 @@
+{
+  "version": "7",
+  "dialect": "mysql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1773588092368,
+      "tag": "0000_short_loners",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1773594163220,
+      "tag": "0001_stale_tyrannus",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1774436319316,
+      "tag": "0002_busy_butterfly",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1774436319317,
+      "tag": "0003_de_minimis_field",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1774436319318,
+      "tag": "0004_hire_date",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1774676312565,
+      "tag": "0005_bg_jobs",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1774680359414,
+      "tag": "0006_nsd_ot_minutes",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "5",
+      "when": 1774692171444,
+      "tag": "0007_rest_day",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "5",
+      "when": 1774696782307,
+      "tag": "0008_pay_items_name_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "5",
+      "when": 1774697430403,
+      "tag": "0009_max_ot_hours",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "5",
+      "when": 1774699837858,
+      "tag": "0010_missing_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "5",
+      "when": 1774699986354,
+      "tag": "0011_salary_history_restrict",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "5",
+      "when": 1774713517109,
+      "tag": "0012_bg_jobs_attempts",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "5",
+      "when": 1774713693083,
+      "tag": "0013_loan_payment_reversed",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "5",
+      "when": 1774761742526,
+      "tag": "0014_rate_limit_unique_key",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "5",
+      "when": 1774791233582,
+      "tag": "0015_audit_index_payrun_unique",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "5",
+      "when": 1774792463929,
+      "tag": "0016_pagibig_salary_cap",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "5",
+      "when": 1774803854092,
+      "tag": "0017_leave_type_restrict",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "5",
+      "when": 1774804639387,
+      "tag": "0018_schedule_shift_set_null",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "5",
+      "when": 1774804639388,
+      "tag": "0019_missing_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "5",
+      "when": 1775046703560,
+      "tag": "0020_thirteenth_month_disbursements",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "5",
+      "when": 1775182933690,
+      "tag": "0021_remittance_filings",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "5",
+      "when": 1775204195249,
+      "tag": "0022_backup_codes",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "5",
+      "when": 1777138741363,
+      "tag": "0023_attendance_selfie",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "5",
+      "when": 1779518456613,
+      "tag": "0024_index_selfie_and_bg_jobs_status_completed",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "5",
+      "when": 1779520586208,
+      "tag": "0025_pagibig_mfs_cap_restore",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "5",
+      "when": 1779521462735,
+      "tag": "0026_de_minimis_rr29_2025",
+      "breakpoints": true
+    }
+  ]
+}
