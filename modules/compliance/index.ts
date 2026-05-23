@@ -2,3 +2,4 @@ import { sssBracketForMonthly, philhealthEE, pagibigEE, wtaxMonthly } from './se
 
 export const compliance = { sssBracketForMonthly, philhealthEE, pagibigEE, wtaxMonthly };
 export { sssBracketForMonthly, philhealthEE, pagibigEE, wtaxMonthly };
+export type { WtaxFreq } from './service';

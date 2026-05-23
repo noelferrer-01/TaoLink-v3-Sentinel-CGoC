@@ -2,7 +2,7 @@ import { eq, lte, desc, and } from 'drizzle-orm';
 import { getDb } from '@/core/db';
 import { sssBrackets, philhealthConfig, pagibigConfig, wtaxBrackets, type SssBracket } from './schema';
 
-type WtaxFreq = 'MONTHLY' | 'SEMI_MONTHLY';
+export type WtaxFreq = 'MONTHLY' | 'SEMI_MONTHLY';
 
 export async function sssBracketForMonthly(monthlySalary: number, asOf: string): Promise<SssBracket | null> {
   const db = getDb();
