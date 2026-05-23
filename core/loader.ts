@@ -14,6 +14,7 @@ const MODULE_DEPS: Record<string, string[]> = {
   events: ['DATABASE_URL'],
   compliance: ['DATABASE_URL'],
   hr: ['DATABASE_URL'],
+  clients: ['DATABASE_URL'],
 };
 
 export function validateBoot(): ModuleDependencyReport[] {
