@@ -25,6 +25,9 @@
 - **Honest pushback welcome.** Noel asked for v3 fresh start because the substantive answer was given, not the accommodating one.
 - **Iteration loops** (eval scripts, batch graders, prompt tuning) default to **Sonnet/Haiku**, never Opus — token cost discipline.
 
+## Delegation framework (2026-05-24)
+Noel explicitly delegated architectural and tool-selection decisions to Claude on Sentinel. **Make the call, don't enumerate options.** Free-tier tools always preferred; only flag for discussion when paid tier is genuinely needed OR when the call has business implications (multi-tenancy, hosting jurisdiction, brand naming). The read-as-you-build / README-before-code discipline still applies — delegation is on *deciding what to build*, not on *shipping it unreadable*. Cross-session record: `~/.claude/projects/-Users-user-Desktop-Aintigravity-Workflows-Taolink-v3---Sentinel/memory/feedback_delegation_framework.md`.
+
 ## IDE / tooling
 - Google Antigravity with Claude Code plugin.
 - Memsearch (Level 3 semantic memory) installed globally; `.memsearch/` lives at workspace root.

@@ -63,15 +63,22 @@ The Commander Group meeting notes do **not** explicitly confirm CG's practice on
 
 Noel's confirmation: "i think there are some paid, and others, specially the new ones are not paid until they are deployed to clients."
 
-**Working model — three distinct populations:**
+**Working model — populations crossed with trust tier (refined 2026-05-24 per Noel):**
 
-| Population | Status | Employed? | Paid? | Lives in |
-|---|---|---|---|---|
-| New applicant (just applied) | Pre-screening | No | No | Recruitment |
-| Cleared applicant (callback list) | Cleared, awaiting deployment | No | No | Recruitment |
-| Reliever / Floater | Active employee, between assignments | Yes | Yes (agency cost) | HR + Recruitment (assignment owner) |
-| Active employee — Deployed | Posted at a client | Yes | Yes (billable) | HR + Recruitment (assignment owner) |
-| Active employee — On Leave | VL/SL/maternity | Yes | Depends on leave type | HR |
+Pay status depends on BOTH role status AND trust/tenure with the agency. Trust tier is set per-employee by HR (e.g., `untrusted`, `tenured`, `core`).
+
+| Population | Trust tier | Paid? | Lives in |
+|---|---|---|---|
+| New applicant (just applied) | n/a | No | Recruitment |
+| Cleared applicant (callback list) | untrusted | No | Recruitment |
+| Cleared applicant (callback list) | tenured / core | Yes (retainer/standby) | HR + Recruitment overlap |
+| Floater / between-assignments | untrusted | No | HR (status: floating-unpaid) |
+| Floater / between-assignments | tenured / core | Yes (agency cost) | HR (status: floating-paid) |
+| Reliever (covering shifts) | any | Yes | HR + assignment owner |
+| Deployed | any | Yes (billable) | HR + assignment owner |
+| On leave | any | Depends on leave type | HR |
+
+Noel's framing: *"others are floating w/out pay, and others have paid (especially the trusted ones already by the company)."* This matches the actual practice in Philippine security agencies, where long-tenured guards are retained on retainer/standby pay while newer candidates wait on the callback list unpaid.
 
 The lifecycle transition `Cleared applicant → Deployed/Reliever` is the moment of employment AND first pay. Until then, the person is in Recruitment with no payroll record.
 

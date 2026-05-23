@@ -1,6 +1,6 @@
 # 0012 — Phase order revision (proposed, post-resolutions)
 
-**Status:** OPEN (proposed by Claude 2026-05-24; awaiting Noel's review)
+**Status:** SUPERSEDED-BY-0013 (2026-05-24) — Noel approved the vertical-slices approach instead of a horizontal-phase reshuffle. See [0013](0013-vertical-slices-over-horizontal-phases.md).
 **Filed:** 2026-05-24
 **Touches:** Project plan, sequencing, gate definitions.
 
@@ -63,7 +63,11 @@ Noel reviews this proposal and approves, modifies, or rejects.
 
 ## Resolution
 
-_(Pending Noel's review.)_
+**Superseded by [0013 — vertical slices over horizontal phases](0013-vertical-slices-over-horizontal-phases.md).**
+
+This ADR proposed a *horizontal-phase reshuffle* (Recruitment Phase 5 → Phase 2, etc.). After review with Noel, the better answer was not "different horizontal order" but "stop building horizontally entirely." Vertical slices ship demo-able value much earlier and force cross-module contracts to be designed correctly from the start.
+
+This file is kept for historical traceability — the reasoning here (Recruitment owns assignments, HR-starter is minimal, Inventory event-driven) is still correct and is carried forward into 0013's slice definitions.
 
 ## Cross-references
 

@@ -1,8 +1,8 @@
 # 0008 — Dev environment: Docker vs native
 
-**Status:** OPEN (lean Docker Compose)
+**Status:** RESOLVED 2026-05-24 — **Docker Compose for local dev (Mac + Windows + Linux), same compose file in production.**
 **Filed:** 2026-05-23
-**Touches:** Local development experience, onboarding, CI/CD reproducibility.
+**Touches:** Local development experience, onboarding, CI/CD reproducibility, cross-platform support.
 
 ## Context
 
@@ -46,4 +46,20 @@ Noel makes the call (typically follows the stack call — [0005](0005-stack.md))
 
 ## Resolution
 
-_(Pending.)_
+**Docker Compose (Option A), locked 2026-05-24 by Noel.**
+
+**The pattern:**
+- One `docker-compose.yml` at the repo root spins up: Postgres, Caddy, the Next.js app, the worker process.
+- Same compose file runs on:
+  - Noel's Mac (development)
+  - CGoC team's Windows machines (development) via Docker Desktop + WSL2
+  - The eventual Linux VPS (production) — see [0015](0015-vps-deployment.md)
+- Container images are reproducible — what works locally works in production.
+
+**Why Docker Compose over native installs:**
+- Eliminates "works on my machine" drift.
+- Onboarding: `git clone && docker compose up`. Done.
+- CI runs the same compose stack, so CI failures are reproducible locally.
+- Cross-platform is solved by the abstraction layer — see [0016](0016-cross-platform-deployment.md).
+
+**Setup overhead:** ~10 minutes per developer first-time (install Docker Desktop). After that, zero.

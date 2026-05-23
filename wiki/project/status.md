@@ -1,17 +1,28 @@
 # Sentinel — Status
 
-**As of 2026-05-23: Pre-Phase-0.** No code written. Workspace contains only scaffolding (`AGENTS.md`, `memory/`, `wiki/`, `ref/`, `.claude/`).
+**As of 2026-05-24: Pre-Slice-0.** All blocking architectural calls locked. Slice 0 scaffolding is the next concrete work.
 
-## Hard gates (must close before any Phase-0 code)
+## Hard gates — ALL closed
 
-| # | Gate | Status | Resolves via |
-|---|---|---|---|
-| 1 | Client questionnaire answered by Commander Group department heads | OPEN | [`../../ref/sentinel-docs/sentinel-client-questionnaire.md`](../../ref/sentinel-docs/sentinel-client-questionnaire.md) (~20 [CRITICAL] items) |
-| 2 | Stack call: TypeScript vs Python | OPEN (lean TS) | [Decision 0005](../decisions/0005-stack.md) |
-| 3 | Database: MySQL vs Postgres | OPEN (lean Postgres) | [Decision 0006](../decisions/0006-database.md) |
-| 4 | Multi-tenancy: internal vs licensable | OPEN | [Decision 0007](../decisions/0007-multi-tenancy.md) + questionnaire Part A |
-| 5 | Hosting: on-prem / cloud / hybrid | OPEN | Questionnaire Part R |
-| 6 | Dev environment: Docker vs native | OPEN (lean Docker Compose) | [Decision 0008](../decisions/0008-dev-environment.md) |
+| # | Gate | Status |
+|---|---|---|
+| 1 | Stack call: TypeScript vs Python | ✅ CLOSED — [0005](../decisions/0005-stack.md) TypeScript |
+| 2 | Database: MySQL vs Postgres | ✅ CLOSED — [0006](../decisions/0006-database.md) Postgres |
+| 3 | Multi-tenancy: internal vs licensable | ✅ CLOSED — [0007](../decisions/0007-multi-tenancy.md) Single-tenant |
+| 4 | Hosting: on-prem / cloud / hybrid | ✅ CLOSED — [0015](../decisions/0015-vps-deployment.md) Hostinger KVM4 VPS (when CGoC provisions) |
+| 5 | Dev environment: Docker vs native | ✅ CLOSED — [0008](../decisions/0008-dev-environment.md) Docker Compose |
+| 6 | Delivery shape: horizontal phases vs vertical slices | ✅ CLOSED — [0013](../decisions/0013-vertical-slices-over-horizontal-phases.md) Vertical slices |
+| 7 | Tool stack | ✅ CLOSED — [0014](../decisions/0014-tool-stack-and-cost-discipline.md) Free-tier-first + OpenRouter |
+| 8 | Cross-platform support | ✅ CLOSED — [0016](../decisions/0016-cross-platform-deployment.md) Docker handles Mac/Windows/Linux |
+
+## Non-blocking open items
+
+| Item | Owner | Notes |
+|---|---|---|
+| Client questionnaire to CGoC department heads | Noel + CGoC | Now validation/refinement, not blocking. Still recommended for Part A (already inferred), D/E/G/J/N. |
+| Labor-lawyer consult on applicant-pool classification | Noel + CGoC | Per [0004](../decisions/0004-applicant-pool-legal-classification.md). |
+| Domain choice for production | Noel + CGoC | Per [0015](../decisions/0015-vps-deployment.md). Not blocking until production approach. |
+| VPS provisioning | CGoC | Per [0015](../decisions/0015-vps-deployment.md). Not blocking; local-first dev. |
 
 ## Resolved contradictions (2026-05-23, all confirmed by Noel)
 

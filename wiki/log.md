@@ -11,6 +11,18 @@
 - Runbooks and manuals trees created with README conventions; no content yet.
 - mem0 explicitly dropped — Memsearch (Level 3) already covers the same recall surface.
 
+## [2026-05-24] decisions | Locked stack + tool + deployment ADRs (0005-0008, 0013-0016); 0012 superseded
+
+- Walked through every decision with Noel (read-as-you-build discipline).
+- All blocking gates closed. Sentinel is pre-Slice-0 with no remaining architectural unknowns.
+- Locked: stack TypeScript ([0005](decisions/0005-stack.md)), Postgres ([0006](decisions/0006-database.md)), single-tenant ([0007](decisions/0007-multi-tenancy.md)), Docker Compose ([0008](decisions/0008-dev-environment.md)), vertical slices ([0013](decisions/0013-vertical-slices-over-horizontal-phases.md)), tool stack with OpenRouter + free-tier-first ([0014](decisions/0014-tool-stack-and-cost-discipline.md)), VPS deferred with Hostinger KVM4 specs ([0015](decisions/0015-vps-deployment.md)), cross-platform via Docker ([0016](decisions/0016-cross-platform-deployment.md)).
+- Refined: applicant-pool model now includes trust-tier dimension ([0004](decisions/0004-applicant-pool-legal-classification.md)).
+- Noel pushback on Anthropic-by-default was honest and correct — locked OpenRouter abstraction instead, defer specific model to Slice 7.
+- Noel delegated architectural and tool decisions to Claude going forward; saved to global memory at `~/.claude/projects/.../memory/feedback_delegation_framework.md`.
+- Domain `sentinel.commandergrp.com` rejected — risks CGoC DNS conflicts. Domain choice deferred until production approach.
+- VPS provisioning deferred — local-first development. CGoC will provision Hostinger KVM4 when ready.
+- CGoC local server (if/when needed) gets a fresh Windows Server, not their existing one.
+
 ## [2026-05-24] ingest | Meeting transcripts + four ADR resolutions + three new ADRs
 
 - Noel dropped raw meeting transcripts: `ref/sentinel-docs/IMG_6844 (transcribed on 08-May-2026 15-32-51).txt` (36 KB) and `ref/sentinel-docs/IMG_6846 (transcribed on 08-May-2026 15-32-31).txt` (4 KB). Email-system portions excluded per Noel (separate project).
