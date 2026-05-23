@@ -16,7 +16,7 @@
  * before re-inserting), so running the suite multiple times is safe.
  */
 
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
 import { and, eq, gte } from 'drizzle-orm';
 import { closeDb, getDb } from '@/core/db';
 import { payRuns, payslips } from './schema';
@@ -28,7 +28,9 @@ import { auditLog } from '@/modules/audit/schema';
 import { eventLog } from '@/modules/events/schema';
 import { hr } from '@/modules/hr/index';
 import { seedComplianceRates } from '@/modules/compliance/seed';
-import { runPayroll, lockPayRun } from './index';
+import { runPayroll, lockPayRun, initPayrollSubscriptions, _resetPayrollSubscriptionsForTests } from './index';
+import { dtr } from '@/modules/dtr/index';
+import { events, _resetEventsForTests } from '@/modules/events/index';
 
 // ─── Fixture helpers ──────────────────────────────────────────────────────────
 
@@ -401,6 +403,146 @@ describe('payroll module — lockPayRun', () => {
     await expect(lockPayRun(payRun.id)).rejects.toThrow(
       'This pay run is already locked',
     );
+  });
+});
+
+// ─── payroll subscriptions suite ─────────────────────────────────────────────
+
+describe('payroll module — subscriptions (dtr.period.closed → runPayroll)', () => {
+  const db = getDb();
+
+  beforeAll(async () => {
+    // Compliance rates must exist for runPayroll.
+    await seedComplianceRates({ effectiveDate: '2026-01-01' });
+  });
+
+  beforeEach(async () => {
+    // Reset subscriptions BEFORE any initPayrollSubscriptions() call.
+    _resetPayrollSubscriptionsForTests();
+    // Wipe leftover listeners from prior describe blocks.
+    _resetEventsForTests();
+
+    // FK-ordered wipe (same order as the other suites).
+    await db.delete(payslips);
+    await db.delete(payRuns);
+    await db.delete(dtrEntries);
+    await db.delete(dtrPeriodCloses);
+    await db.delete(assignmentsTable);
+    await db.delete(detachments);
+    await db.delete(clients);
+    await db.delete(employees);
+    await db.delete(eventLog);
+  });
+
+  afterEach(() => {
+    // Ensure no subscription leaks into the next test.
+    _resetPayrollSubscriptionsForTests();
+    _resetEventsForTests();
+  });
+
+  // ─── Test S1: Happy path ──────────────────────────────────────────────────
+  it('happy path: closePeriod fires dtr.period.closed → runPayroll auto-runs', async () => {
+    const emp = await makeEmployee('CG-S001');
+
+    // 13 worked days across May 16–31
+    const workDays = [
+      '2026-05-16', '2026-05-17', '2026-05-18', '2026-05-19', '2026-05-20',
+      '2026-05-21', '2026-05-22', '2026-05-23', '2026-05-25', '2026-05-26',
+      '2026-05-27', '2026-05-28', '2026-05-29',
+    ];
+    await makeDtrEntries(emp.id, workDays);
+
+    initPayrollSubscriptions();
+
+    // Close the period — this publishes dtr.period.closed (delivered via setImmediate).
+    await dtr.closePeriod('2026-05-16', '2026-05-31');
+
+    // Poll for the pay_runs row for up to 2 s (10 × 200 ms) while the async
+    // subscriber finishes its many awaits inside runPayroll.
+    let payRunRows: typeof payRuns.$inferSelect[] = [];
+    for (let i = 0; i < 10; i++) {
+      payRunRows = await db
+        .select()
+        .from(payRuns)
+        .where(
+          and(
+            eq(payRuns.periodStart, '2026-05-16'),
+            eq(payRuns.periodEnd, '2026-05-31'),
+          ),
+        );
+      if (payRunRows.length > 0 && payRunRows[0]!.status === 'calculated') break;
+      await new Promise<void>((r) => setTimeout(r, 200));
+    }
+
+    expect(payRunRows).toHaveLength(1);
+    expect(payRunRows[0]!.status).toBe('calculated');
+
+    // Exactly one payslip for the employee.
+    const slips = await db
+      .select()
+      .from(payslips)
+      .where(eq(payslips.payRunId, payRunRows[0]!.id));
+    expect(slips).toHaveLength(1);
+    expect(slips[0]!.employeeId).toBe(emp.id);
+  });
+
+  // ─── Test S2: Idempotent init ─────────────────────────────────────────────
+  it('idempotent init: calling initPayrollSubscriptions() twice only subscribes once', async () => {
+    const emp = await makeEmployee('CG-S002');
+
+    const workDays = [
+      '2026-05-16', '2026-05-17', '2026-05-18', '2026-05-19', '2026-05-20',
+      '2026-05-21', '2026-05-22', '2026-05-23', '2026-05-25', '2026-05-26',
+      '2026-05-27', '2026-05-28', '2026-05-29',
+    ];
+    await makeDtrEntries(emp.id, workDays);
+
+    // Call twice — second call should be a no-op.
+    initPayrollSubscriptions();
+    initPayrollSubscriptions();
+
+    await dtr.closePeriod('2026-05-16', '2026-05-31');
+
+    // Poll for the pay_runs row.
+    let payRunRows: typeof payRuns.$inferSelect[] = [];
+    for (let i = 0; i < 10; i++) {
+      payRunRows = await db
+        .select()
+        .from(payRuns)
+        .where(
+          and(
+            eq(payRuns.periodStart, '2026-05-16'),
+            eq(payRuns.periodEnd, '2026-05-31'),
+          ),
+        );
+      if (payRunRows.length > 0 && payRunRows[0]!.status === 'calculated') break;
+      await new Promise<void>((r) => setTimeout(r, 200));
+    }
+
+    expect(payRunRows).toHaveLength(1);
+
+    // Exactly ONE payslip — not two (which would indicate double-run).
+    const slips = await db
+      .select()
+      .from(payslips)
+      .where(eq(payslips.payRunId, payRunRows[0]!.id));
+    expect(slips).toHaveLength(1);
+  });
+
+  // ─── Test S3: Missing payload fields → no crash, no pay_run ──────────────
+  it('missing periodStart/periodEnd in payload → no pay_run created, no throw', async () => {
+    initPayrollSubscriptions();
+
+    // Publish the event directly with an empty payload (no periodStart/periodEnd).
+    await events.publish('dtr.period.closed', {});
+
+    // Wait two setImmediate ticks for the subscriber to process.
+    await new Promise<void>((r) => setImmediate(r));
+    await new Promise<void>((r) => setImmediate(r));
+
+    // No pay_runs row should exist.
+    const payRunRows = await db.select().from(payRuns);
+    expect(payRunRows).toHaveLength(0);
   });
 });
 
