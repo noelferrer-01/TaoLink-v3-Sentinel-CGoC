@@ -9,19 +9,19 @@
  * (the 30th/31st cut). The 15th cut carries zero statutory deductions.
  * This mirrors many PH payroll systems and matches v2 behaviour.
  *
- * NOTE: Rate functions are intentionally synchronous here (Task 6.2).
- * Task 6.4 will refactor them to async when the DB-backed compliance service
- * is wired in. Do NOT pre-empt that by making rates async now — the seam is
- * deliberate, keeps unit tests trivial, and is visible for the refactor step.
+ * Rate lookups are async (Task 6.4 refactor): in production, rate functions hit
+ * the compliance service via DB queries, which are inherently async. The test
+ * fixtures supply async arrow functions returning Promise.resolve(...) so the
+ * contract is the same in tests and at runtime.
  */
 
 export type PayrollFrequency = 'MONTHLY' | 'SEMI_MONTHLY';
 
 export type PayrollRates = {
-  sssBracketForMonthly: (monthly: number) => { eeShareRegular: number; eeShareWisp: number };
-  philhealthEE: (monthly: number) => number;
-  pagibigEE: (monthly: number) => number;
-  wtaxMonthly: (taxableMonthly: number, freq: PayrollFrequency) => number;
+  sssBracketForMonthly: (monthly: number) => Promise<{ eeShareRegular: number; eeShareWisp: number }>;
+  philhealthEE: (monthly: number) => Promise<number>;
+  pagibigEE: (monthly: number) => Promise<number>;
+  wtaxMonthly: (taxableMonthly: number, freq: PayrollFrequency) => Promise<number>;
 };
 
 export type PayrollComputeInput = {
@@ -46,7 +46,7 @@ export type PayrollComputeResult = {
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
-export function computePayrollLine(input: PayrollComputeInput): PayrollComputeResult {
+export async function computePayrollLine(input: PayrollComputeInput): Promise<PayrollComputeResult> {
   const dailyRate = input.basicSalaryMonthly / input.workDaysPerMonth;
   const hourlyRate = dailyRate / 8;
   const basicEarnings = dailyRate * input.daysWorked;
@@ -59,10 +59,10 @@ export function computePayrollLine(input: PayrollComputeInput): PayrollComputeRe
     input.payFrequency === 'MONTHLY' ||
     (input.payFrequency === 'SEMI_MONTHLY' && input.isFinalCutOfMonth === true);
 
-  const sssBracket = input.rates.sssBracketForMonthly(input.basicSalaryMonthly);
+  const sssBracket = await input.rates.sssBracketForMonthly(input.basicSalaryMonthly);
   const sssEEMonthly = (sssBracket?.eeShareRegular ?? 0) + (sssBracket?.eeShareWisp ?? 0);
-  const philhealthEEMonthly = input.rates.philhealthEE(input.basicSalaryMonthly);
-  const pagibigEEMonthly = input.rates.pagibigEE(input.basicSalaryMonthly);
+  const philhealthEEMonthly = await input.rates.philhealthEE(input.basicSalaryMonthly);
+  const pagibigEEMonthly = await input.rates.pagibigEE(input.basicSalaryMonthly);
 
   const sssEE        = applyStatutory ? round2(sssEEMonthly) : 0;
   const philhealthEE = applyStatutory ? round2(philhealthEEMonthly) : 0;
@@ -70,7 +70,7 @@ export function computePayrollLine(input: PayrollComputeInput): PayrollComputeRe
 
   // BIR WTAX: taxable = gross minus non-taxable statutory contributions.
   const taxableForCut = round2(grossPay - sssEE - philhealthEE - pagibigEE);
-  const birWtax = round2(input.rates.wtaxMonthly(Math.max(0, taxableForCut), input.payFrequency));
+  const birWtax = round2(await input.rates.wtaxMonthly(Math.max(0, taxableForCut), input.payFrequency));
 
   const netPay = round2(Math.max(0, grossPay - sssEE - philhealthEE - pagibigEE - birWtax));
 

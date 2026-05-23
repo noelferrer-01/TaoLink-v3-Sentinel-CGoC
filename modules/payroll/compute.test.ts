@@ -7,18 +7,18 @@ import { computePayrollLine, type PayrollRates } from './compute';
 // Pag-IBIG: capped at 200
 // WTAX: 0 for this income bracket (below the threshold in the fixture)
 const RATES_2026: PayrollRates = {
-  sssBracketForMonthly: (_m: number) => ({ eeShareRegular: 720, eeShareWisp: 180 }),
-  philhealthEE: (_m: number) => 450,
-  pagibigEE: (_m: number) => 200,
-  wtaxMonthly: (_taxable: number, _freq) => 0,
+  sssBracketForMonthly: async (_m: number) => ({ eeShareRegular: 720, eeShareWisp: 180 }),
+  philhealthEE: async (_m: number) => 450,
+  pagibigEE: async (_m: number) => 200,
+  wtaxMonthly: async (_taxable: number, _freq) => 0,
 };
 
 describe('computePayrollLine', () => {
   // ─── Test 1: CGoC-typical case, SEMI_MONTHLY first cut (15th) ─────────────
   // 18,000 / 26 = 692.307... × 13 = 9,000
   // isFinalCutOfMonth: false → statutory deductions are all 0
-  it('SEMI_MONTHLY first cut (15th): gross ≈ 9000, statutory = 0, net ≈ 9000', () => {
-    const result = computePayrollLine({
+  it('SEMI_MONTHLY first cut (15th): gross ≈ 9000, statutory = 0, net ≈ 9000', async () => {
+    const result = await computePayrollLine({
       basicSalaryMonthly: 18_000,
       payFrequency: 'SEMI_MONTHLY',
       workDaysPerMonth: 26,
@@ -40,8 +40,8 @@ describe('computePayrollLine', () => {
   // ─── Test 2: SEMI_MONTHLY final cut (30th) ────────────────────────────────
   // gross ≈ 9000; sssEE=900, philhealthEE=450, pagibigEE=200, birWtax=0
   // net = 9000 - 900 - 450 - 200 = 7450
-  it('SEMI_MONTHLY final cut (30th): full statutory deducted, net = 7450', () => {
-    const result = computePayrollLine({
+  it('SEMI_MONTHLY final cut (30th): full statutory deducted, net = 7450', async () => {
+    const result = await computePayrollLine({
       basicSalaryMonthly: 18_000,
       payFrequency: 'SEMI_MONTHLY',
       workDaysPerMonth: 26,
@@ -62,8 +62,8 @@ describe('computePayrollLine', () => {
 
   // ─── Test 3: MONTHLY, full month worked ───────────────────────────────────
   // 18,000 / 26 × 26 = 18,000; full statutory applied once
-  it('MONTHLY: 26 days worked → gross = 18000, full statutory applied once', () => {
-    const result = computePayrollLine({
+  it('MONTHLY: 26 days worked → gross = 18000, full statutory applied once', async () => {
+    const result = await computePayrollLine({
       basicSalaryMonthly: 18_000,
       payFrequency: 'MONTHLY',
       workDaysPerMonth: 26,
@@ -84,8 +84,8 @@ describe('computePayrollLine', () => {
   // ─── Test 4: Zero days worked → grossPay = 0, netPay clamped to 0 ─────────
   // Even though statutory deductions are computed (900 + 450 + 200 = 1550),
   // netPay = max(0, 0 - 1550) = 0 per the spec.
-  it('MONTHLY: 0 days worked → grossPay = 0, netPay clamped to 0', () => {
-    const result = computePayrollLine({
+  it('MONTHLY: 0 days worked → grossPay = 0, netPay clamped to 0', async () => {
+    const result = await computePayrollLine({
       basicSalaryMonthly: 18_000,
       payFrequency: 'MONTHLY',
       workDaysPerMonth: 26,
@@ -108,8 +108,8 @@ describe('computePayrollLine', () => {
   // hourlyRate = 692.307... / 8 = 86.538...
   // otPay = 8 × 86.538... × 1.25 = 865.384...
   // gross = 18000 + 865.384... ≈ 18865.38
-  it('MONTHLY: 26 days + 8 OT hours → otPay ≈ 865.38, gross ≈ 18865.38', () => {
-    const result = computePayrollLine({
+  it('MONTHLY: 26 days + 8 OT hours → otPay ≈ 865.38, gross ≈ 18865.38', async () => {
+    const result = await computePayrollLine({
       basicSalaryMonthly: 18_000,
       payFrequency: 'MONTHLY',
       workDaysPerMonth: 26,
@@ -125,15 +125,15 @@ describe('computePayrollLine', () => {
   });
 
   // ─── Test 6: WTAX mock spy — verify it receives correct args ───────────────
-  it('passes correct taxable amount and frequency to wtaxMonthly', () => {
-    const wtaxSpy = vi.fn((_taxable: number, _freq: 'MONTHLY' | 'SEMI_MONTHLY') => 1500);
+  it('passes correct taxable amount and frequency to wtaxMonthly', async () => {
+    const wtaxSpy = vi.fn(async (_taxable: number, _freq: 'MONTHLY' | 'SEMI_MONTHLY') => 1500);
 
     const spyRates: PayrollRates = {
       ...RATES_2026,
       wtaxMonthly: wtaxSpy,
     };
 
-    const result = computePayrollLine({
+    const result = await computePayrollLine({
       basicSalaryMonthly: 18_000,
       payFrequency: 'MONTHLY',
       workDaysPerMonth: 26,
@@ -154,8 +154,8 @@ describe('computePayrollLine', () => {
   });
 
   // ─── Test 7: Rounding — all monetary outputs are 2 dp ─────────────────────
-  it('all monetary outputs are rounded to 2 decimal places', () => {
-    const result = computePayrollLine({
+  it('all monetary outputs are rounded to 2 decimal places', async () => {
+    const result = await computePayrollLine({
       basicSalaryMonthly: 18_000,
       payFrequency: 'SEMI_MONTHLY',
       workDaysPerMonth: 26,
