@@ -12,7 +12,7 @@ import { getDb } from '@/core/db';
 import { payRuns, payslips, type PayRun, type Payslip } from './schema';
 import { computePayrollLine, type PayrollRates } from './compute';
 import { employees } from '@/modules/hr/schema';
-import { dtrEntries } from '@/modules/dtr/schema';
+import { dtrEntries, type DtrEntry } from '@/modules/dtr/schema';
 import {
   sssBracketForMonthly,
   philhealthEE,
@@ -25,8 +25,9 @@ import { events } from '@/modules/events';
 // Statuses to EXCLUDE from the payroll run (non-active statuses).
 const EXCLUDED_STATUSES = ['applicant', 'terminated'] as const;
 
-// DTR statuses that count as a worked day.
-const WORKED_STATUSES = ['worked', 'holiday_worked', 'restday_worked'] as const;
+// DTR statuses that count as a worked day. Typed against DtrEntry['status']
+// so renaming/removing a dtr_status enum value fails compilation here, not silently in payroll.
+const WORKED_STATUSES: ReadonlyArray<DtrEntry['status']> = ['worked', 'holiday_worked', 'restday_worked'];
 
 /**
  * Resolve whether this cut is the final cut of the month.

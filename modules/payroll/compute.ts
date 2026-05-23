@@ -15,6 +15,8 @@
  * contract is the same in tests and at runtime.
  */
 
+import { round2 } from '@/core/money';
+
 export type PayrollFrequency = 'MONTHLY' | 'SEMI_MONTHLY';
 
 export type PayrollRates = {
@@ -43,8 +45,6 @@ export type PayrollComputeResult = {
   netPay: number;
   breakdown: Record<string, number | string>;
 };
-
-const round2 = (n: number) => Math.round(n * 100) / 100;
 
 export async function computePayrollLine(input: PayrollComputeInput): Promise<PayrollComputeResult> {
   const dailyRate = input.basicSalaryMonthly / input.workDaysPerMonth;

@@ -1,5 +1,6 @@
 import { eq, lte, desc, and } from 'drizzle-orm';
 import { getDb } from '@/core/db';
+import { round2 } from '@/core/money';
 import { sssBrackets, philhealthConfig, pagibigConfig, wtaxBrackets, type SssBracket } from './schema';
 
 export type WtaxFreq = 'MONTHLY' | 'SEMI_MONTHLY';
@@ -22,7 +23,7 @@ export async function philhealthEE(monthlySalary: number, asOf: string): Promise
   if (!cfg) return 0;
   const basis = Math.min(Math.max(monthlySalary, Number(cfg.floor)), Number(cfg.ceiling));
   // 50/50 EE/ER split per RA 11223.
-  return Math.round((basis * Number(cfg.rate) / 2) * 100) / 100;
+  return round2(basis * Number(cfg.rate) / 2);
 }
 
 export async function pagibigEE(monthlySalary: number, asOf: string): Promise<number> {
@@ -31,7 +32,7 @@ export async function pagibigEE(monthlySalary: number, asOf: string): Promise<nu
   const [cfg] = rows;
   if (!cfg) return 0;
   const basis = Math.min(monthlySalary, Number(cfg.salaryCap));
-  return Math.round((basis * Number(cfg.eeRate)) * 100) / 100;
+  return round2(basis * Number(cfg.eeRate));
 }
 
 export async function wtaxMonthly(taxableMonthly: number, freq: WtaxFreq, asOf: string): Promise<number> {
@@ -47,5 +48,5 @@ export async function wtaxMonthly(taxableMonthly: number, freq: WtaxFreq, asOf: 
   });
   if (!bracket) return 0;
   const tax = Number(bracket.baseTax) + (taxableMonthly - Number(bracket.rangeStart)) * Number(bracket.percentageOver);
-  return Math.round(tax * 100) / 100;
+  return round2(tax);
 }
