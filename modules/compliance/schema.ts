@@ -11,12 +11,15 @@ export const sssBrackets = pgTable('comp_sss_brackets', {
   monthlySalaryCredit: numeric('monthly_salary_credit', { precision: 12, scale: 2 }).notNull(),
   eeShareRegular: numeric('ee_share_regular', { precision: 12, scale: 2 }).notNull(),
   erShareRegular: numeric('er_share_regular', { precision: 12, scale: 2 }).notNull(),
+  // WISP shares are notNull (v2 used nullable + default). Seed code must
+  // explicitly insert 0.00 for non-WISP brackets (MSC < ₱20,000).
   eeShareWisp: numeric('ee_share_wisp', { precision: 12, scale: 2 }).notNull(),
   erShareWisp: numeric('er_share_wisp', { precision: 12, scale: 2 }).notNull(),
   effectiveDate: date('effective_date').notNull(),
 }, (t) => ({
   mscIdx: index('comp_sss_msc_idx').on(t.monthlySalaryCredit),
   effDateIdx: index('comp_sss_eff_idx').on(t.effectiveDate),
+  mscEffUq: unique('comp_sss_msc_eff_uq').on(t.monthlySalaryCredit, t.effectiveDate),
 }));
 
 // PhilHealth — one config row per effective date.
@@ -62,3 +65,8 @@ export type SssBracket = typeof sssBrackets.$inferSelect;
 export type PhilhealthConfig = typeof philhealthConfig.$inferSelect;
 export type PagibigConfig = typeof pagibigConfig.$inferSelect;
 export type WtaxBracket = typeof wtaxBrackets.$inferSelect;
+
+export type NewSssBracket = typeof sssBrackets.$inferInsert;
+export type NewPhilhealthConfig = typeof philhealthConfig.$inferInsert;
+export type NewPagibigConfig = typeof pagibigConfig.$inferInsert;
+export type NewWtaxBracket = typeof wtaxBrackets.$inferInsert;
