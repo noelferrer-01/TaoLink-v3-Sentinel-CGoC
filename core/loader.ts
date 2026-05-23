@@ -16,6 +16,7 @@ const MODULE_DEPS: Record<string, string[]> = {
   hr: ['DATABASE_URL'],
   clients: ['DATABASE_URL'],
   assignments: ['DATABASE_URL'],
+  dtr: ['DATABASE_URL'],
 };
 
 export function validateBoot(): ModuleDependencyReport[] {

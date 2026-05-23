@@ -10,6 +10,7 @@ import * as complianceSchema from '@/modules/compliance/schema';
 import * as hrSchema from '@/modules/hr/schema';
 import * as clientsSchema from '@/modules/clients/schema';
 import * as assignmentsSchema from '@/modules/assignments/schema';
+import * as dtrSchema from '@/modules/dtr/schema';
 
 const schema = {
   ...authSchema,
@@ -20,6 +21,7 @@ const schema = {
   ...hrSchema,
   ...clientsSchema,
   ...assignmentsSchema,
+  ...dtrSchema,
 };
 
 let sqlClient: ReturnType<typeof postgres> | null = null;
