@@ -11,6 +11,7 @@ import * as hrSchema from '@/modules/hr/schema';
 import * as clientsSchema from '@/modules/clients/schema';
 import * as assignmentsSchema from '@/modules/assignments/schema';
 import * as dtrSchema from '@/modules/dtr/schema';
+import * as payrollCalendarsSchema from '@/modules/payroll-calendars/schema';
 
 const schema = {
   ...authSchema,
@@ -22,6 +23,7 @@ const schema = {
   ...clientsSchema,
   ...assignmentsSchema,
   ...dtrSchema,
+  ...payrollCalendarsSchema,
 };
 
 let sqlClient: ReturnType<typeof postgres> | null = null;
