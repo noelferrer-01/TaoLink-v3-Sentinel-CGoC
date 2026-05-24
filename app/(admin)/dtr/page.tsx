@@ -1,9 +1,17 @@
 import Link from 'next/link';
 import { assignments } from '@/modules/assignments';
+import { clients } from '@/modules/clients';
 import { dtr } from '@/modules/dtr';
+import { payrollCalendars } from '@/modules/payroll-calendars';
+import { PageShell } from '@/components/page-shell';
+import { CountdownBadge } from '@/components/countdown-badge';
 import { ClosePeriodButton } from './close-period-button';
 import { FillRowButton, FillAllButton } from './fill-buttons';
 import { pickerPeriods, periodForDate, currentPeriod, countDays } from './period';
+
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
 
 export default async function DTRPage({
   searchParams,
@@ -13,11 +21,24 @@ export default async function DTRPage({
   const params = await searchParams;
   const safePeriod = params.start ? periodForDate(params.start) : currentPeriod();
   const totalDays = countDays(safePeriod.start, safePeriod.end);
+  const today = todayIso();
 
-  const [active, closed] = await Promise.all([
+  const [active, closed, allClients] = await Promise.all([
     assignments.listAssignmentsOverlappingPeriod(safePeriod.start, safePeriod.end),
     dtr.isPeriodClosed(safePeriod.start, safePeriod.end),
+    clients.listClients(),
   ]);
+
+  // Resolve cut-off + payday via the first client's calendar (or fallback
+  // defaults if there are no clients yet). Multi-client per-period dashboard
+  // is Slice 3+ — for the v1 single-client demo, the first client is the
+  // payroll basis.
+  const periodStartDate = new Date(safePeriod.start + 'T00:00:00Z');
+  const periodEndDate = new Date(safePeriod.end + 'T00:00:00Z');
+  const calendarOwner = allClients[0] ?? null;
+  const resolved = calendarOwner
+    ? await payrollCalendars.resolveForPeriod(calendarOwner.id, periodStartDate, periodEndDate)
+    : null;
 
   // Dedupe by employee — a guard may show twice if they had a transfer, but
   // for DTR we only care once per period.
@@ -36,19 +57,21 @@ export default async function DTRPage({
 
   const periods = pickerPeriods();
 
-  return (
-    <>
-      <header className="page-header">
-        <div className="breadcrumb">Sentinel · Payroll</div>
-        <h1 className="page-title">Time records</h1>
-        <p className="page-sub">
-          Record which days each employee worked. When you close the period,
-          Sentinel locks the DTR and computes payslips automatically. Sentinel
-          uses two cutoffs per month (the 1<sup>st</sup>–15<sup>th</sup> and
-          the 16<sup>th</sup>–end of month).
-        </p>
-      </header>
+  const toolbar = resolved ? (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', justifyContent: 'flex-end' }}>
+      <CountdownBadge label="Cut-off" dueDate={resolved.dtrCutoffDate} today={today} />
+      <CountdownBadge label="Payday" dueDate={resolved.paydayDate} today={today} />
+    </div>
+  ) : undefined;
 
+  return (
+    <PageShell
+      breadcrumb={<>Sentinel · Payroll · Time records</>}
+      title="Time records"
+      description="Record which days each employee worked. When you close the period, Sentinel locks the DTR and computes payslips automatically. Sentinel uses two cutoffs per month (the 1st–15th and the 16th–end of month)."
+      toolbar={toolbar}
+      footerHint="Close the period when every employee shows ✓ All days. Closing locks the DTR and triggers payslip computation."
+    >
       <form method="get" action="/dtr" className="page-toolbar" style={{ alignItems: 'center' }}>
         <label className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: '0.75rem' }}>
           <span className="field-label" style={{ margin: 0 }}>Period</span>
@@ -185,8 +208,6 @@ export default async function DTRPage({
           </div>
         </>
       )}
-
-      <p className="footnote">Slice 1 · Phase 8 · DTR · Per-cell editing is a Slice-2 follow-up</p>
-    </>
+    </PageShell>
   );
 }

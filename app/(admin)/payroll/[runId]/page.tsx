@@ -1,8 +1,16 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { payroll } from '@/modules/payroll';
+import { clients } from '@/modules/clients';
+import { payrollCalendars } from '@/modules/payroll-calendars';
+import { PageShell } from '@/components/page-shell';
+import { CountdownBadge } from '@/components/countdown-badge';
 import { LockPayRunButton } from './lock-button';
 import { formatPeso } from '../peso';
+
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
 
 export default async function PayRunPage({
   params,
@@ -13,7 +21,22 @@ export default async function PayRunPage({
   const run = await payroll.getPayRun(runId);
   if (!run) notFound();
 
-  const payslips = await payroll.listPayslipsWithEmployee(runId);
+  const [payslips, allClients] = await Promise.all([
+    payroll.listPayslipsWithEmployee(runId),
+    clients.listClients(),
+  ]);
+
+  // Cut-off + payday for the v1 single-client demo — resolve via the first
+  // client's calendar. Multi-client per-period dashboard is Slice 3+.
+  const today = todayIso();
+  const calendarOwner = allClients[0] ?? null;
+  const resolved = calendarOwner
+    ? await payrollCalendars.resolveForPeriod(
+        calendarOwner.id,
+        new Date(run.periodStart + 'T00:00:00Z'),
+        new Date(run.periodEnd + 'T00:00:00Z'),
+      )
+    : null;
 
   const totals = payslips.reduce(
     (acc, p) => ({
@@ -30,22 +53,29 @@ export default async function PayRunPage({
   const period = `${run.periodStart} → ${run.periodEnd}`;
   const isLocked = run.status === 'locked';
 
+  const toolbar = resolved ? (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', justifyContent: 'flex-end' }}>
+      <CountdownBadge
+        label="Cut-off"
+        dueDate={resolved.dtrCutoffDate}
+        today={today}
+        pastVariant="done"
+      />
+      <CountdownBadge label="Payday" dueDate={resolved.paydayDate} today={today} />
+    </div>
+  ) : undefined;
+
   return (
-    <>
-      <header className="page-header">
-        <div className="breadcrumb">
-          <Link href="/payroll" style={{ textDecoration: 'none' }}>Pay runs</Link> · {run.periodStart}
-        </div>
-        <h1 className="page-title">{period}</h1>
-        <p className="page-sub">
-          {payslips.length} {payslips.length === 1 ? 'payslip' : 'payslips'}{' '}
-          {isLocked ? 'locked' : 'computed'} for this period. Status:{' '}
-          <strong>{run.status}</strong>
-          {run.lockedAt
-            ? `, locked on ${run.lockedAt.toISOString().slice(0, 10)}`
-            : ''}.
-        </p>
-      </header>
+    <PageShell
+      breadcrumb={
+        <>
+          <Link href="/payroll">Pay runs</Link> · {run.periodStart}
+        </>
+      }
+      title={period}
+      description={`${payslips.length} ${payslips.length === 1 ? 'payslip' : 'payslips'} ${isLocked ? 'locked' : 'computed'} for this period. Status: ${run.status}${run.lockedAt ? `, locked on ${run.lockedAt.toISOString().slice(0, 10)}` : ''}.`}
+      toolbar={toolbar}
+    >
 
       {payslips.length === 0 ? (
         <div className="empty-state">
@@ -125,6 +155,6 @@ export default async function PayRunPage({
           <LockPayRunButton payRunId={runId} period={period} />
         )}
       </div>
-    </>
+    </PageShell>
   );
 }

@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { payroll } from '@/modules/payroll';
+import { PageShell } from '@/components/page-shell';
 
 function statusLabel(s: string): string {
   switch (s) {
@@ -23,18 +24,12 @@ export default async function PayrollPage() {
   const runs = await payroll.listPayRuns();
 
   return (
-    <>
-      <header className="page-header">
-        <div className="breadcrumb">Sentinel · Payroll</div>
-        <h1 className="page-title">Pay runs</h1>
-        <p className="page-sub">
-          One row per closed DTR period. Open a pay run to see every employee&rsquo;s
-          payslip with the four statutory deductions (SSS, PhilHealth,
-          Pag-IBIG, withholding tax). Lock the run when you&rsquo;re ready to
-          file government reports.
-        </p>
-      </header>
-
+    <PageShell
+      breadcrumb={<>Sentinel · Payroll · Pay runs</>}
+      title="Pay runs"
+      description="One row per closed DTR period. Open a pay run to see every employee's payslip with the four statutory deductions (SSS, PhilHealth, Pag-IBIG, withholding tax). Lock the run when you're ready to file government reports."
+      footerHint="Closed periods land here automatically. Open a row to view payslips and lock the run for export."
+    >
       <div className="page-toolbar">
         <div className="page-toolbar-meta">
           {runs.length} pay {runs.length === 1 ? 'run' : 'runs'} on file
@@ -99,6 +94,6 @@ export default async function PayrollPage() {
           </table>
         </div>
       )}
-    </>
+    </PageShell>
   );
 }
