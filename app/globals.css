@@ -341,6 +341,20 @@ h1, h2, h3, h4, h5 {
 
 .btn:hover { background: var(--navy-soft); border-color: var(--navy-soft); }
 
+.btn:disabled,
+.btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: var(--navy);
+  border-color: var(--navy);
+}
+
+.btn:disabled:hover,
+.btn[disabled]:hover {
+  background: var(--navy);
+  border-color: var(--navy);
+}
+
 .btn--ghost {
   background: transparent;
   color: var(--ink);
