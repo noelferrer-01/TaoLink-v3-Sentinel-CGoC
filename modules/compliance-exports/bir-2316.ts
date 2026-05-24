@@ -25,6 +25,38 @@ export type Bir2316Result = {
 };
 
 /**
+ * previewBir2316Warnings — Compute the warnings array for a (employee, year)
+ * pair WITHOUT rendering the PDF or writing an audit row. Lets the UI show
+ * the warnings banner upfront, before the clerk commits to the (expensive)
+ * PDF render and audit-logged export.
+ *
+ * Logic mirrors `exportBIR_2316` exactly — keep them in sync if the warning
+ * rules change.
+ */
+export async function previewBir2316Warnings(
+  employeeId: string,
+  year: number,
+): Promise<string[]> {
+  const db = getDb();
+  const empRows = await db.select().from(employees).where(eq(employees.id, employeeId));
+  const emp = empRows[0];
+  if (!emp) {
+    throw new Error(`[compliance-exports/bir-2316] Employee not found: ${employeeId}`);
+  }
+
+  const ytd = await computeYtd(employeeId, year);
+  const warnings: string[] = [];
+  if (!emp.rdoCode)      warnings.push('RDO code missing');
+  if (!emp.dateOfBirth)  warnings.push('Date of birth missing');
+  if (!emp.addressLine1) warnings.push('Address missing');
+  if (!emp.tinNumber)    warnings.push(`employee ${emp.employeeCode} has no TIN on file — required for BIR 2316`);
+  if (ytd.payRunCount === 0) {
+    warnings.push(`No locked pay runs for ${year} — PDF generated with zero values`);
+  }
+  return warnings;
+}
+
+/**
  * exportBIR_2316 — Render a PDF BIR Form 2316 for one employee × one
  * calendar year.
  *
