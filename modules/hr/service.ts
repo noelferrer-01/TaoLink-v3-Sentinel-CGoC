@@ -1,22 +1,13 @@
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and, desc, sql } from 'drizzle-orm';
 import Papa from 'papaparse';
 import { z } from 'zod';
 import { getDb } from '@/core/db';
+import { isWithinUndoWindow } from '@/core/time';
 import { employees, type Employee, type NewEmployee } from './schema';
+import { auditLog } from '@/modules/audit/schema';
 import { audit } from '@/modules/audit';
 import { events } from '@/modules/events';
-
-type Status = Employee['status'];
-
-const ALLOWED_TRANSITIONS: Record<Status, Status[]> = {
-  applicant:  ['hired', 'terminated'],
-  hired:      ['deployed', 'reliever', 'floating', 'on_leave', 'terminated'],
-  deployed:   ['floating', 'reliever', 'on_leave', 'terminated'],
-  reliever:   ['deployed', 'floating', 'on_leave', 'terminated'],
-  floating:   ['deployed', 'reliever', 'on_leave', 'terminated'],
-  on_leave:   ['deployed', 'reliever', 'floating', 'terminated'],
-  terminated: [], // terminal
-};
+import { ALLOWED_TRANSITIONS, type Status } from './labels';
 
 // Drizzle types `numeric` columns as `string`, but callers reasonably pass numbers.
 // We widen basicSalary to accept both and stringify before insert.
@@ -124,6 +115,85 @@ export async function changeStatus(
     payload: { from: current.status, to: next, reason },
   });
   await events.publish('hr.employee.status_changed', { id, from: current.status, to: next });
+  return updated;
+}
+
+// ─── Undo termination (5-minute window) ──────────────────────────────────────
+
+/**
+ * Looks up the precise timestamp of the most recent `terminated` transition
+ * for an employee by inspecting the audit log. The `hr_employees.terminated_on`
+ * column is a `date` (day-resolution), so it can't drive a 5-minute window —
+ * we use the audit row's `createdAt` instead.
+ *
+ * Returns `null` when no termination audit row exists for this employee.
+ */
+export async function getLatestTerminationTimestamp(id: string): Promise<Date | null> {
+  const db = getDb();
+  const rows = await db
+    .select({ createdAt: auditLog.createdAt })
+    .from(auditLog)
+    .where(
+      and(
+        eq(auditLog.action, 'hr.employee.status_changed'),
+        eq(auditLog.targetKind, 'hr_employee'),
+        eq(auditLog.targetId, id),
+        sql`${auditLog.payload}->>'to' = 'terminated'`,
+      ),
+    )
+    .orderBy(desc(auditLog.createdAt))
+    .limit(1);
+  return rows[0]?.createdAt ?? null;
+}
+
+/**
+ * Reverts a recent termination back to `hired`. Only allowed within 5 minutes
+ * of the termination event (sourced from the audit log, not the
+ * day-resolution `terminatedOn` column). After that window, terminations are
+ * final — re-hires create a new employee record (deferred to Slice 3+).
+ *
+ * Bypasses `ALLOWED_TRANSITIONS` on purpose: the state machine treats
+ * `terminated` as terminal; this is the only escape hatch.
+ *
+ * Throws plain-language errors for: not-terminated, no termination on file,
+ * outside-window, not-found.
+ */
+export async function undoTermination(
+  id: string,
+  reason: string,
+  opts: { actorUserId?: string | null } = {},
+): Promise<Employee> {
+  const db = getDb();
+  const current = await getEmployee(id);
+  if (!current) throw new Error(`[hr/undoTermination] employee ${id} not found`);
+
+  if (current.status !== 'terminated') {
+    throw new Error("This employee isn't terminated — there's nothing to undo.");
+  }
+
+  const terminatedAt = await getLatestTerminationTimestamp(id);
+  if (!terminatedAt) {
+    throw new Error("We don't have a termination timestamp on file — can't undo.");
+  }
+
+  if (!isWithinUndoWindow(terminatedAt)) {
+    throw new Error('The 5-minute undo window has passed. Termination is final.');
+  }
+
+  const [updated] = await db
+    .update(employees)
+    .set({ status: 'hired', terminatedOn: null, updatedAt: new Date() })
+    .where(eq(employees.id, id))
+    .returning();
+  if (!updated) throw new Error(`[hr/undoTermination] update returned no row for ${id}`);
+
+  await audit.record({
+    actor: opts.actorUserId ?? null,
+    action: 'hr.employee.status_changed',
+    target: { kind: 'hr_employee', id },
+    payload: { from: 'terminated', to: 'hired', reason, undo: true },
+  });
+  await events.publish('hr.employee.status_changed', { id, from: 'terminated', to: 'hired' });
   return updated;
 }
 

@@ -20,6 +20,8 @@ import { hr, type BulkImportResult } from '@/modules/hr';
 | `hr.updateEmployee` | `(id: string, patch: UpdateEmployeePatch, actorUserId?) => Promise<Employee>` | Partial update. Immutable fields (`id`, `employeeCode`, `createdAt`) are silently stripped from the patch. Throws `[hr/updateEmployee] employee <id> not found` if the row doesn't exist. Audits with before/after snapshot + `changedFields` list. Publishes `hr.employee.updated` event. |
 | `hr.searchEmployees` | `(query: string, opts?: SearchEmployeeOptions) => Promise<Employee[]>` | Fuzzy search via `pg_trgm` `similarity()` on full name, with OR fallback to `ILIKE` on `employeeCode`. Supports `employmentType` and `status` filters. Default limit 20, hard cap 100. Returns results ordered by similarity score (descending) when a query is provided, or by `lastName` when no query. |
 | `hr.changeStatus` | `(id, next, reason, opts?) => Promise<Employee>` | Move through the state machine. Sets `terminatedOn` when `next === 'terminated'`. Audits + publishes `hr.employee.status_changed`. Throws on disallowed transitions. |
+| `hr.undoTermination` | `(id, reason, opts?) => Promise<Employee>` | Revert a `terminated → hired` transition within 5 minutes of the termination event. Bypasses `ALLOWED_TRANSITIONS` on purpose. Clears `terminatedOn`. Audits with `{ from: 'terminated', to: 'hired', reason, undo: true }` and publishes `hr.employee.status_changed`. Throws plain-language errors when the employee isn't terminated, the window has passed, or the employee isn't found. |
+| `hr.getLatestTerminationTimestamp` | `(id) => Promise<Date \| null>` | Reads the most recent `to: 'terminated'` audit row's `createdAt` for an employee. Used by `undoTermination` (and the employee detail page) because the `terminated_on` column is day-resolution and can't drive a precise 5-minute window. Returns null when no termination audit row exists. |
 | `hr.bulkImportEmployees` | `(csvText: string, opts?) => Promise<BulkImportResult>` | Parse a CSV, validate per row, insert valid rows in one batch, return `{ imported, errors }`. Per-row failures do NOT abort the batch. Accepts new columns: `employment_type`, `rdo_code`, `date_of_birth`, `address_line1`, `address_line2`, `city`, `province`, `postal_code`. All new columns are optional. |
 
 `Employee`, `NewEmployee`, and `BulkImportResult` types are re-exported from the entry point.
@@ -29,14 +31,20 @@ import { hr, type BulkImportResult } from '@/modules/hr';
 ```
 applicant   → hired | terminated
 hired       → deployed | reliever | floating | on_leave | terminated
-deployed    → floating | reliever | on_leave | terminated
-reliever    → deployed | floating | on_leave | terminated
-floating    → deployed | reliever | on_leave | terminated
-on_leave    → deployed | reliever | floating | terminated
-terminated  → (terminal)
+deployed    → hired | floating | reliever | on_leave | terminated
+reliever    → hired | deployed | floating | on_leave | terminated
+floating    → hired | deployed | reliever | on_leave | terminated
+on_leave    → hired | deployed | reliever | floating | terminated
+terminated  → (terminal — except via `undoTermination` within 5 min)
 ```
 
+`hired` is the neutral employed-but-not-currently-deployed state. Office staff (drivers, supervisors, janitors, OFFICE_STAFF) stay in `hired` as their resting state — they have no deployment lifecycle. Guards return to `hired` when pulled off all detachments.
+
+`terminated` is terminal by design — once an employment chapter is closed, re-hires create a *new* employee record (new code, new hired-on date, fresh audit story). A dedicated re-hire flow is deferred to Slice 3+ when Recruitment takes ownership of the HR module (see ADR 0009).
+
 Transitions enforced by `ALLOWED_TRANSITIONS` in `service.ts`. A disallowed move throws `[hr/changeStatus] disallowed transition <from> → <to>`.
+
+**Mistake-undo window:** `hr.undoTermination` is the one escape hatch from `terminated`. It bypasses `ALLOWED_TRANSITIONS` for a 5-minute window after the termination event (sourced from the audit log, not the day-resolution `terminated_on` column). Beyond that, terminations are final.
 
 ### CSV import — column contract
 
@@ -123,3 +131,23 @@ The bulk-import CSV requires these headers (case-sensitive, in any order):
 ### Bulk import: BIR fields silently skipped when absent
 **Trigger:** any of `rdo_code`, `date_of_birth`, `address_*` columns are absent or blank in the CSV.
 **Fix:** these fields are nullable; a missing value simply stores `NULL`. They can be added later via `updateEmployee`. The BIR 2316 export warns on missing values but does not block the export.
+
+### undoTermination: not terminated
+**Error:** `This employee isn't terminated — there's nothing to undo.`
+**Trigger:** `undoTermination` called on an employee whose status is anything but `terminated`.
+**Fix:** verify status with `getEmployee` before calling. In the UI, the undo button only renders when status is `terminated`.
+
+### undoTermination: missing termination timestamp
+**Error:** `We don't have a termination timestamp on file — can't undo.`
+**Trigger:** the employee is `terminated` but no `hr.employee.status_changed` audit row with `to=terminated` exists (defensive; should be impossible via the normal `changeStatus` path).
+**Fix:** the employee was likely terminated via a manual SQL update that skipped the audit log. Cannot undo via this API — the audit trail must be repaired manually.
+
+### undoTermination: window closed
+**Error:** `The 5-minute undo window has passed. Termination is final.`
+**Trigger:** more than 5 minutes have elapsed since the most recent `to: 'terminated'` audit row.
+**Fix:** this is the contract. Re-hires create a new employee record (deferred to Slice 3+).
+
+### undoTermination: missing employee
+**Error:** `[hr/undoTermination] employee <id> not found`
+**Trigger:** the UUID doesn't match any row.
+**Fix:** verify the id exists via `getEmployee`.

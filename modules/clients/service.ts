@@ -1,5 +1,6 @@
-import { eq, and, lte, gte, or, isNull, count } from 'drizzle-orm';
+import { eq, inArray, and, lte, gte, or, isNull, count } from 'drizzle-orm';
 import { getDb } from '@/core/db';
+import { isWithinUndoWindow } from '@/core/time';
 import { clients, detachments, type Client, type Detachment, type NewClient, type NewDetachment } from './schema';
 import { assignments } from '@/modules/assignments/schema';
 import { audit } from '@/modules/audit';
@@ -208,6 +209,78 @@ export async function listDetachments(clientId: string): Promise<Detachment[]> {
     .from(detachments)
     .where(eq(detachments.clientId, clientId))
     .orderBy(detachments.createdAt);
+}
+
+// ─── Delete client (5-minute window) ──────────────────────────────────────────
+
+/**
+ * Hard-deletes a client and any (still-empty) detachments under it. Only
+ * allowed within 5 minutes of `createdAt` — older clients should be archived
+ * instead (Slice 3+). Wraps detachment + client deletion in a transaction so
+ * either both succeed or neither does.
+ *
+ * Throws plain-language errors for:
+ *   - not-found
+ *   - outside-window (5 min since createdAt)
+ *   - any detachment under this client has an assignment
+ */
+export async function deleteClient(
+  id: string,
+  opts: { actorUserId?: string | null } = {},
+): Promise<void> {
+  const db = getDb();
+  const [before, childDetachments] = await Promise.all([
+    getClient(id),
+    listDetachments(id),
+  ]);
+  if (!before) throw new Error(`[clients/deleteClient] client ${id} not found`);
+
+  if (!isWithinUndoWindow(before.createdAt)) {
+    throw new Error(
+      'The 5-minute delete window has passed. Use Archive instead (coming in a later slice).',
+    );
+  }
+
+  const detachmentIds = childDetachments.map((d) => d.id);
+
+  if (detachmentIds.length > 0) {
+    const rows = await db
+      .select({ assignmentCount: count() })
+      .from(assignments)
+      .where(inArray(assignments.detachmentId, detachmentIds));
+    const assignmentCount = Number(rows[0]?.assignmentCount ?? 0);
+    if (assignmentCount > 0) {
+      throw new Error(
+        "Can't delete this client — one of its detachments already has employees assigned. " +
+          "(This shouldn't happen within 5 minutes of creation — let support know.)",
+      );
+    }
+  }
+
+  await db.transaction(async (tx) => {
+    if (detachmentIds.length > 0) {
+      await tx.delete(detachments).where(eq(detachments.clientId, id));
+    }
+    await tx.delete(clients).where(eq(clients.id, id));
+  });
+
+  await audit.record({
+    actor: opts.actorUserId ?? null,
+    action: 'clients.client.deleted',
+    target: { kind: 'client', id },
+    payload: {
+      before: {
+        id: before.id,
+        name: before.name,
+        contactEmail: before.contactEmail,
+        contactPhone: before.contactPhone,
+        defaultPayrollCalendarId: before.defaultPayrollCalendarId,
+        createdAt: before.createdAt.toISOString(),
+      },
+      deletedDetachmentIds: detachmentIds,
+    },
+  });
+  await events.publish('clients.client.deleted', { id, name: before.name });
 }
 
 // ─── Deployment summary ───────────────────────────────────────────────────────

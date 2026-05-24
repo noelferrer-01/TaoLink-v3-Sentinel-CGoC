@@ -4,11 +4,22 @@ import {
   getEmployeeByCode,
   listEmployees,
   changeStatus,
+  undoTermination,
+  getLatestTerminationTimestamp,
   bulkImportEmployees,
   updateEmployee,
   searchEmployees,
 } from './service';
 export type { BulkImportResult, EmployeeListItem, SearchEmployeeOptions } from './service';
+export {
+  STATUS_LABELS,
+  EMPLOYMENT_TYPE_LABELS,
+  PAY_FREQUENCY_LABELS,
+  ALLOWED_TRANSITIONS,
+  type Status,
+  type EmploymentType,
+  type PayFrequency,
+} from './labels';
 
 export const hr = {
   createEmployee,
@@ -16,6 +27,8 @@ export const hr = {
   getEmployeeByCode,
   listEmployees,
   changeStatus,
+  undoTermination,
+  getLatestTerminationTimestamp,
   bulkImportEmployees,
   updateEmployee,
   searchEmployees,
@@ -26,6 +39,8 @@ export {
   getEmployeeByCode,
   listEmployees,
   changeStatus,
+  undoTermination,
+  getLatestTerminationTimestamp,
   bulkImportEmployees,
   updateEmployee,
   searchEmployees,

@@ -17,6 +17,7 @@ import { clients, type Client, type Detachment } from '@/modules/clients';
 | `clients.createClient` | `(input: { name; contactEmail?; contactPhone?; defaultPayrollCalendarId?; actorUserId? }) => Promise<Client>` | Insert one client. Audits `clients.client.created` and publishes the same event. |
 | `clients.getClient` | `(id) => Promise<Client \| null>` | Read by id. Returns `defaultPayrollCalendarId` if set. |
 | `clients.updateClient` | `(id, patch, actorUserId?) => Promise<Client>` | Update mutable fields on a client. Immutable fields (`id`, `createdAt`) are silently stripped from the patch. Audits `clients.client.updated` with before/after snapshot and publishes the same event. Throws if `id` not found. |
+| `clients.deleteClient` | `(id, opts?) => Promise<void>` | Hard-delete a client and its (empty) detachments within 5 minutes of `createdAt`. Detachments are deleted in the same transaction (FK is `ON DELETE RESTRICT`). Refuses to delete when any detachment under the client has an assignment. Audits `clients.client.deleted` with a `before` snapshot and `deletedDetachmentIds`, and publishes `clients.client.deleted`. Throws plain-language errors when the client doesn't exist, the window has passed, or the cascade would leave dangling assignments. |
 | `clients.listClients` | `() => Promise<Client[]>` | All clients sorted by name. |
 | `clients.listClientsWithDetachments` | `() => Promise<ClientWithDetachments[]>` | All clients with their detachments grouped in, sorted by name. Single query + in-memory grouping. |
 | `clients.createDetachment` | `(input: { clientId; name; address?; requiredHeadcount?; actorUserId? }) => Promise<Detachment>` | Insert a detachment under a client. Audits `clients.detachment.created`. Throws plain-language error if `clientId` doesn't exist. |
@@ -46,9 +47,24 @@ import { clients, type Client, type Detachment } from '@/modules/clients';
 **Fix:** caller must create the client first, or pass an existing client id.
 
 ### Deleting a client that has detachments
-**Error:** `ERROR: update or delete on table "clients" violates foreign key constraint "detachments_client_id_..." on table "detachments"` (raw Postgres error — no wrapper yet)
-**Trigger:** attempt to `DELETE` a client row while detachments exist (FK is `ON DELETE RESTRICT` by design — clients with detachments cannot be casually deleted).
-**Fix:** delete or reassign detachments first. There is no `deleteClient` API in Slice 1; deletion is a future workflow.
+**Error:** `ERROR: update or delete on table "clients" violates foreign key constraint "detachments_client_id_..." on table "detachments"` (raw Postgres error — only surfaces if a caller bypasses `deleteClient` and runs a raw SQL DELETE).
+**Trigger:** raw `DELETE FROM clients WHERE id = …` while detachments exist (FK is `ON DELETE RESTRICT`).
+**Fix:** use `clients.deleteClient` — it deletes detachments first in the same transaction. Outside the 5-minute window, deletion isn't supported (Archive comes in Slice 3+).
+
+### deleteClient: outside the 5-minute window
+**Error:** `The 5-minute delete window has passed. Use Archive instead (coming in a later slice).`
+**Trigger:** `deleteClient` called more than 5 minutes after the client's `createdAt`.
+**Fix:** this is the contract. Archive (soft-delete) is deferred to Slice 3+.
+
+### deleteClient: detachment has assignments
+**Error:** `Can't delete this client — one of its detachments already has employees assigned. (This shouldn't happen within 5 minutes of creation — let support know.)`
+**Trigger:** any assignment row exists pointing at one of the client's detachments. The transaction is *not* started in this path — both client and detachment remain intact.
+**Fix:** investigate how the assignment was created so quickly. Likely a bulk-import or test fixture race.
+
+### deleteClient: client not found
+**Error:** `[clients/deleteClient] client <id> not found`
+**Trigger:** the UUID doesn't match any row.
+**Fix:** the client may have already been deleted. Refresh the list.
 
 ### `updateClient` / `updateDetachment` on a missing id
 **Error:** `[clients/updateClient] client <id> not found` / `[clients/updateDetachment] detachment <id> not found`

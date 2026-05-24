@@ -6,6 +6,7 @@ Models per-client cut-off and payday rules. Drives the countdown badges on DTR +
 ## Public API
 - `create(input)` — insert a calendar. `clientId` may be null (treated as global default). Audit-logged.
 - `update(id, patch, opts?)` — mutate. Throws on missing id. Audit-logged.
+- `list()` — return every calendar ordered by `name` (then `createdAt` as tiebreaker). Read-only, no audit. Used by the Clients detail page's calendar picker.
 - `getForClient(clientId)` — returns the client's calendar, OR the global default (if exists), OR null.
 - `resolveForPeriod(clientId, periodStart, periodEnd)` — computes cut-off and payday dates for the given worked period. Returns `{ dtrCutoffDate, paydayDate, source }` where `source` is `'client' | 'global-default' | 'fallback-defaults'`.
 

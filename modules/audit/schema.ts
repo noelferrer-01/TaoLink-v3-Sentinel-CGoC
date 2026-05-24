@@ -15,6 +15,9 @@ export const auditLog = pgTable(
   (t) => ({
     createdAtIdx: index('audit_log_created_at_idx').on(t.createdAt),
     actionIdx: index('audit_log_action_idx').on(t.action),
+    // Drives hr.getLatestTerminationTimestamp() and any future audit-trail
+    // viewer that filters by target.
+    targetIdx: index('audit_log_target_idx').on(t.targetKind, t.targetId, t.action, t.createdAt.desc()),
   }),
 );
 

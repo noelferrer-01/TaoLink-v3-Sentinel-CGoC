@@ -1,4 +1,4 @@
-import { eq, isNull } from 'drizzle-orm';
+import { asc, eq, isNull } from 'drizzle-orm';
 import { getDb } from '@/core/db';
 import { audit } from '@/modules/audit';
 import { payrollCalendars } from './schema';
@@ -41,6 +41,15 @@ export async function update(
     payload: { diff: Object.keys(patch) },
   });
   return row;
+}
+
+/** Return all calendars ordered by name (createdAt as tiebreaker). No audit — read-only. */
+export async function list(): Promise<PayrollCalendar[]> {
+  const db = getDb();
+  return db
+    .select()
+    .from(payrollCalendars)
+    .orderBy(asc(payrollCalendars.name), asc(payrollCalendars.createdAt));
 }
 
 export async function getForClient(clientId: string): Promise<PayrollCalendar | null> {

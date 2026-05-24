@@ -1,6 +1,8 @@
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
+import { sql } from 'drizzle-orm';
 import { closeDb, getDb } from '@/core/db';
 import { employees } from './schema';
+import { auditLog } from '@/modules/audit/schema';
 import { assignments as assignmentsTable } from '@/modules/assignments/schema';
 import { dtrEntries, dtrPeriodCloses } from '@/modules/dtr/schema';
 import { payslips, payRuns } from '@/modules/payroll/schema';
@@ -55,6 +57,20 @@ describe('hr.createEmployee + state machine', () => {
     const e = await hr.createEmployee({ employeeCode: 'CG-1', firstName: 'A', lastName: 'B', basicSalary: 18000, hiredOn: '2026-05-01' });
     await hr.changeStatus(e.id, 'terminated', 'AWOL');
     await expect(hr.changeStatus(e.id, 'deployed', 'oops')).rejects.toThrow(/transition/i);
+  });
+
+  it('allows deployed → hired (return to neutral employed state)', async () => {
+    const e = await hr.createEmployee({ employeeCode: 'CG-1', firstName: 'A', lastName: 'B', basicSalary: 18000, hiredOn: '2026-05-01' });
+    await hr.changeStatus(e.id, 'deployed', 'assigned to SM Megamall');
+    const back = await hr.changeStatus(e.id, 'hired', 'pulled off all detachments');
+    expect(back.status).toBe('hired');
+  });
+
+  it('allows on_leave → hired (back from leave)', async () => {
+    const e = await hr.createEmployee({ employeeCode: 'CG-1', firstName: 'A', lastName: 'B', basicSalary: 18000, hiredOn: '2026-05-01' });
+    await hr.changeStatus(e.id, 'on_leave', 'maternity leave');
+    const back = await hr.changeStatus(e.id, 'hired', 'returned from leave');
+    expect(back.status).toBe('hired');
   });
 });
 
@@ -333,5 +349,81 @@ describe('hr.updateEmployee event emission', () => {
 
     expect(received).toHaveLength(1);
     expect(received[0]).toMatchObject({ id: e.id });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Slice 2 — undo termination (5-minute window)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('hr.undoTermination', () => {
+  beforeEach(async () => {
+    await cleanupEmployees();
+  });
+  afterAll(async () => { await closeDb(); });
+
+  it('allows terminated → hired when within 5 minutes', async () => {
+    const e = await hr.createEmployee({
+      employeeCode: 'CG-UT-001', firstName: 'A', lastName: 'B',
+      basicSalary: 18000, hiredOn: '2026-05-01',
+    });
+    await hr.changeStatus(e.id, 'terminated', 'AWOL');
+    const undone = await hr.undoTermination(e.id, 'mistaken termination');
+    expect(undone.status).toBe('hired');
+    expect(undone.terminatedOn).toBeNull();
+  });
+
+  it('rejects when employee was never terminated', async () => {
+    const e = await hr.createEmployee({
+      employeeCode: 'CG-UT-002', firstName: 'A', lastName: 'B',
+      basicSalary: 18000, hiredOn: '2026-05-01',
+    });
+    await expect(hr.undoTermination(e.id, 'oops')).rejects.toThrow(/isn't terminated/);
+  });
+
+  it('rejects when outside the 5-minute window', async () => {
+    const e = await hr.createEmployee({
+      employeeCode: 'CG-UT-003', firstName: 'A', lastName: 'B',
+      basicSalary: 18000, hiredOn: '2026-05-01',
+    });
+    await hr.changeStatus(e.id, 'terminated', 'AWOL');
+    // audit_log is append-only at the DB level (a trigger blocks UPDATE), so
+    // we can't backdate the termination row directly. Stub `Date.now()` to
+    // simulate the clock advancing past the 5-minute window. (Full
+    // `vi.useFakeTimers()` interferes with postgres-driver internals, so we
+    // only patch `Date.now`.)
+    const realNow = Date.now;
+    const spy = vi.spyOn(Date, 'now').mockReturnValue(realNow() + 6 * 60 * 1000);
+    try {
+      await expect(hr.undoTermination(e.id, 'too late')).rejects.toThrow(/5-minute undo window has passed/);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('rejects when employee not found', async () => {
+    await expect(
+      hr.undoTermination('00000000-0000-0000-0000-000000000000', 'ghost'),
+    ).rejects.toThrow(/not found/);
+  });
+
+  it('audits the undo with from/to and reason', async () => {
+    const e = await hr.createEmployee({
+      employeeCode: 'CG-UT-004', firstName: 'A', lastName: 'B',
+      basicSalary: 18000, hiredOn: '2026-05-01',
+    });
+    await hr.changeStatus(e.id, 'terminated', 'AWOL');
+    await hr.undoTermination(e.id, 'fat-fingered the button');
+
+    const rows = await getDb()
+      .select()
+      .from(auditLog)
+      .where(sql`target_kind = 'hr_employee' AND target_id = ${e.id} AND action = 'hr.employee.status_changed' AND payload->>'to' = 'hired'`);
+    expect(rows.length).toBeGreaterThanOrEqual(1);
+    const last = rows[rows.length - 1]!;
+    const payload = last.payload as { from: string; to: string; reason: string; undo?: boolean };
+    expect(payload.from).toBe('terminated');
+    expect(payload.to).toBe('hired');
+    expect(payload.reason).toMatch(/fat-fingered/);
+    expect(payload.undo).toBe(true);
   });
 });

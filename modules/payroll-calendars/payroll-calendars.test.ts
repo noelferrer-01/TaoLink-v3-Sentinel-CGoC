@@ -96,6 +96,47 @@ describe('payroll-calendars: resolveForPeriod', () => {
   });
 });
 
+describe('payroll-calendars: list', () => {
+  beforeEach(async () => {
+    await getDb().delete(payrollCalendarsTable);
+    await getDb().delete(clientsTable);
+  });
+
+  it('returns empty array when no calendars exist', async () => {
+    const all = await calendars.list();
+    expect(all).toEqual([]);
+  });
+
+  it('returns calendars ordered by name then createdAt', async () => {
+    // Insert in scrambled order; ensure list() returns sorted by name asc.
+    await calendars.create({
+      clientId: null, name: 'Zulu', frequency: 'SEMI_MONTHLY',
+      dtrCutoffDaysAfterPeriodEnd: 2, paydayDaysAfterPeriodEnd: 5,
+    });
+    await calendars.create({
+      clientId: null, name: 'Alpha', frequency: 'SEMI_MONTHLY',
+      dtrCutoffDaysAfterPeriodEnd: 2, paydayDaysAfterPeriodEnd: 5,
+    });
+    // Same-name pair to exercise the createdAt tiebreaker
+    const middleFirst = await calendars.create({
+      clientId: null, name: 'Mike', frequency: 'SEMI_MONTHLY',
+      dtrCutoffDaysAfterPeriodEnd: 2, paydayDaysAfterPeriodEnd: 5,
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    const middleSecond = await calendars.create({
+      clientId: null, name: 'Mike', frequency: 'SEMI_MONTHLY',
+      dtrCutoffDaysAfterPeriodEnd: 2, paydayDaysAfterPeriodEnd: 5,
+    });
+
+    const all = await calendars.list();
+    expect(all.map((c) => c.name)).toEqual(['Alpha', 'Mike', 'Mike', 'Zulu']);
+    // Within duplicate-name pair, earlier createdAt wins (asc).
+    const mikes = all.filter((c) => c.name === 'Mike');
+    expect(mikes[0]!.id).toBe(middleFirst.id);
+    expect(mikes[1]!.id).toBe(middleSecond.id);
+  });
+});
+
 describe('payroll-calendars: update', () => {
   beforeEach(async () => {
     await getDb().delete(payrollCalendarsTable);

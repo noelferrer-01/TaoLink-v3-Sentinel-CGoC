@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { sql } from 'drizzle-orm';
 import { closeDb, getDb } from '@/core/db';
 import { clients as clientsTable, detachments as detachmentsTable } from './schema';
+import { auditLog } from '@/modules/audit/schema';
 import { assignments as assignmentsTable } from '@/modules/assignments/schema';
 import { employees as employeesTable } from '@/modules/hr/schema';
 import { payrollCalendars as payrollCalendarsTable } from '@/modules/payroll-calendars/schema';
@@ -292,5 +294,76 @@ describe('clients module', () => {
     // Round-trip: fetch fresh from DB
     const fetched = await clients.getClient(c.id);
     expect(fetched!.defaultPayrollCalendarId).toBe(cal.id);
+  });
+
+  // ─── Slice 2: deleteClient (5-minute window) ──────────────────────────────
+
+  it('deleteClient: deletes a client created less than 5 minutes ago (no detachments)', async () => {
+    const c = await clients.createClient({ name: 'Quick Mistake Corp' });
+    await clients.deleteClient(c.id);
+    const fetched = await clients.getClient(c.id);
+    expect(fetched).toBeNull();
+  });
+
+  it('deleteClient: deletes a client with empty detachments (cascade within window)', async () => {
+    const c = await clients.createClient({ name: 'With Empty Posts Corp' });
+    const d1 = await clients.createDetachment({ clientId: c.id, name: 'Post 1' });
+    const d2 = await clients.createDetachment({ clientId: c.id, name: 'Post 2' });
+    await clients.deleteClient(c.id);
+    expect(await clients.getClient(c.id)).toBeNull();
+    expect(await clients.getDetachment(d1.id)).toBeNull();
+    expect(await clients.getDetachment(d2.id)).toBeNull();
+  });
+
+  it('deleteClient: rejects when createdAt is older than 5 minutes', async () => {
+    const c = await clients.createClient({ name: 'Too Old Corp' });
+    // Backdate so the 5-minute window has elapsed
+    await getDb().execute(sql`
+      UPDATE clients SET created_at = NOW() - INTERVAL '6 minutes' WHERE id = ${c.id}
+    `);
+    await expect(clients.deleteClient(c.id)).rejects.toThrow(/5-minute delete window has passed/);
+    // Client still exists
+    expect(await clients.getClient(c.id)).not.toBeNull();
+  });
+
+  it('deleteClient: rejects when client not found', async () => {
+    await expect(
+      clients.deleteClient('00000000-0000-0000-0000-000000000000'),
+    ).rejects.toThrow(/not found/);
+  });
+
+  it('deleteClient: rejects when a detachment has any assignment (transaction safety)', async () => {
+    const c = await clients.createClient({ name: 'Has Assignment Corp' });
+    const d = await clients.createDetachment({ clientId: c.id, name: 'Live Post' });
+    const e = await hr.createEmployee({
+      employeeCode: 'CG-DC-001', firstName: 'Live', lastName: 'Guard',
+      basicSalary: 15000, hiredOn: '2025-01-01',
+    });
+    await assignments.assign({ employeeId: e.id, detachmentId: d.id, startDate: '2025-01-01' });
+
+    await expect(clients.deleteClient(c.id)).rejects.toThrow(/already has employees assigned/);
+
+    // Transaction safety: both client and detachment still exist
+    expect(await clients.getClient(c.id)).not.toBeNull();
+    expect(await clients.getDetachment(d.id)).not.toBeNull();
+  });
+
+  it("deleteClient: writes a `clients.client.deleted` audit row", async () => {
+    const c = await clients.createClient({ name: 'Audit Me Corp' });
+    const d = await clients.createDetachment({ clientId: c.id, name: 'Aux Post' });
+    await clients.deleteClient(c.id);
+
+    const rows = await getDb()
+      .select()
+      .from(auditLog)
+      .where(sql`action = 'clients.client.deleted' AND target_id = ${c.id}`);
+    expect(rows.length).toBe(1);
+    const payload = rows[0]!.payload as {
+      before: { name: string; id: string };
+      deletedDetachmentIds: string[];
+    };
+    expect(payload.before.name).toBe('Audit Me Corp');
+    expect(payload.before.id).toBe(c.id);
+    expect(payload.deletedDetachmentIds).toContain(d.id);
   });
 });
