@@ -103,7 +103,13 @@ const csvRowSchema = z.object({
   ),
   pay_frequency: z.enum(['MONTHLY', 'SEMI_MONTHLY']).default('SEMI_MONTHLY'),
   hired_on:      z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'hired_on must be YYYY-MM-DD'),
+  sss_number:        z.string().optional(),
+  philhealth_number: z.string().optional(),
+  pagibig_number:    z.string().optional(),
+  tin_number:        z.string().optional(),
 });
+
+const blankToNull = (v: string | undefined): string | null => (v && v.trim() !== '' ? v.trim() : null);
 
 export type BulkImportResult = {
   imported: number;
@@ -151,6 +157,10 @@ export async function bulkImportEmployees(
       basicSalary: String(parseFloat(r.basic_salary)),
       payFrequency: r.pay_frequency,
       hiredOn: r.hired_on,
+      sssNumber: blankToNull(r.sss_number),
+      philhealthNumber: blankToNull(r.philhealth_number),
+      pagibigNumber: blankToNull(r.pagibig_number),
+      tinNumber: blankToNull(r.tin_number),
     });
   });
 

@@ -21,6 +21,12 @@ export const employees = pgTable('hr_employees', {
   status: employeeStatus('status').notNull().default('hired'),
   hiredOn: date('hired_on').notNull(),
   terminatedOn: date('terminated_on'),
+  // Statutory IDs — nullable; populated when on file. Compliance exports treat
+  // a missing value as a per-employee warning, not an export-blocking error.
+  sssNumber: text('sss_number'),
+  philhealthNumber: text('philhealth_number'),
+  pagibigNumber: text('pagibig_number'),
+  tinNumber: text('tin_number'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
