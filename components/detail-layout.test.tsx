@@ -54,10 +54,16 @@ describe('DetailLayout', () => {
   });
 
   describe('dirty-state guard', () => {
-    let confirmSpy: ReturnType<typeof vi.spyOn>;
+    // vi.spyOn's return type is awkward to name precisely for built-in DOM
+    // methods like window.confirm. Capture it at first assignment instead.
+    let confirmSpy: ReturnType<typeof setupConfirmSpy>;
+
+    function setupConfirmSpy() {
+      return vi.spyOn(window, 'confirm').mockReturnValue(false);
+    }
 
     beforeEach(() => {
-      confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+      confirmSpy = setupConfirmSpy();
     });
 
     afterEach(() => {

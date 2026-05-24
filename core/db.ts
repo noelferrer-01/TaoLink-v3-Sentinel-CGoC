@@ -1,6 +1,6 @@
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
-import { getEnv } from './env';
+import { getActiveDatabaseUrl } from './env';
 
 import * as authSchema from '@/modules/auth/schema';
 import * as auditSchema from '@/modules/audit/schema';
@@ -31,8 +31,7 @@ let dbClient: ReturnType<typeof drizzle<typeof schema>> | null = null;
 
 export function getSql() {
   if (sqlClient) return sqlClient;
-  const { DATABASE_URL } = getEnv();
-  sqlClient = postgres(DATABASE_URL, {
+  sqlClient = postgres(getActiveDatabaseUrl(), {
     max: 10,
     idle_timeout: 30,
     prepare: false,
