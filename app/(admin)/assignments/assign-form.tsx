@@ -1,11 +1,19 @@
 'use client';
 
-import { useActionState, useState } from 'react';
+import { useActionState, useEffect, useMemo, useState } from 'react';
+import { Typeahead } from '@/components/typeahead';
 import { assignAction, type FormState } from './actions';
 import type { AssignableEmployee } from '@/modules/assignments';
 import type { ClientWithDetachments } from '@/modules/clients';
 
 const initialState: FormState = { kind: 'idle' };
+const STICKY_DETACHMENT_KEY = 'sentinel.assign-form.lastDetachmentId';
+
+type DetachmentOption = {
+  id: string;
+  name: string;
+  clientName: string;
+};
 
 export function AssignForm({
   assignableEmployees,
@@ -20,7 +28,67 @@ export function AssignForm({
   const [state, formAction, pending] = useActionState(assignAction, initialState);
 
   const hasGuards = assignableEmployees.length > 0;
-  const hasDetachments = clientsWithDetachments.some((c) => c.detachments.length > 0);
+  const detachmentOptions: DetachmentOption[] = useMemo(
+    () =>
+      clientsWithDetachments.flatMap((c) =>
+        c.detachments.map((d) => ({ id: d.id, name: d.name, clientName: c.name })),
+      ),
+    [clientsWithDetachments],
+  );
+  const hasDetachments = detachmentOptions.length > 0;
+
+  const [employee, setEmployee] = useState<AssignableEmployee | null>(null);
+  const [detachment, setDetachment] = useState<DetachmentOption | null>(null);
+
+  // Sticky default detachment: pre-fill from the last successful assignment in
+  // this tab's session. Avoids clerks re-picking the same detachment row after
+  // row when filling many guards into one post.
+  useEffect(() => {
+    if (!open || detachment) return;
+    try {
+      const id = sessionStorage.getItem(STICKY_DETACHMENT_KEY);
+      if (!id) return;
+      const match = detachmentOptions.find((d) => d.id === id);
+      if (match) setDetachment(match);
+    } catch {
+      // sessionStorage may be unavailable; ignore.
+    }
+  }, [open, detachment, detachmentOptions]);
+
+  // Persist + reset after success so the next "Assign an employee" click
+  // starts clean on the employee picker but keeps the same detachment ready.
+  useEffect(() => {
+    if (state.kind !== 'success') return;
+    if (detachment) {
+      try {
+        sessionStorage.setItem(STICKY_DETACHMENT_KEY, detachment.id);
+      } catch {
+        // ignore
+      }
+    }
+    setEmployee(null);
+  }, [state, detachment]);
+
+  async function searchEmployees(query: string): Promise<AssignableEmployee[]> {
+    const q = query.trim().toLowerCase();
+    if (q.length === 0) return assignableEmployees;
+    return assignableEmployees.filter(
+      (e) =>
+        e.firstName.toLowerCase().includes(q) ||
+        e.lastName.toLowerCase().includes(q) ||
+        e.employeeCode.toLowerCase().includes(q),
+    );
+  }
+
+  async function searchDetachments(query: string): Promise<DetachmentOption[]> {
+    const q = query.trim().toLowerCase();
+    if (q.length === 0) return detachmentOptions;
+    return detachmentOptions.filter(
+      (d) =>
+        d.name.toLowerCase().includes(q) ||
+        d.clientName.toLowerCase().includes(q),
+    );
+  }
 
   if (!open) {
     return (
@@ -67,39 +135,62 @@ export function AssignForm({
       </div>
 
       <form action={formAction} className="form-stack">
-        <label className="field">
-          <span className="field-label">Employee</span>
-          <select className="input" name="employeeId" required defaultValue="">
-            <option value="" disabled>
-              Pick an employee…
-            </option>
-            {assignableEmployees.map((e) => (
-              <option key={e.id} value={e.id}>
-                {e.lastName}, {e.firstName} ({e.employeeCode})
-              </option>
-            ))}
-          </select>
-        </label>
+        {/* Hidden inputs mirror the Typeahead state into the form payload. */}
+        <input type="hidden" name="employeeId" value={employee?.id ?? ''} />
+        <input type="hidden" name="detachmentId" value={detachment?.id ?? ''} />
 
-        <label className="field">
-          <span className="field-label">Detachment</span>
-          <select className="input" name="detachmentId" required defaultValue="">
-            <option value="" disabled>
-              Pick a detachment…
-            </option>
-            {clientsWithDetachments.map((c) =>
-              c.detachments.length > 0 ? (
-                <optgroup key={c.id} label={c.name}>
-                  {c.detachments.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.name}
-                    </option>
-                  ))}
-                </optgroup>
-              ) : null,
+        <div className="field">
+          <label className="field-label">Employee</label>
+          <Typeahead<AssignableEmployee>
+            fetchOptions={searchEmployees}
+            itemToString={(e) =>
+              e ? `${e.lastName}, ${e.firstName} (${e.employeeCode})` : ''
+            }
+            selectedItem={employee}
+            minChars={0}
+            placeholder="Search by name or employee code…"
+            aria-label="Employee"
+            disabled={pending}
+            onSelect={(e) => setEmployee(e ?? null)}
+            renderItem={(e, highlighted) => (
+              <div>
+                <div style={{ fontWeight: highlighted ? 500 : 400 }}>
+                  {e.lastName}, {e.firstName}
+                </div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--muted)', fontFamily: 'var(--ff-mono)' }}>
+                  {e.employeeCode}
+                </div>
+              </div>
             )}
-          </select>
-        </label>
+          />
+        </div>
+
+        <div className="field">
+          <label className="field-label">Detachment</label>
+          <Typeahead<DetachmentOption>
+            fetchOptions={searchDetachments}
+            itemToString={(d) => (d ? `${d.clientName} · ${d.name}` : '')}
+            selectedItem={detachment}
+            minChars={0}
+            placeholder="Search detachments by name or client…"
+            aria-label="Detachment"
+            disabled={pending}
+            onSelect={(d) => setDetachment(d ?? null)}
+            renderItem={(d, highlighted) => (
+              <div>
+                <div style={{ fontWeight: highlighted ? 500 : 400 }}>{d.name}</div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>
+                  {d.clientName}
+                </div>
+              </div>
+            )}
+          />
+          {detachment && (
+            <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>
+              Sticks for the next assignment in this session — change it any time.
+            </span>
+          )}
+        </div>
 
         <label className="field">
           <span className="field-label">Start date</span>
