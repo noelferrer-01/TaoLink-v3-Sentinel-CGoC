@@ -103,7 +103,7 @@ export function ChangeStatusModal({ employeeId, currentStatus, open, onClose }: 
 
         {isTerminal ? (
           <p style={{ color: 'var(--ink-soft)', margin: '0 0 1rem' }}>
-            This employee is terminated — the status is final and can't be
+            This employee is terminated — the status is final and can&rsquo;t be
             changed.
           </p>
         ) : (

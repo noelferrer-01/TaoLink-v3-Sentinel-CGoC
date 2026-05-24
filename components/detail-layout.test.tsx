@@ -54,8 +54,7 @@ describe('DetailLayout', () => {
   });
 
   describe('dirty-state guard', () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let confirmSpy: any;
+    let confirmSpy: ReturnType<typeof vi.spyOn>;
 
     beforeEach(() => {
       confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
