@@ -1,0 +1,467 @@
+/* Sentinel — Operations broadsheet design system
+ * Fonts come from next/font (loaded in app/layout.tsx) as CSS variables. */
+
+:root {
+  --ink: #1A1410;
+  --ink-soft: #2E2620;
+  --paper: #F6F1E7;
+  --paper-2: #EFE7D7;
+  --paper-3: #E6DCC6;
+  --paper-card: #FBF7EE;
+  --rule: #D6CCB5;
+  --rule-strong: #9C9079;
+  --navy: #142436;
+  --navy-soft: #243A55;
+  --ochre: #B8862F;
+  --ochre-soft: #D9A94D;
+  --muted: #6B6253;
+  --danger: #8B2E1F;
+  --success: #2E5D3B;
+
+  --shadow-soft: 0 1px 0 rgba(20, 16, 10, 0.04);
+  --radius: 2px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--ff-body), system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--ink);
+  background: var(--paper);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+a {
+  color: inherit;
+}
+
+h1, h2, h3, h4, h5 {
+  font-family: var(--ff-display), Georgia, "Iowan Old Style", serif;
+  font-weight: 500;
+  letter-spacing: -0.012em;
+  margin: 0;
+}
+
+.numeric,
+.tabular {
+  font-family: var(--ff-mono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* ───── Admin shell ───── */
+
+.admin-shell {
+  display: grid;
+  grid-template-columns: 252px 1fr;
+  min-height: 100vh;
+}
+
+.admin-sidebar {
+  background: var(--paper-2);
+  border-right: 1px solid var(--rule);
+  padding: 1.75rem 1.25rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+
+.masthead {
+  border-bottom: 1px solid var(--rule);
+  padding: 0 0.25rem 1.25rem;
+  margin-bottom: 1.25rem;
+  text-decoration: none;
+  color: inherit;
+  display: block;
+}
+
+.masthead-title {
+  font-family: var(--ff-display), serif;
+  font-size: 1.875rem;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: -0.022em;
+  color: var(--navy);
+}
+
+.masthead-rule {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.625rem;
+}
+
+.masthead-rule::before,
+.masthead-rule::after {
+  content: "";
+  flex: 0 0 12px;
+  height: 1px;
+  background: var(--rule-strong);
+}
+
+.masthead-rule::after { flex: 1 1 auto; }
+
+.masthead-tag {
+  font-family: var(--ff-mono), monospace;
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--muted);
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.sidebar-section {
+  font-family: var(--ff-mono), monospace;
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--muted);
+  padding: 0.75rem 0.75rem 0.375rem;
+  margin-top: 0.5rem;
+}
+
+.sidebar-section:first-child { margin-top: 0; }
+
+.sidebar-link {
+  display: block;
+  padding: 0.5rem 0.75rem;
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 0.9375rem;
+  border-left: 2px solid transparent;
+  margin-left: -2px;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.sidebar-link:hover {
+  background: rgba(20, 16, 10, 0.045);
+}
+
+.sidebar-link.is-active {
+  border-left-color: var(--ochre);
+  background: rgba(184, 134, 47, 0.10);
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.sidebar-foot {
+  margin-top: auto;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--rule);
+}
+
+.sidebar-foot-user {
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.sidebar-foot-user strong {
+  color: var(--ink);
+  font-weight: 500;
+  display: block;
+  font-size: 0.875rem;
+  word-break: break-all;
+}
+
+.sidebar-foot-form {
+  margin-top: 0.75rem;
+}
+
+.sidebar-foot-form button {
+  font-family: var(--ff-mono), monospace;
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.sidebar-foot-form button:hover { color: var(--ink); }
+
+/* ───── Main content ───── */
+
+.admin-main {
+  padding: 2.75rem 3.25rem 4rem;
+  max-width: 1080px;
+  width: 100%;
+}
+
+.page-header {
+  margin-bottom: 2.5rem;
+}
+
+.breadcrumb {
+  font-family: var(--ff-mono), monospace;
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--muted);
+  margin-bottom: 0.75rem;
+}
+
+.page-title {
+  font-size: 2.625rem;
+  font-weight: 500;
+  line-height: 1.02;
+  letter-spacing: -0.024em;
+  color: var(--navy);
+}
+
+.page-sub {
+  margin: 0.875rem 0 0;
+  color: var(--ink-soft);
+  max-width: 62ch;
+  font-size: 1.0625rem;
+  line-height: 1.55;
+}
+
+/* ───── Cards & lists ───── */
+
+.card {
+  background: var(--paper-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 1.5rem 1.625rem;
+}
+
+.section-rule {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  margin: 2.5rem 0 1.25rem;
+}
+
+.section-rule h2 {
+  font-size: 1.25rem;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+}
+
+.section-rule::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--rule);
+  margin-bottom: 0.25rem;
+}
+
+.steps {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 1rem;
+}
+
+.step {
+  background: var(--paper-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 1.5rem 1.75rem;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 1.5rem;
+  align-items: center;
+}
+
+.step-number {
+  font-family: var(--ff-mono), monospace;
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  color: var(--ochre);
+  padding-top: 0.125rem;
+  align-self: start;
+}
+
+.step-body h3 {
+  font-size: 1.25rem;
+  font-weight: 500;
+  letter-spacing: -0.008em;
+  color: var(--navy);
+  margin-bottom: 0.375rem;
+}
+
+.step-body p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.9375rem;
+  max-width: 52ch;
+}
+
+.step-cta {
+  align-self: center;
+  justify-self: end;
+}
+
+/* ───── Buttons ───── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--ff-body), sans-serif;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  padding: 0.625rem 1.125rem;
+  background: var(--navy);
+  color: var(--paper);
+  border: 1px solid var(--navy);
+  border-radius: var(--radius);
+  cursor: pointer;
+  text-decoration: none;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+  white-space: nowrap;
+}
+
+.btn:hover { background: var(--navy-soft); border-color: var(--navy-soft); }
+
+.btn--ghost {
+  background: transparent;
+  color: var(--ink);
+  border-color: var(--rule-strong);
+}
+
+.btn--ghost:hover {
+  background: rgba(20, 16, 10, 0.045);
+  color: var(--ink);
+  border-color: var(--ink);
+}
+
+.btn--ochre {
+  background: var(--ochre);
+  border-color: var(--ochre);
+  color: var(--paper);
+}
+
+.btn--ochre:hover {
+  background: var(--ochre-soft);
+  border-color: var(--ochre-soft);
+}
+
+/* ───── Forms (used by /login and later forms) ───── */
+
+.form-stack {
+  display: grid;
+  gap: 1rem;
+}
+
+.field {
+  display: grid;
+  gap: 0.375rem;
+}
+
+.field-label {
+  font-family: var(--ff-mono), monospace;
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+}
+
+.input {
+  font-family: var(--ff-body), sans-serif;
+  font-size: 0.9375rem;
+  padding: 0.625rem 0.75rem;
+  background: var(--paper-card);
+  color: var(--ink);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--ochre);
+  box-shadow: 0 0 0 3px rgba(184, 134, 47, 0.18);
+}
+
+.form-error {
+  font-size: 0.875rem;
+  color: var(--danger);
+  margin: 0;
+}
+
+/* ───── Auth/login standalone shell ───── */
+
+.auth-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 2rem;
+  background:
+    radial-gradient(circle at 20% 0%, rgba(184, 134, 47, 0.10), transparent 50%),
+    radial-gradient(circle at 100% 100%, rgba(20, 36, 54, 0.06), transparent 50%),
+    var(--paper);
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--paper-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 2.25rem 2rem 2rem;
+}
+
+.auth-wordmark {
+  font-family: var(--ff-display), serif;
+  font-size: 1.875rem;
+  font-weight: 500;
+  letter-spacing: -0.022em;
+  color: var(--navy);
+  line-height: 1;
+}
+
+.auth-tag {
+  font-family: var(--ff-mono), monospace;
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--muted);
+  margin-top: 0.5rem;
+}
+
+.auth-divider {
+  height: 1px;
+  background: var(--rule);
+  margin: 1.5rem 0 1.25rem;
+}
+
+/* ───── Empty footer note ───── */
+
+.footnote {
+  margin-top: 3rem;
+  font-family: var(--ff-mono), monospace;
+  font-size: 0.6875rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-top: 1px solid var(--rule);
+  padding-top: 1rem;
+}

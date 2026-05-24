@@ -1,5 +1,28 @@
 import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
+import { Fraunces, Hanken_Grotesk, IBM_Plex_Mono } from 'next/font/google';
+import './globals.css';
+
+const fraunces = Fraunces({
+  subsets: ['latin'],
+  weight: ['400', '500', '600'],
+  variable: '--ff-display',
+  display: 'swap',
+});
+
+const hanken = Hanken_Grotesk({
+  subsets: ['latin'],
+  weight: ['400', '500', '600', '700'],
+  variable: '--ff-body',
+  display: 'swap',
+});
+
+const plexMono = IBM_Plex_Mono({
+  subsets: ['latin'],
+  weight: ['400', '500'],
+  variable: '--ff-mono',
+  display: 'swap',
+});
 
 export const metadata: Metadata = {
   title: 'Sentinel',
@@ -13,19 +36,11 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
-      <body
-        style={{
-          margin: 0,
-          fontFamily:
-            'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
-          background: '#0b0d10',
-          color: '#e6e6e6',
-          minHeight: '100vh',
-        }}
-      >
-        {children}
-      </body>
+    <html
+      lang="en"
+      className={`${fraunces.variable} ${hanken.variable} ${plexMono.variable}`}
+    >
+      <body>{children}</body>
     </html>
   );
 }

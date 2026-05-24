@@ -4,70 +4,48 @@ export default function LoginPage({
   searchParams: { error?: string };
 }) {
   return (
-    <main
-      style={{
-        maxWidth: 420,
-        margin: '0 auto',
-        padding: '4rem 1.5rem',
-      }}
-    >
-      <h1 style={{ fontSize: '1.5rem', marginBottom: '1.5rem' }}>Sign in</h1>
+    <main className="auth-shell">
+      <div className="auth-card">
+        <div className="auth-wordmark">Sentinel</div>
+        <div className="auth-tag">Commander Group · HRIS &amp; Payroll</div>
+        <div className="auth-divider" />
 
-      <form method="post" action="/api/auth/login" style={{ display: 'grid', gap: '0.75rem' }}>
-        <label style={{ display: 'grid', gap: '0.25rem' }}>
-          <span style={{ fontSize: '0.875rem', opacity: 0.8 }}>Email</span>
-          <input
-            type="email"
-            name="email"
-            required
-            autoComplete="email"
-            style={inputStyle}
-          />
-        </label>
+        <form method="post" action="/api/auth/login" className="form-stack">
+          <label className="field">
+            <span className="field-label">Email</span>
+            <input
+              type="email"
+              name="email"
+              required
+              autoComplete="email"
+              className="input"
+            />
+          </label>
 
-        <label style={{ display: 'grid', gap: '0.25rem' }}>
-          <span style={{ fontSize: '0.875rem', opacity: 0.8 }}>Password</span>
-          <input
-            type="password"
-            name="password"
-            required
-            autoComplete="current-password"
-            style={inputStyle}
-          />
-        </label>
+          <label className="field">
+            <span className="field-label">Password</span>
+            <input
+              type="password"
+              name="password"
+              required
+              autoComplete="current-password"
+              className="input"
+            />
+          </label>
 
-        <button type="submit" style={buttonStyle}>
-          Sign in
-        </button>
+          <button type="submit" className="btn" style={{ marginTop: '0.5rem' }}>
+            Sign in
+          </button>
 
-        {searchParams.error ? (
-          <p style={{ color: '#f87171', marginTop: '0.5rem' }} role="alert">
-            {searchParams.error === 'invalid'
-              ? 'Invalid email or password.'
-              : 'Sign-in failed. Try again.'}
-          </p>
-        ) : null}
-      </form>
+          {searchParams.error ? (
+            <p className="form-error" role="alert">
+              {searchParams.error === 'invalid'
+                ? "That email and password don't match. Try again."
+                : "We couldn't sign you in. Try again."}
+            </p>
+          ) : null}
+        </form>
+      </div>
     </main>
   );
 }
-
-const inputStyle = {
-  padding: '0.6rem 0.75rem',
-  borderRadius: 6,
-  border: '1px solid #2a2f36',
-  background: '#11151a',
-  color: '#e6e6e6',
-  fontSize: '1rem',
-} as const;
-
-const buttonStyle = {
-  background: '#2563eb',
-  color: 'white',
-  border: 'none',
-  padding: '0.6rem 1.2rem',
-  borderRadius: 6,
-  fontSize: '1rem',
-  cursor: 'pointer',
-  marginTop: '0.5rem',
-} as const;

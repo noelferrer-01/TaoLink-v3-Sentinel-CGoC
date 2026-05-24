@@ -62,3 +62,6 @@ docker-compose.override.yml
 # Local Claude Code settings (project settings.json stays committed; .local does not)
 .claude/settings.local.json
 .firecrawl/
+
+# Playwright MCP scratch (snapshots, screenshots, console logs from dev verification)
+.playwright-mcp/
