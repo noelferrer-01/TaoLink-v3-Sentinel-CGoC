@@ -51,15 +51,15 @@ export function BirPicker({
       <a
         className="btn"
         href={`/api/exports/bir-2316/${employeeId}/${year}`}
-        download
+        download={`2316-${year}.pdf`}
         style={{ justifySelf: 'start' }}
       >
-        Download BIR 2316 (JSON) →
+        Download BIR 2316 (PDF) →
       </a>
       <p className="field-hint" style={{ marginTop: '0.25rem' }}>
-        Slice-1 returns the 2316 as structured JSON for review. PDF
-        rendering is coming in Slice-2 once the IVB line-item fields are
-        defined.
+        Downloads the BIR Form 2316 as a filled PDF. If the employee is
+        missing RDO code, date of birth, or address, those fields will be
+        blank — edit the employee record to complete them before filing.
       </p>
     </div>
   );
