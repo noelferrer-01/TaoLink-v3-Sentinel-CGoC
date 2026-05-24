@@ -210,4 +210,56 @@ describe('assignments module', () => {
     const rows = await assignments.listAssignableEmployees('2026-05-15');
     expect(rows.map((r) => r.id)).toEqual([free.id]);
   });
+
+  // ─── listAssignmentsOverlappingPeriod ──────────────────────────────────────
+  // Regression for the Phase-9 UX-walk bug where the DTR page asked
+  // listActiveAssignments(periodStart), excluding assignments that started
+  // inside the period. DTR needs *any temporal overlap*, not "active at day 1".
+  describe('listAssignmentsOverlappingPeriod', () => {
+    const PERIOD_START = '2026-05-16';
+    const PERIOD_END = '2026-05-31';
+
+    async function assignOn(startDate: string, endDate?: string) {
+      const { employee, detachment } = await makeFixtures();
+      const a = await assignments.assign({
+        employeeId: employee.id,
+        detachmentId: detachment.id,
+        startDate,
+      });
+      if (endDate) {
+        await assignments.endAssignment(a.id, endDate, 'test');
+      }
+      return { a, employee };
+    }
+
+    it('includes assignment starting INSIDE the period (the original bug)', async () => {
+      const { employee } = await assignOn('2026-05-24'); // started mid-period
+      const rows = await assignments.listAssignmentsOverlappingPeriod(PERIOD_START, PERIOD_END);
+      expect(rows.map((r) => r.employee.id)).toEqual([employee.id]);
+    });
+
+    it('includes assignment that fully spans the period', async () => {
+      const { employee } = await assignOn('2026-04-01'); // started before, no end
+      const rows = await assignments.listAssignmentsOverlappingPeriod(PERIOD_START, PERIOD_END);
+      expect(rows.map((r) => r.employee.id)).toEqual([employee.id]);
+    });
+
+    it('includes assignment that ended INSIDE the period', async () => {
+      const { employee } = await assignOn('2026-04-01', '2026-05-20'); // ended mid-period
+      const rows = await assignments.listAssignmentsOverlappingPeriod(PERIOD_START, PERIOD_END);
+      expect(rows.map((r) => r.employee.id)).toEqual([employee.id]);
+    });
+
+    it('EXCLUDES assignment that ended before the period', async () => {
+      await assignOn('2026-04-01', '2026-05-10'); // fully before
+      const rows = await assignments.listAssignmentsOverlappingPeriod(PERIOD_START, PERIOD_END);
+      expect(rows).toEqual([]);
+    });
+
+    it('EXCLUDES assignment that starts after the period', async () => {
+      await assignOn('2026-06-01'); // starts after period end
+      const rows = await assignments.listAssignmentsOverlappingPeriod(PERIOD_START, PERIOD_END);
+      expect(rows).toEqual([]);
+    });
+  });
 });
