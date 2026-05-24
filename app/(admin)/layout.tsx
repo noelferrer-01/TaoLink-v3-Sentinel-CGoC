@@ -3,14 +3,15 @@ import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { getSessionFromCookie } from '@/modules/auth';
 import { SidebarNav } from './_nav';
+import { AdminShellWrapper } from './_admin-shell';
 
 export default async function AdminLayout({ children }: { children: ReactNode }) {
   const session = await getSessionFromCookie();
   if (!session) redirect('/login');
 
   return (
-    <div className="admin-shell">
-      <aside className="admin-sidebar">
+    <AdminShellWrapper>
+      <aside className="admin-sidebar" id="admin-sidebar">
         <Link href="/dashboard" className="masthead">
           <div className="masthead-title">Sentinel</div>
           <div className="masthead-rule">
@@ -35,6 +36,6 @@ export default async function AdminLayout({ children }: { children: ReactNode })
         </div>
       </aside>
       <main className="admin-main">{children}</main>
-    </div>
+    </AdminShellWrapper>
   );
 }

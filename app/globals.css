@@ -69,6 +69,12 @@ h1, h2, h3, h4, h5 {
   display: grid;
   grid-template-columns: 252px 1fr;
   min-height: 100vh;
+  transition: grid-template-columns 200ms ease;
+}
+
+/* Collapsed sidebar — icon-only rail */
+.admin-shell.is-sidebar-collapsed {
+  grid-template-columns: 52px 1fr;
 }
 
 .admin-sidebar {
@@ -80,6 +86,112 @@ h1, h2, h3, h4, h5 {
   position: sticky;
   top: 0;
   height: 100vh;
+  overflow: hidden;
+  transition: padding 200ms ease;
+}
+
+.admin-shell.is-sidebar-collapsed .admin-sidebar {
+  padding: 1.75rem 0.5rem 1.5rem;
+}
+
+/* Hide masthead text in collapsed state */
+.admin-shell.is-sidebar-collapsed .masthead-rule,
+.admin-shell.is-sidebar-collapsed .masthead-tag,
+.admin-shell.is-sidebar-collapsed .sidebar-foot-user {
+  display: none;
+}
+
+.admin-shell.is-sidebar-collapsed .masthead-title {
+  font-size: 1.25rem;
+}
+
+/* Sidebar nav root — wraps collapse button + nav */
+.sidebar-nav-root {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Collapse toggle button */
+.sidebar-collapse-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 1.125rem;
+  padding: 0.375rem 0.5rem;
+  margin-bottom: 0.5rem;
+  border-radius: var(--radius);
+  align-self: flex-start;
+  transition: color 120ms ease, background-color 120ms ease;
+  line-height: 1;
+}
+
+.sidebar-collapse-btn:hover {
+  color: var(--ink);
+  background: rgba(20, 16, 10, 0.05);
+}
+
+/* Sidebar links — flex to align icon + label */
+.sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.5rem 0.75rem;
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 0.9375rem;
+  border-left: 2px solid transparent;
+  margin-left: -2px;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.sidebar-link:hover {
+  background: rgba(20, 16, 10, 0.045);
+}
+
+.sidebar-link.is-active {
+  border-left-color: var(--ochre);
+  background: rgba(184, 134, 47, 0.10);
+  color: var(--ink);
+  font-weight: 500;
+}
+
+/* In collapsed state, center the icon and hide the label */
+.admin-shell.is-sidebar-collapsed .sidebar-link {
+  justify-content: center;
+  padding: 0.5rem;
+  margin-left: 0;
+  border-left: none;
+  border-radius: var(--radius);
+}
+
+.admin-shell.is-sidebar-collapsed .sidebar-link.is-active {
+  background: rgba(184, 134, 47, 0.14);
+  border-left: none;
+}
+
+.sidebar-link-icon {
+  font-size: 1rem;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.sidebar-link-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* In collapsed state, hide section headings completely */
+.admin-shell.is-sidebar-collapsed .sidebar-section {
+  visibility: hidden;
+  height: 0.25rem;
+  padding: 0;
+  margin: 0;
 }
 
 .masthead {
@@ -142,28 +254,6 @@ h1, h2, h3, h4, h5 {
 }
 
 .sidebar-section:first-child { margin-top: 0; }
-
-.sidebar-link {
-  display: block;
-  padding: 0.5rem 0.75rem;
-  color: var(--ink);
-  text-decoration: none;
-  font-size: 0.9375rem;
-  border-left: 2px solid transparent;
-  margin-left: -2px;
-  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
-}
-
-.sidebar-link:hover {
-  background: rgba(20, 16, 10, 0.045);
-}
-
-.sidebar-link.is-active {
-  border-left-color: var(--ochre);
-  background: rgba(184, 134, 47, 0.10);
-  color: var(--ink);
-  font-weight: 500;
-}
 
 .sidebar-foot {
   margin-top: auto;
