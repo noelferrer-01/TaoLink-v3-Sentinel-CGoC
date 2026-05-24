@@ -21,6 +21,13 @@ import {
 } from '@/modules/compliance/service';
 import { audit } from '@/modules/audit';
 import { events } from '@/modules/events';
+import { resolveForPeriod } from '@/modules/payroll-calendars/service';
+
+// Sentinel UUID used when resolving the global-default calendar in a run that
+// has no per-client scope yet. resolveForPeriod → getForClient will find no
+// match for this ID and fall back to the global-default calendar row (or
+// fallback-defaults if none exists).
+const GLOBAL_CALENDAR_SENTINEL = '00000000-0000-0000-0000-000000000000';
 
 // Statuses to EXCLUDE from the payroll run (non-active statuses).
 const EXCLUDED_STATUSES = ['applicant', 'terminated'] as const;
@@ -174,10 +181,27 @@ export async function runPayroll(
     }
   }
 
-  // ── Step 4: Finalize the pay_run ─────────────────────────────────────────
+  // ── Step 4: Resolve calendar dates and finalize the pay_run ─────────────
+  // Calendar resolution uses the global-default calendar (Slice 1 runs are
+  // not scoped to a specific client). Per-client resolution will be added in
+  // a later slice when pay_runs gains a clientId column.
+  const resolved = await resolveForPeriod(
+    GLOBAL_CALENDAR_SENTINEL,
+    new Date(periodStart + 'T00:00:00Z'),
+    new Date(periodEnd + 'T00:00:00Z'),
+  );
+  // Format as YYYY-MM-DD for the date column.
+  const dtrCutoffDateStr = resolved.dtrCutoffDate.toISOString().slice(0, 10);
+  const paydayDateStr = resolved.paydayDate.toISOString().slice(0, 10);
+
   const [updated] = await db
     .update(payRuns)
-    .set({ status: 'calculated', calculatedAt: new Date() })
+    .set({
+      status: 'calculated',
+      calculatedAt: new Date(),
+      dtrCutoffDate: dtrCutoffDateStr,
+      paydayDate: paydayDateStr,
+    })
     .where(eq(payRuns.id, run.id))
     .returning();
 
