@@ -90,4 +90,24 @@ describe('clients module', () => {
     expect(fetched!.id).toBe(c.id);
     expect(fetched!.name).toBe('Get Corp');
   });
+
+  it('listClientsWithDetachments groups detachments under their clients, sorted by name', async () => {
+    const cZ = await clients.createClient({ name: 'Zeta Holdings' });
+    const cA = await clients.createClient({ name: 'Alpha Corp' });
+    await clients.createDetachment({ clientId: cA.id, name: 'Beta Post' });
+    await clients.createDetachment({ clientId: cA.id, name: 'Alpha Post' });
+    await clients.createDetachment({ clientId: cZ.id, name: 'Zulu Post' });
+
+    const grouped = await clients.listClientsWithDetachments();
+    expect(grouped.map((g) => g.name)).toEqual(['Alpha Corp', 'Zeta Holdings']);
+    expect(grouped[0]!.detachments.map((d) => d.name)).toEqual(['Alpha Post', 'Beta Post']);
+    expect(grouped[1]!.detachments.map((d) => d.name)).toEqual(['Zulu Post']);
+  });
+
+  it('listClientsWithDetachments includes clients that have zero detachments', async () => {
+    await clients.createClient({ name: 'Empty Corp' });
+    const grouped = await clients.listClientsWithDetachments();
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0]!.detachments).toEqual([]);
+  });
 });

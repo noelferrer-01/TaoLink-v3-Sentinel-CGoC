@@ -154,4 +154,60 @@ describe('assignments module', () => {
       }),
     ).rejects.toThrow(/already has an active assignment/i);
   });
+
+  // ─── Test 6: listActiveAssignments returns joined rows ────────────────────────
+  it('listActiveAssignments returns rows joined with employee + detachment + client', async () => {
+    const { employee, detachment } = await makeFixtures();
+    await assignments.assign({
+      employeeId: employee.id,
+      detachmentId: detachment.id,
+      startDate: '2026-05-01',
+    });
+
+    const rows = await assignments.listActiveAssignments('2026-05-15');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      startDate: '2026-05-01',
+      employee: { employeeCode: 'CG-A001', firstName: 'Juan', lastName: 'Dela Cruz' },
+      detachment: { name: 'SM Megamall Post' },
+      client: { name: 'Commander Group' },
+    });
+  });
+
+  // ─── Test 7: listActiveAssignments excludes ended ones ────────────────────────
+  it('listActiveAssignments excludes assignments whose endDate is before asOf', async () => {
+    const { employee, detachment } = await makeFixtures();
+    const a = await assignments.assign({
+      employeeId: employee.id,
+      detachmentId: detachment.id,
+      startDate: '2026-05-01',
+    });
+    await assignments.endAssignment(a.id, '2026-05-10', 'transferred');
+
+    const rows = await assignments.listActiveAssignments('2026-05-15');
+    expect(rows).toHaveLength(0);
+  });
+
+  // ─── Test 8: listAssignableEmployees excludes already-assigned + terminated ─
+  it('listAssignableEmployees excludes employees with an active assignment and terminated ones', async () => {
+    const { employee, detachment } = await makeFixtures();
+    const free = await hr.createEmployee({
+      employeeCode: 'CG-A002', firstName: 'Maria', lastName: 'Santos',
+      basicSalary: 18000, hiredOn: '2026-05-01',
+    });
+    const fired = await hr.createEmployee({
+      employeeCode: 'CG-A003', firstName: 'Pedro', lastName: 'Reyes',
+      basicSalary: 18000, hiredOn: '2026-05-01',
+    });
+    await hr.changeStatus(fired.id, 'terminated', 'AWOL');
+
+    await assignments.assign({
+      employeeId: employee.id,
+      detachmentId: detachment.id,
+      startDate: '2026-05-01',
+    });
+
+    const rows = await assignments.listAssignableEmployees('2026-05-15');
+    expect(rows.map((r) => r.id)).toEqual([free.id]);
+  });
 });

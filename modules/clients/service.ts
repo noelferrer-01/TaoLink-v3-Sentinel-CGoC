@@ -63,6 +63,41 @@ export async function listClients(): Promise<Client[]> {
   return db.select().from(clients).orderBy(clients.name);
 }
 
+export type ClientWithDetachments = {
+  id: string;
+  name: string;
+  detachments: { id: string; name: string }[];
+};
+
+// Used by /assignments to populate the detachment dropdown (grouped under
+// client via <optgroup>). Single query + in-memory grouping.
+export async function listClientsWithDetachments(): Promise<ClientWithDetachments[]> {
+  const db = getDb();
+  const rows = await db
+    .select({
+      clientId: clients.id,
+      clientName: clients.name,
+      detachmentId: detachments.id,
+      detachmentName: detachments.name,
+    })
+    .from(clients)
+    .leftJoin(detachments, eq(detachments.clientId, clients.id))
+    .orderBy(clients.name, detachments.name);
+
+  const grouped = new Map<string, ClientWithDetachments>();
+  for (const r of rows) {
+    let entry = grouped.get(r.clientId);
+    if (!entry) {
+      entry = { id: r.clientId, name: r.clientName, detachments: [] };
+      grouped.set(r.clientId, entry);
+    }
+    if (r.detachmentId && r.detachmentName) {
+      entry.detachments.push({ id: r.detachmentId, name: r.detachmentName });
+    }
+  }
+  return Array.from(grouped.values());
+}
+
 export async function getDetachment(id: string): Promise<Detachment | null> {
   const db = getDb();
   const rows = await db.select().from(detachments).where(eq(detachments.id, id));
