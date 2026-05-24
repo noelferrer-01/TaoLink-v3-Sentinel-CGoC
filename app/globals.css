@@ -495,6 +495,13 @@ h1, h2, h3, h4, h5 {
   color: var(--muted);
 }
 
+/* In a TwoCol grid, sibling fields should stretch to the tallest one and
+   their inputs should bottom-anchor — that way label heights can vary without
+   pushing inputs out of horizontal alignment. Each .field already uses
+   grid-template-rows: auto auto, so we anchor the .field box to the bottom
+   of the parent grid's track. */
+.field { align-self: end; }
+
 .input {
   font-family: var(--ff-body), sans-serif;
   font-size: 0.9375rem;
@@ -510,6 +517,21 @@ h1, h2, h3, h4, h5 {
   outline: none;
   border-color: var(--ochre);
   box-shadow: 0 0 0 3px rgba(184, 134, 47, 0.18);
+}
+
+/* Native <select> styling — strip the browser chevron and draw our own at the
+   same right offset the Typeahead uses (0.9rem), so every dropdown across the
+   app has identical chevron placement. Without this, browser-default chevrons
+   sit flush against the right border on some pages, inconsistent with the
+   Typeahead and the styled select on the employees list filter. */
+select.input {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding-right: 2.25rem;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M0 0h10L5 6z' fill='%23677'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 0.9rem center;
 }
 
 /* Native file input — keep it functional but make the trigger button match the design system. */

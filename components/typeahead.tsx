@@ -10,7 +10,7 @@
  * - Uses downshift useCombobox for accessibility + ARIA wiring
  */
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useCombobox } from 'downshift';
 
 export interface TypeaheadProps<T> {
@@ -72,6 +72,28 @@ export function Typeahead<T>({
     [fetchOptions, minChars, debounceMs],
   );
 
+  // When minChars=0 the user expects to see the full list on first focus —
+  // pre-load options once on mount so the dropdown isn't an empty "No results"
+  // shell until the first keystroke. Runs once: callers using minChars=0 should
+  // pass a stable fetchOptions or accept the closure captured at mount time.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (minChars !== 0) return;
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const results = await fetchOptions('');
+        if (!cancelled) setOptions(results);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const {
     isOpen,
     getMenuProps,
@@ -79,7 +101,6 @@ export function Typeahead<T>({
     getItemProps,
     highlightedIndex,
     inputValue,
-    openMenu,
   } = useCombobox<T>({
     items: options,
     itemToString,
@@ -89,6 +110,17 @@ export function Typeahead<T>({
     },
     onInputValueChange: ({ inputValue: query = '' }) => {
       triggerFetch(query);
+    },
+    // Without this reducer, clicking the input fires focus → opens menu, then
+    // the same click is interpreted by downshift as a toggle → closes menu.
+    // Net: first click is a flicker. Force InputClick to always open.
+    stateReducer: (_state, { type, changes }) => {
+      switch (type) {
+        case useCombobox.stateChangeTypes.InputClick:
+          return { ...changes, isOpen: true };
+        default:
+          return changes;
+      }
     },
   });
 
@@ -104,10 +136,7 @@ export function Typeahead<T>({
             placeholder,
             'aria-label': ariaLabel,
             className: 'input',
-            style: { width: '100%', paddingRight: '2rem' },
-            onFocus: () => {
-              if (inputValue.length >= minChars) openMenu();
-            },
+            style: { width: '100%', paddingRight: '2.25rem' },
           })}
         />
         {/* Chevron indicator */}
@@ -115,7 +144,7 @@ export function Typeahead<T>({
           aria-hidden
           style={{
             position: 'absolute',
-            right: '0.75rem',
+            right: '0.9rem',
             top: '50%',
             transform: 'translateY(-50%)',
             pointerEvents: 'none',

@@ -20,8 +20,8 @@
 import type { ReactNode } from 'react';
 
 export interface PageShellProps {
-  /** e.g. "Sentinel · Operations" */
-  breadcrumb?: string;
+  /** e.g. "Sentinel · Operations" — accepts ReactNode so segments can be `<Link>` for navigation */
+  breadcrumb?: ReactNode;
   /** Page title — rendered in Fraunces (display font) */
   title: string;
   /** One or two sentence plain-language description */
