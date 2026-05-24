@@ -100,3 +100,46 @@ CG-1,A,B,a@x.com,not-a-number,SEMI_MONTHLY,2026-05-01`;
     expect(firstError?.reason).toMatch(/basic salary must be a positive number/);
   });
 });
+
+describe('hr.listEmployees', () => {
+  beforeEach(async () => {
+    await getDb().delete(payslips);
+    await getDb().delete(payRuns);
+    await getDb().delete(dtrEntries);
+    await getDb().delete(dtrPeriodCloses);
+    await getDb().delete(assignmentsTable);
+    await getDb().delete(employees);
+  });
+  afterAll(async () => { await closeDb(); });
+
+  it('returns empty array when no employees', async () => {
+    const rows = await hr.listEmployees();
+    expect(rows).toEqual([]);
+  });
+
+  it('returns employees sorted by last name then first name', async () => {
+    await hr.createEmployee({ employeeCode: 'CG-2', firstName: 'Pedro',  lastName: 'Santos',    basicSalary: 18000, hiredOn: '2026-05-01' });
+    await hr.createEmployee({ employeeCode: 'CG-1', firstName: 'Juan',   lastName: 'Dela Cruz', basicSalary: 18000, hiredOn: '2026-05-01' });
+    await hr.createEmployee({ employeeCode: 'CG-3', firstName: 'Maria',  lastName: 'Santos',    basicSalary: 18000, hiredOn: '2026-05-01' });
+    const rows = await hr.listEmployees();
+    expect(rows.map((r) => r.employeeCode)).toEqual(['CG-1', 'CG-3', 'CG-2']);
+  });
+
+  it('returns the projection shape expected by the UI list', async () => {
+    await hr.createEmployee({
+      employeeCode: 'CG-1', firstName: 'Juan', lastName: 'Dela Cruz',
+      email: 'juan@x.com', basicSalary: 18000, hiredOn: '2026-05-01',
+    });
+    const [row] = await hr.listEmployees();
+    expect(row).toMatchObject({
+      employeeCode: 'CG-1',
+      firstName: 'Juan',
+      lastName: 'Dela Cruz',
+      email: 'juan@x.com',
+      status: 'hired',
+      payFrequency: 'SEMI_MONTHLY',
+      hiredOn: '2026-05-01',
+    });
+    expect(Number(row?.basicSalary)).toBe(18000);
+  });
+});

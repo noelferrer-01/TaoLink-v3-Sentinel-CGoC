@@ -58,6 +58,37 @@ export async function getEmployee(id: string): Promise<Employee | null> {
   return rows[0] ?? null;
 }
 
+export type EmployeeListItem = Pick<
+  Employee,
+  | 'id'
+  | 'employeeCode'
+  | 'firstName'
+  | 'lastName'
+  | 'email'
+  | 'status'
+  | 'payFrequency'
+  | 'basicSalary'
+  | 'hiredOn'
+>;
+
+export async function listEmployees(): Promise<EmployeeListItem[]> {
+  const db = getDb();
+  return db
+    .select({
+      id: employees.id,
+      employeeCode: employees.employeeCode,
+      firstName: employees.firstName,
+      lastName: employees.lastName,
+      email: employees.email,
+      status: employees.status,
+      payFrequency: employees.payFrequency,
+      basicSalary: employees.basicSalary,
+      hiredOn: employees.hiredOn,
+    })
+    .from(employees)
+    .orderBy(employees.lastName, employees.firstName);
+}
+
 export async function changeStatus(
   id: string,
   next: Status,
