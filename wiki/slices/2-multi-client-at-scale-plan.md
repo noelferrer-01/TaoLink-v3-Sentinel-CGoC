@@ -37,6 +37,35 @@
 
 **Phase ordering rule:** Phases 1–7 are backend-first (schema → modules), tested in isolation. Phases 8–9 are UI on top. Phase 10 closes the slice. **Do not write a UI screen for a module whose backend isn't done.**
 
+## Conventions discovered during Phase 1 execution (use for Phases 2–10)
+
+These adjust assumptions in the original plan. Subsequent tasks must follow these conventions:
+
+- **Migration path:** `drizzle/migrations/`, NOT `db/migrations/` (the plan body referenced `db/migrations/` in places — ignore that).
+- **Migrations are hand-rolled SQL.** `drizzle-kit generate` is NOT used — the project has no `drizzle/migrations/meta/` snapshot baseline. Hand-write each migration matching the style of `drizzle/migrations/0007_slice1_payroll.sql` (or any sibling).
+- **Migration runner:** `pnpm db:migrate` (a thin wrapper over `drizzle/migrate.ts`). It requires `.env` loaded into the shell — prefix every invocation with `env $(grep -v '^#' .env | grep -v '^$' | xargs)`.
+- **psql verification:** same `.env` prefix → `env $(grep -v '^#' .env | grep -v '^$' | xargs) psql "$DATABASE_URL" -c "..."`.
+- **Postgres type naming convention:** module-prefixed. `hr_employee_status`, `hr_pay_frequency`, `hr_employment_type` for HR-module enums. `payroll_frequency` (no `pc_`/`payroll_calendars_` prefix needed — `payroll_*` is the natural namespace for the calendar module's enums and doesn't collide). `pay_run_status` is bare because it's payroll-domain across modules. When in doubt, prefix with the module's name.
+- **CREATE TYPE idempotency:** Postgres 16 has no `CREATE TYPE IF NOT EXISTS`. Wrap in a DO-block:
+  ```sql
+  DO $$ BEGIN
+    CREATE TYPE ... AS ENUM (...);
+  EXCEPTION WHEN duplicate_object THEN NULL;
+  END $$;
+  ```
+  See `drizzle/migrations/0002`, `0003`, `0006`, `0007` for the pattern.
+- **ALTER TABLE idempotency:** every `ADD COLUMN` clause needs its own `IF NOT EXISTS`.
+- **DB-import path in test files:** `import { closeDb, getSql } from '@/core/db'` (NOT `import { db } from 'db/client'` as the plan suggested). Pure SQL queries use ``await sql\`...\` `` (tagged-template style).
+- **Table names in the running DB:**
+  - HR employees → `hr_employees` (not `employees`)
+  - Clients → `clients`
+  - Detachments → `detachments`
+  - Pay runs → `pay_runs`
+  - DTR entries → check `modules/dtr/schema.ts` when needed
+  - Audit → `audit_log` (verify when needed)
+- **Commit cadence:** one logical change per commit. Plan's "Steps 1–N + Commit" pattern is the right granularity. Subagents are free to batch tasks within a phase as one dispatch, but commits stay one-per-task.
+- **Subagent batching policy:** when several tasks share the same shape (e.g. Phase 1 Tasks 1.4–1.7 were all schema migrations), one implementer dispatch handles the batch with separate commits per task, followed by ONE combined spec+quality review. This cuts subagent count without losing review discipline. Apply for Phases 2–7 where tasks share shape.
+
 ---
 
 ## Phase 1 — Schema migrations + `pg_trgm` extension + backfills
