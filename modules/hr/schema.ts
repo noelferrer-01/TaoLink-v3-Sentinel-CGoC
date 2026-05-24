@@ -8,7 +8,7 @@ export const employeeStatus = pgEnum('hr_employee_status', [
 // pay_frequency. Daily rate is derived, not stored.
 export const payFrequency = pgEnum('hr_pay_frequency', ['MONTHLY', 'SEMI_MONTHLY']);
 
-export const employmentType = pgEnum('employment_type', [
+export const employmentType = pgEnum('hr_employment_type', [
   'GUARD',
   'OFFICE_STAFF',
   'SUPERVISOR',
