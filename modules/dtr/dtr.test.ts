@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { eq, gte } from 'drizzle-orm';
 import { closeDb, getDb } from '@/core/db';
 import { dtrEntries, dtrPeriodCloses } from './schema';
 import { assignments as assignmentsTable } from '@/modules/assignments/schema';
@@ -7,9 +7,12 @@ import { detachments, clients } from '@/modules/clients/schema';
 import { employees } from '@/modules/hr/schema';
 import { payslips, payRuns } from '@/modules/payroll/schema';
 import { eventLog } from '@/modules/events/schema';
+import { auditLog } from '@/modules/audit/schema';
+import { payrollCalendars as payrollCalendarsTable } from '@/modules/payroll-calendars/schema';
 import { hr } from '@/modules/hr/index';
 import { clients as clientsModule } from '@/modules/clients/index';
 import { assignments } from '@/modules/assignments/index';
+import * as calendars from '@/modules/payroll-calendars/index';
 import {
   recordDTR,
   getDTR,
@@ -59,9 +62,7 @@ describe('dtr module', () => {
     await db.delete(employees);
   });
 
-  afterAll(async () => {
-    await closeDb();
-  });
+  // Note: closeDb() is called once at file level below (after all suites).
 
   // ─── Test 1: recordDTR auto-resolves assignmentId ─────────────────────────
   it('recordDTR happy path auto-resolves assignmentId from getActiveAssignment', async () => {
@@ -190,4 +191,140 @@ describe('dtr module', () => {
     expect(may1?.timeIn).toBe('07:00:00');
     expect(may1?.timeOut).toBe('15:00:00');
   });
+});
+
+// ─── 6.2: Late-DTR-close warning suite ───────────────────────────────────────
+//
+// Decision: closePeriod is period-wide (no client parameter). The late-warning
+// logic resolves the global-default calendar via the sentinel UUID and compares
+// now() to dtrCutoffDate. A _nowOverride test hook is used to control "now"
+// without sleeping or manipulating real clocks.
+//
+// The warning MUST NOT block the close (the period_closes row is still created).
+// The warning emits:
+//   - event: dtr.period.closed.late
+//   - audit action: dtr.period.closed.late
+
+describe('dtr module — 6.2 late-DTR-close warning', () => {
+  const db = getDb();
+  let testStart: Date;
+
+  beforeEach(async () => {
+    testStart = new Date();
+
+    await db.delete(payslips);
+    await db.delete(payRuns);
+    await db.delete(dtrEntries);
+    await db.delete(dtrPeriodCloses);
+    await db.delete(assignmentsTable);
+    await db.delete(detachments);
+    await db.delete(clients);
+    await db.delete(employees);
+    await db.delete(eventLog);
+    await db.delete(payrollCalendarsTable);
+  });
+
+  // ─── Test 6.2a: Closing on time → no late warning ────────────────────────
+  it('closing before the DTR cut-off does NOT emit dtr.period.closed.late', async () => {
+    // Global-default: cutoff = periodEnd + 3 days (2026-05-31 + 3 = 2026-06-03)
+    await calendars.create({
+      clientId: null,
+      name: 'On-time test calendar',
+      frequency: 'SEMI_MONTHLY',
+      dtrCutoffDaysAfterPeriodEnd: 3,
+      paydayDaysAfterPeriodEnd: 7,
+    });
+
+    // Simulate "now" = 2026-06-01, which is before the cut-off 2026-06-03.
+    const nowBeforeCutoff = new Date('2026-06-01T10:00:00Z');
+    await closePeriod('2026-05-16', '2026-05-31', { _nowOverride: nowBeforeCutoff });
+
+    // The normal dtr.period.closed event must still be emitted.
+    const periodClosedEvents = await db
+      .select()
+      .from(eventLog)
+      .where(eq(eventLog.topic, 'dtr.period.closed'));
+    expect(periodClosedEvents.length).toBeGreaterThanOrEqual(1);
+
+    // No late-warning event should be in the log.
+    const lateEvents = await db
+      .select()
+      .from(eventLog)
+      .where(eq(eventLog.topic, 'dtr.period.closed.late'));
+    expect(lateEvents).toHaveLength(0);
+  });
+
+  // ─── Test 6.2b: Closing late → emits warning + audit, does NOT block ─────
+  it('closing after the DTR cut-off emits dtr.period.closed.late event + audit, period is still closed', async () => {
+    // Global-default: cutoff = periodEnd + 3 days (2026-05-31 + 3 = 2026-06-03)
+    await calendars.create({
+      clientId: null,
+      name: 'Late-close test calendar',
+      frequency: 'SEMI_MONTHLY',
+      dtrCutoffDaysAfterPeriodEnd: 3,
+      paydayDaysAfterPeriodEnd: 7,
+    });
+
+    // Simulate "now" = 2026-06-10, well past the cut-off 2026-06-03.
+    const nowPastCutoff = new Date('2026-06-10T10:00:00Z');
+    await closePeriod('2026-05-16', '2026-05-31', { _nowOverride: nowPastCutoff });
+
+    // ── The close itself must still succeed ──────────────────────────────────
+    // dtr_period_closes should have the row.
+    const closedRow = await db
+      .select()
+      .from(dtrPeriodCloses)
+      .where(
+        eq(dtrPeriodCloses.periodStart, '2026-05-16'),
+      );
+    expect(closedRow.length).toBeGreaterThanOrEqual(1);
+
+    // ── Late warning event must be emitted ───────────────────────────────────
+    const lateEvents = await db
+      .select()
+      .from(eventLog)
+      .where(eq(eventLog.topic, 'dtr.period.closed.late'));
+    expect(lateEvents).toHaveLength(1);
+
+    const latePayload = lateEvents[0]!.payload as Record<string, unknown>;
+    expect(latePayload['periodStart']).toBe('2026-05-16');
+    expect(latePayload['periodEnd']).toBe('2026-05-31');
+    // The payload must include the cut-off date and calendarSource.
+    expect(typeof latePayload['dtrCutoffDate']).toBe('string');
+    expect(latePayload['calendarSource']).toBe('global-default');
+
+    // ── Late warning audit record must be written ────────────────────────────
+    // audit_log is append-only; filter by testStart to isolate this test.
+    const lateAudit = await db
+      .select()
+      .from(auditLog)
+      .where(
+        gte(auditLog.createdAt, testStart),
+      );
+    const lateAuditRow = lateAudit.find((r) => r.action === 'dtr.period.closed.late');
+    expect(lateAuditRow).toBeDefined();
+    expect((lateAuditRow!.payload as Record<string, unknown>)['periodStart']).toBe('2026-05-16');
+  });
+
+  // ─── Test 6.2c: No calendar at all → fallback-defaults, still warns if late
+  it('without any calendar, fallback-defaults apply; late warning emitted if past fallback cutoff', async () => {
+    // No calendar created. Fallback: cutoff = periodEnd + 2 days = 2026-06-02.
+    // Simulate "now" = 2026-06-05, which is past 2026-06-02.
+    const nowPastFallback = new Date('2026-06-05T10:00:00Z');
+    await closePeriod('2026-05-16', '2026-05-31', { _nowOverride: nowPastFallback });
+
+    const lateEvents = await db
+      .select()
+      .from(eventLog)
+      .where(eq(eventLog.topic, 'dtr.period.closed.late'));
+    expect(lateEvents).toHaveLength(1);
+
+    const payload = lateEvents[0]!.payload as Record<string, unknown>;
+    expect(payload['calendarSource']).toBe('fallback-defaults');
+  });
+});
+
+// Close the shared DB connection once, after all suites in this file finish.
+afterAll(async () => {
+  await closeDb();
 });
