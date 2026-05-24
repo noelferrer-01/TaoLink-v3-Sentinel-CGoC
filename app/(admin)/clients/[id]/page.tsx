@@ -5,6 +5,7 @@ import { payrollCalendars } from '@/modules/payroll-calendars';
 import { PageShell } from '@/components/page-shell';
 import { AddDetachmentForm } from './add-detachment-form';
 import { ClientDetailBody } from './client-detail-body';
+import { DetachmentsList } from './detachments-list';
 
 export default async function ClientDetailPage({
   params,
@@ -15,7 +16,7 @@ export default async function ClientDetailPage({
 
   const [client, detachments, allCalendars] = await Promise.all([
     clients.getClient(id),
-    clients.listDetachments(id),
+    clients.listDetachmentsWithDeployment(id),
     payrollCalendars.list(),
   ]);
   if (!client) notFound();
@@ -53,45 +54,7 @@ export default async function ClientDetailPage({
         </div>
       </div>
 
-      {detachments.length === 0 ? (
-        <div className="empty-state">
-          <h3>No detachments yet</h3>
-          <p>
-            Add the first detachment for {client.name}. A detachment is the
-            physical location where employees work — for example a mall, an
-            office tower, or a warehouse.
-          </p>
-        </div>
-      ) : (
-        <div className="table-wrap">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Detachment</th>
-                <th>Address</th>
-                <th>Added</th>
-              </tr>
-            </thead>
-            <tbody>
-              {detachments.map((d) => (
-                <tr key={d.id}>
-                  <td>
-                    <div className="cell-name">{d.name}</div>
-                  </td>
-                  <td>
-                    {d.address ?? (
-                      <span style={{ color: 'var(--muted)' }}>—</span>
-                    )}
-                  </td>
-                  <td className="cell-num">
-                    {d.createdAt.toISOString().slice(0, 10)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      <DetachmentsList clientId={client.id} rows={detachments} />
 
       <AddDetachmentForm clientId={client.id} />
     </PageShell>

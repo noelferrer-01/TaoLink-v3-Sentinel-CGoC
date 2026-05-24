@@ -22,11 +22,26 @@ export interface SortState {
   dir: SortDir;
 }
 
+export type SortType = 'string' | 'number' | 'date';
+
 export interface ColumnDef<TRow> {
   /** Must match a property key of TRow OR be any string if render is provided. */
   key: string;
   label: string;
   sortable?: boolean;
+  /**
+   * How to compare values for this column when sorting. Defaults to 'string'.
+   * Use 'number' for numeric columns (including signed/null), 'date' for
+   * Date/ISO-string columns. Drives `sortRows()` below; ignored by DataTable
+   * itself (sorting happens in the parent).
+   */
+  sortType?: SortType;
+  /**
+   * Optional accessor used by `sortRows()` when the cell's display value
+   * differs from the underlying sort key (e.g. custom `render`). Defaults to
+   * `row[key]`.
+   */
+  sortValue?: (row: TRow) => unknown;
   /** Custom cell renderer. Receives the full row. */
   render?: (row: TRow) => ReactNode;
   /** Optional CSS class for <th> and <td> */
@@ -61,6 +76,55 @@ export interface DataTableProps<TRow> {
   onRowClick?: (row: TRow) => void;
   /** Rendered when rows.length === 0 */
   emptyState?: ReactNode;
+}
+
+// ─── Generic comparator + sortRows helper ────────────────────────────────────
+
+/**
+ * Type-aware comparator that pushes `null`/`undefined` to the end regardless
+ * of direction (so an unsorted "no data" tail doesn't flip into the middle
+ * when you toggle asc/desc). Returns a negative/zero/positive number suitable
+ * for Array.prototype.sort.
+ */
+function compareValues(a: unknown, b: unknown, type: SortType): number {
+  const aMissing = a === null || a === undefined || a === '';
+  const bMissing = b === null || b === undefined || b === '';
+  if (aMissing && bMissing) return 0;
+  if (aMissing) return 1;  // nulls last
+  if (bMissing) return -1;
+
+  if (type === 'number') {
+    return Number(a) - Number(b);
+  }
+  if (type === 'date') {
+    const at = a instanceof Date ? a.getTime() : new Date(a as string).getTime();
+    const bt = b instanceof Date ? b.getTime() : new Date(b as string).getTime();
+    return at - bt;
+  }
+  return String(a).localeCompare(String(b));
+}
+
+/**
+ * Sort rows according to the column's declared `sortType` (defaults to string).
+ * Returns a new array — does not mutate. Direction toggles via `sort.dir`.
+ *
+ * Parents own sorting because DataTable receives `rows` pre-sorted; this is
+ * the shared helper so every list body gets the same null-handling and
+ * type-aware comparison instead of `String(...)`-ifying everything.
+ */
+export function sortRows<TRow>(
+  rows: TRow[],
+  columns: ColumnDef<TRow>[],
+  sort: SortState | undefined,
+): TRow[] {
+  if (!sort) return rows;
+  const col = columns.find((c) => c.key === sort.key);
+  if (!col) return rows;
+  const accessor =
+    col.sortValue ?? ((row: TRow) => (row as Record<string, unknown>)[sort.key]);
+  const type = col.sortType ?? 'string';
+  const sorted = [...rows].sort((a, b) => compareValues(accessor(a), accessor(b), type));
+  return sort.dir === 'desc' ? sorted.reverse() : sorted;
 }
 
 // ─── SortIcon ─────────────────────────────────────────────────────────────────
