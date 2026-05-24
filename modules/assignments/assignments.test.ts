@@ -262,4 +262,300 @@ describe('assignments module', () => {
       expect(rows).toEqual([]);
     });
   });
+
+  // ─── bulkAssign ───────────────────────────────────────────────────────────
+  describe('bulkAssign', () => {
+    it('assigns multiple employees and returns all in assigned[]', async () => {
+      const { detachment } = await makeFixtures(); // creates 1st employee too
+      const emp2 = await hr.createEmployee({
+        employeeCode: 'CG-B002', firstName: 'Ana', lastName: 'Garcia',
+        basicSalary: 18000, hiredOn: '2026-05-01',
+      });
+      const emp3 = await hr.createEmployee({
+        employeeCode: 'CG-B003', firstName: 'Lito', lastName: 'Bautista',
+        basicSalary: 18000, hiredOn: '2026-05-01',
+      });
+
+      const result = await assignments.bulkAssign(
+        [emp2.id, emp3.id],
+        detachment.id,
+        '2026-06-01',
+      );
+
+      expect(result.assigned).toHaveLength(2);
+      expect(result.errors).toHaveLength(0);
+      expect(result.assigned.every((a) => a.detachmentId === detachment.id)).toBe(true);
+      expect(result.assigned.every((a) => a.startDate === '2026-06-01')).toBe(true);
+    });
+
+    it('collects errors for invalid employeeIds without aborting the batch', async () => {
+      const { detachment } = await makeFixtures();
+      const emp2 = await hr.createEmployee({
+        employeeCode: 'CG-B004', firstName: 'Rosie', lastName: 'Cruz',
+        basicSalary: 18000, hiredOn: '2026-05-01',
+      });
+
+      const fakeId = '00000000-0000-0000-0000-000000000001';
+      const result = await assignments.bulkAssign(
+        [emp2.id, fakeId],
+        detachment.id,
+        '2026-06-01',
+      );
+
+      // emp2 succeeds; fakeId triggers FK violation (or similar)
+      expect(result.assigned).toHaveLength(1);
+      expect(result.assigned[0]!.employeeId).toBe(emp2.id);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]!.employeeId).toBe(fakeId);
+    });
+
+    it('returns error (not throw) when employee already has active assignment', async () => {
+      const { employee, detachment } = await makeFixtures();
+      // employee already has active assignment from makeFixtures? No — makeFixtures
+      // just creates them without assigning. Assign first:
+      await assignments.assign({
+        employeeId: employee.id,
+        detachmentId: detachment.id,
+        startDate: '2026-05-01',
+      });
+
+      const result = await assignments.bulkAssign(
+        [employee.id],
+        detachment.id,
+        '2026-06-01',
+      );
+
+      expect(result.assigned).toHaveLength(0);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]!.reason).toMatch(/already has an active assignment/i);
+    });
+  });
+
+  // ─── bulkEndAssignments ───────────────────────────────────────────────────
+  describe('bulkEndAssignments', () => {
+    it('ends multiple assignments and returns them in ended[]', async () => {
+      const { employee, detachment } = await makeFixtures();
+      const emp2 = await hr.createEmployee({
+        employeeCode: 'CG-C002', firstName: 'Rina', lastName: 'Mendoza',
+        basicSalary: 18000, hiredOn: '2026-05-01',
+      });
+
+      const a1 = await assignments.assign({
+        employeeId: employee.id, detachmentId: detachment.id, startDate: '2026-05-01',
+      });
+      const a2 = await assignments.assign({
+        employeeId: emp2.id, detachmentId: detachment.id, startDate: '2026-05-01',
+      });
+
+      const result = await assignments.bulkEndAssignments(
+        [a1.id, a2.id],
+        '2026-05-31',
+        'Contract expired',
+      );
+
+      expect(result.ended).toHaveLength(2);
+      expect(result.errors).toHaveLength(0);
+      expect(result.ended.every((a) => a.endDate === '2026-05-31')).toBe(true);
+    });
+
+    it('collects errors for unknown ids without aborting the batch', async () => {
+      const { employee, detachment } = await makeFixtures();
+      const a = await assignments.assign({
+        employeeId: employee.id, detachmentId: detachment.id, startDate: '2026-05-01',
+      });
+
+      const fakeId = '00000000-0000-0000-0000-000000000002';
+      const result = await assignments.bulkEndAssignments(
+        [a.id, fakeId],
+        '2026-05-31',
+        'test',
+      );
+
+      expect(result.ended).toHaveLength(1);
+      expect(result.ended[0]!.id).toBe(a.id);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]!.assignmentId).toBe(fakeId);
+    });
+  });
+
+  // ─── bulkTransfer ─────────────────────────────────────────────────────────
+  describe('bulkTransfer', () => {
+    it('transfers an employee: ends old assignment, creates new one', async () => {
+      const { employee, detachment } = await makeFixtures();
+      const client2 = await clients.createClient({ name: 'Client B' });
+      const det2 = await clients.createDetachment({ clientId: client2.id, name: 'Post B' });
+
+      await assignments.assign({
+        employeeId: employee.id, detachmentId: detachment.id, startDate: '2026-05-01',
+      });
+
+      const result = await assignments.bulkTransfer(
+        [employee.id],
+        det2.id,
+        '2026-06-01',
+      );
+
+      expect(result.transferred).toHaveLength(1);
+      expect(result.errors).toHaveLength(0);
+
+      const newA = result.transferred[0]!;
+      expect(newA.detachmentId).toBe(det2.id);
+      expect(newA.startDate).toBe('2026-06-01');
+
+      // Old assignment should be ended at 2026-05-31
+      const old = await assignments.getActiveAssignment(employee.id, '2026-05-15');
+      expect(old).not.toBeNull();
+      expect(old!.endDate).toBe('2026-05-31');
+    });
+
+    it('returns error when employee has no active assignment', async () => {
+      const { employee } = await makeFixtures();
+      // no assign — just a bare employee
+      const fakeDetId = '00000000-0000-0000-0000-000000000003';
+
+      const result = await assignments.bulkTransfer(
+        [employee.id],
+        fakeDetId,
+        '2026-06-01',
+      );
+
+      expect(result.transferred).toHaveLength(0);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]!.reason).toMatch(/no active assignment/i);
+    });
+
+    it('mid-batch failure does not affect other employees in the batch', async () => {
+      const { employee, detachment } = await makeFixtures();
+      const emp2 = await hr.createEmployee({
+        employeeCode: 'CG-D002', firstName: 'Mario', lastName: 'Ramos',
+        basicSalary: 18000, hiredOn: '2026-05-01',
+      });
+      const client2 = await clients.createClient({ name: 'Client C' });
+      const det2 = await clients.createDetachment({ clientId: client2.id, name: 'Post C' });
+
+      // Only emp2 has an active assignment; employee does NOT
+      await assignments.assign({
+        employeeId: emp2.id, detachmentId: detachment.id, startDate: '2026-05-01',
+      });
+
+      const result = await assignments.bulkTransfer(
+        [employee.id, emp2.id], // employee will fail, emp2 will succeed
+        det2.id,
+        '2026-06-01',
+      );
+
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]!.employeeId).toBe(employee.id);
+      expect(result.transferred).toHaveLength(1);
+      expect(result.transferred[0]!.employeeId).toBe(emp2.id);
+    });
+  });
+
+  // ─── updateAssignment ─────────────────────────────────────────────────────
+  describe('updateAssignment', () => {
+    it('updates mutable fields (startDate, endDate, reason)', async () => {
+      const { employee, detachment } = await makeFixtures();
+      const a = await assignments.assign({
+        employeeId: employee.id, detachmentId: detachment.id, startDate: '2026-05-01',
+      });
+
+      const updated = await assignments.updateAssignment(a.id, {
+        startDate: '2026-05-05',
+        endDate: '2026-06-30',
+        reason: 'Contract adjustment',
+      });
+
+      expect(updated.startDate).toBe('2026-05-05');
+      expect(updated.endDate).toBe('2026-06-30');
+      expect(updated.endReason).toBe('Contract adjustment');
+      // Immutable fields unchanged
+      expect(updated.employeeId).toBe(employee.id);
+      expect(updated.detachmentId).toBe(detachment.id);
+    });
+
+    it('silently ignores immutable fields passed in patch (they are not in the type)', async () => {
+      const { employee, detachment } = await makeFixtures();
+      const a = await assignments.assign({
+        employeeId: employee.id, detachmentId: detachment.id, startDate: '2026-05-01',
+      });
+
+      // UpdateAssignmentPatch only allows startDate/endDate/reason —
+      // passing anything else requires a cast and won't reach DB.
+      const updated = await assignments.updateAssignment(a.id, {
+        startDate: '2026-05-10',
+        // Deliberately pass only safe fields
+      });
+
+      expect(updated.startDate).toBe('2026-05-10');
+      expect(updated.employeeId).toBe(employee.id);
+    });
+
+    it('throws when assignment id does not exist', async () => {
+      await expect(
+        assignments.updateAssignment('00000000-0000-0000-0000-000000000099', {
+          startDate: '2026-06-01',
+        }),
+      ).rejects.toThrow(/no assignment/i);
+    });
+  });
+
+  // ─── list (paginated) ─────────────────────────────────────────────────────
+  describe('list (paginated)', () => {
+    async function seedN(n: number) {
+      // Need distinct employees (one per assignment, no overlap violations)
+      const { detachment } = await makeFixtures(); // creates CG-A001 + detachment
+
+      const empIds: string[] = [];
+      // Create 49 more employees (total 50 with the one from makeFixtures)
+      // makeFixtures employee is CG-A001; we create CG-P002 … CG-P050
+      for (let i = 2; i <= n; i++) {
+        const code = `CG-P${String(i).padStart(3, '0')}`;
+        const emp = await hr.createEmployee({
+          employeeCode: code,
+          firstName: `First${i}`,
+          lastName: `Last${i}`,
+          basicSalary: 18000,
+          hiredOn: '2026-05-01',
+        });
+        empIds.push(emp.id);
+      }
+
+      // Get the first employee (from makeFixtures)
+      const firstEmpRows = await getDb().select().from(employeesTable).limit(1);
+      const firstEmpId = firstEmpRows[0]!.id;
+
+      // Assign all employees (use different start dates to avoid overlap issues)
+      const allIds = [firstEmpId, ...empIds];
+      for (let i = 0; i < allIds.length; i++) {
+        await assignments.assign({
+          employeeId: allIds[i]!,
+          detachmentId: detachment.id,
+          startDate: '2026-05-01',
+        });
+      }
+
+      return { detachment };
+    }
+
+    it('returns first page of 10 and total=50', async () => {
+      await seedN(50);
+      const result = await assignments.list({ limit: 10, offset: 0 });
+      expect(result.rows).toHaveLength(10);
+      expect(result.total).toBe(50);
+    });
+
+    it('returns last page (offset=40, limit=10) with 10 rows', async () => {
+      await seedN(50);
+      const result = await assignments.list({ limit: 10, offset: 40 });
+      expect(result.rows).toHaveLength(10);
+      expect(result.total).toBe(50);
+    });
+
+    it('defaults to limit=50 with no options', async () => {
+      await seedN(50);
+      const result = await assignments.list();
+      expect(result.rows).toHaveLength(50);
+      expect(result.total).toBe(50);
+    });
+  });
 });

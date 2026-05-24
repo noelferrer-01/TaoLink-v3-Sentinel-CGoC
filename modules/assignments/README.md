@@ -21,8 +21,16 @@ Note: the namespace export is called `assignments` (lowercase), the same name as
 | `assignments.assign` | `(input: { employeeId, detachmentId, startDate, actorUserId? }) => Promise<Assignment>` | Create a new assignment. Throws plain-language error if the employee already has an active assignment covering `startDate`. Audits `assignments.assignment.created`. |
 | `assignments.endAssignment` | `(id, endDate, endReason, opts?) => Promise<Assignment>` | Set `endDate` + `endReason`. Audits `assignments.assignment.ended`. |
 | `assignments.getActiveAssignment` | `(employeeId, asOf) => Promise<Assignment \| null>` | Returns the assignment where `startDate ≤ asOf AND (endDate IS NULL OR endDate ≥ asOf)`. Used by `modules/dtr` to resolve the assignment for a clock-in. |
+| `assignments.listActiveAssignments` | `(asOf: string) => Promise<ActiveAssignmentRow[]>` | Returns currently-active assignments joined with employee + detachment + client, ordered by last name. |
+| `assignments.listAssignmentsOverlappingPeriod` | `(periodStart, periodEnd) => Promise<ActiveAssignmentRow[]>` | Returns assignments that overlap a payroll period at any point (used by DTR). |
+| `assignments.listAssignableEmployees` | `(asOf: string) => Promise<AssignableEmployee[]>` | Returns employees without an active assignment who are not terminated. |
+| `assignments.bulkAssign` | `(employeeIds[], detachmentId, startDate, actorUserId?) => Promise<BulkAssignResult>` | Assigns multiple employees to one detachment. One failure does not abort the batch. Returns `{ assigned: Assignment[], errors: { employeeId, reason }[] }`. |
+| `assignments.bulkEndAssignments` | `(assignmentIds[], endDate, reason, actorUserId?) => Promise<BulkEndResult>` | Ends multiple assignments by id. One failure does not abort the batch. Returns `{ ended: Assignment[], errors: { assignmentId, reason }[] }`. |
+| `assignments.bulkTransfer` | `(employeeIds[], toDetachmentId, transferDate, actorUserId?) => Promise<BulkTransferResult>` | Transfers employees to a new detachment. Per-employee atomic (one TX per employee: end old at transferDate−1d, start new at transferDate). Returns `{ transferred: Assignment[], errors: { employeeId, reason }[] }`. |
+| `assignments.updateAssignment` | `(id, patch: UpdateAssignmentPatch, actorUserId?) => Promise<Assignment>` | Updates mutable fields (`startDate`, `endDate`, `reason`). Immutable fields (`id`, `employeeId`, `detachmentId`, `createdAt`) are not in the patch type and are never touched. Audits `assignments.assignment.updated`. |
+| `assignments.list` | `(opts?: { limit?, offset? }) => Promise<{ rows: Assignment[], total: number }>` | Paginated list of all assignments, ordered by `startDate` desc. Default `limit=50`, `offset=0`. |
 
-`Assignment` and `NewAssignment` types re-exported from the entry point.
+`Assignment`, `NewAssignment`, `ActiveAssignmentRow`, `AssignableEmployee`, `BulkAssignResult`, `BulkEndResult`, `BulkTransferResult`, `UpdateAssignmentPatch`, `ListAssignmentsOptions`, `ListAssignmentsResult` types re-exported from the entry point.
 
 ## Overlap rule
 
@@ -33,7 +41,7 @@ If a clerk needs to chain assignments end-to-end on the same employee, they must
 ## Dependencies
 
 - **Env:** `DATABASE_URL`.
-- **Modules:** `@/modules/audit` (writes audit rows on every mutation), `@/modules/events` (publishes `assignments.assignment.created` and `assignments.assignment.ended`). Both fire after the DB insert/update succeeds.
+- **Modules:** `@/modules/audit` (writes audit rows on every mutation), `@/modules/events` (publishes `assignments.assignment.created`, `assignments.assignment.ended`, and `assignments.assignment.updated`). Both fire after the DB insert/update succeeds.
 - **Tables:** `assignments`. FKs:
   - `employee_id → hr_employees(id) ON DELETE RESTRICT`
   - `detachment_id → detachments(id) ON DELETE RESTRICT`
@@ -58,3 +66,23 @@ If a clerk needs to chain assignments end-to-end on the same employee, they must
 ### Test isolation: assignments must be cleaned before parent tables
 **Trigger:** any test suite that deletes from `hr_employees` or `detachments` without first deleting from `assignments` will hit a PG FK violation.
 **Fix:** include `db.delete(assignments)` first in `beforeEach`. The cross-suite `beforeEach` hooks in `hr.test.ts` and `clients.test.ts` were updated when this module landed.
+
+### Bulk operations: partial success
+**Trigger:** `bulkAssign`, `bulkEndAssignments`, or `bulkTransfer` — one or more inputs are invalid.
+**Behavior:** one bad row does NOT abort the batch. The function returns normally. The caller **MUST inspect the `errors` array** — a non-empty errors array means partial failure.
+**Fix:** examine each `errors[n].reason` to diagnose and retry individual failures.
+
+### bulkTransfer: per-employee atomicity only
+**Trigger:** `bulkTransfer` for multiple employees where one fails mid-batch.
+**Behavior:** per-employee atomic — each employee's end+create runs in a single DB transaction. If one employee's TX fails, it is rolled back and the error is recorded. The next employee is still attempted. Cross-employee atomicity is NOT provided — if you need all-or-nothing, wrap callers in your own transaction (not currently supported by this API).
+
+### list returns `{ rows, total }` — not a bare array
+**Trigger:** code written before Phase 5 that calls `assignments.list()` and expects a plain array.
+**Behavior:** `list()` always returns `{ rows: Assignment[], total: number }`. Bare-array access like `list()[0]` will be `undefined`.
+**Fix:** update callers to destructure: `const { rows, total } = await assignments.list(...)`.
+**Note:** `listActiveAssignments` and `listAssignmentsOverlappingPeriod` still return bare arrays — those APIs are unchanged.
+
+### `updateAssignment` on unknown id
+**Error:** `[assignments/updateAssignment] no assignment <uuid>`
+**Trigger:** `updateAssignment` with an id that doesn't exist.
+**Fix:** verify the id before calling.
