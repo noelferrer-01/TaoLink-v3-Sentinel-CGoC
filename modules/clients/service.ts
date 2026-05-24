@@ -52,6 +52,17 @@ export async function createDetachment(
   }
 }
 
+export async function getClient(id: string): Promise<Client | null> {
+  const db = getDb();
+  const rows = await db.select().from(clients).where(eq(clients.id, id));
+  return rows[0] ?? null;
+}
+
+export async function listClients(): Promise<Client[]> {
+  const db = getDb();
+  return db.select().from(clients).orderBy(clients.name);
+}
+
 export async function getDetachment(id: string): Promise<Detachment | null> {
   const db = getDb();
   const rows = await db.select().from(detachments).where(eq(detachments.id, id));

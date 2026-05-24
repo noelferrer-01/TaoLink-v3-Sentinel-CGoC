@@ -69,4 +69,25 @@ describe('clients module', () => {
     expect(list[0]!.id).toBe(d1.id);
     expect(list[1]!.id).toBe(d2.id);
   });
+
+  it('listClients returns clients sorted by name', async () => {
+    await clients.createClient({ name: 'Zeta Holdings' });
+    await clients.createClient({ name: 'Alpha Corp' });
+    await clients.createClient({ name: 'Mu Industries' });
+    const list = await clients.listClients();
+    expect(list.map((c) => c.name)).toEqual(['Alpha Corp', 'Mu Industries', 'Zeta Holdings']);
+  });
+
+  it('getClient returns null for unknown id', async () => {
+    const result = await clients.getClient('00000000-0000-4000-8000-000000000003');
+    expect(result).toBeNull();
+  });
+
+  it('getClient returns the row by id', async () => {
+    const c = await clients.createClient({ name: 'Get Corp' });
+    const fetched = await clients.getClient(c.id);
+    expect(fetched).not.toBeNull();
+    expect(fetched!.id).toBe(c.id);
+    expect(fetched!.name).toBe('Get Corp');
+  });
 });
