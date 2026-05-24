@@ -3,6 +3,7 @@ import {
   endAssignment,
   getActiveAssignment,
   listActiveAssignments,
+  listAssignmentsOverlappingPeriod,
   listAssignableEmployees,
 } from './service';
 
@@ -13,6 +14,7 @@ export const assignments = {
   endAssignment,
   getActiveAssignment,
   listActiveAssignments,
+  listAssignmentsOverlappingPeriod,
   listAssignableEmployees,
 };
 
@@ -21,5 +23,6 @@ export {
   endAssignment,
   getActiveAssignment,
   listActiveAssignments,
+  listAssignmentsOverlappingPeriod,
   listAssignableEmployees,
 };

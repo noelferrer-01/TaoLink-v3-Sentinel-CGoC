@@ -15,7 +15,7 @@ export default async function DTRPage({
   const totalDays = countDays(safePeriod.start, safePeriod.end);
 
   const [active, closed] = await Promise.all([
-    assignments.listActiveAssignments(safePeriod.start),
+    assignments.listAssignmentsOverlappingPeriod(safePeriod.start, safePeriod.end),
     dtr.isPeriodClosed(safePeriod.start, safePeriod.end),
   ]);
 

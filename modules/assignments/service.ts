@@ -143,6 +143,56 @@ export async function listActiveAssignments(asOf: string): Promise<ActiveAssignm
   }));
 }
 
+// ─── listAssignmentsOverlappingPeriod ────────────────────────────────────────
+// Returns assignments that overlap [periodStart, periodEnd] *at any point*.
+// Used by the DTR page — a guard who started mid-period still needs DTR rows
+// for the days they actually worked, so "active on day 1 of the period" is
+// the wrong filter; we want any temporal overlap.
+//   startDate <= periodEnd  AND  (endDate IS NULL  OR  endDate >= periodStart)
+export async function listAssignmentsOverlappingPeriod(
+  periodStart: string,
+  periodEnd: string,
+): Promise<ActiveAssignmentRow[]> {
+  const db = getDb();
+  const rows = await db
+    .select({
+      id: assignments.id,
+      startDate: assignments.startDate,
+      employeeId: employees.id,
+      employeeCode: employees.employeeCode,
+      firstName: employees.firstName,
+      lastName: employees.lastName,
+      detachmentId: detachments.id,
+      detachmentName: detachments.name,
+      clientId: clients.id,
+      clientName: clients.name,
+    })
+    .from(assignments)
+    .innerJoin(employees, eq(employees.id, assignments.employeeId))
+    .innerJoin(detachments, eq(detachments.id, assignments.detachmentId))
+    .innerJoin(clients, eq(clients.id, detachments.clientId))
+    .where(
+      and(
+        lte(assignments.startDate, periodEnd),
+        or(isNull(assignments.endDate), gte(assignments.endDate, periodStart)),
+      ),
+    )
+    .orderBy(employees.lastName, employees.firstName);
+
+  return rows.map((r) => ({
+    id: r.id,
+    startDate: r.startDate,
+    employee: {
+      id: r.employeeId,
+      employeeCode: r.employeeCode,
+      firstName: r.firstName,
+      lastName: r.lastName,
+    },
+    detachment: { id: r.detachmentId, name: r.detachmentName },
+    client: { id: r.clientId, name: r.clientName },
+  }));
+}
+
 // ─── listAssignableEmployees ─────────────────────────────────────────────────
 // Returns employees who don't currently have an active assignment and aren't
 // terminated. These are the candidates the "Assign a guard" form can pick from.
