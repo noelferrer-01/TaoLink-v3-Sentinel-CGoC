@@ -1,7 +1,11 @@
 -- Slice 2 — payroll_calendars table + clients.default_payroll_calendar_id FK.
 -- Drives the DTR cut-off and payday countdown badges (Phase 6 + Phase 9).
 
-CREATE TYPE payroll_frequency AS ENUM ('WEEKLY', 'SEMI_MONTHLY', 'MONTHLY');
+-- payroll_frequency enum — idempotent via DO-block (PG16 has no CREATE TYPE IF NOT EXISTS).
+DO $$ BEGIN
+  CREATE TYPE payroll_frequency AS ENUM ('WEEKLY', 'SEMI_MONTHLY', 'MONTHLY');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
 CREATE TABLE IF NOT EXISTS payroll_calendars (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
