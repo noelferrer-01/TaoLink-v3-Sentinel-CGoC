@@ -10,7 +10,14 @@ import { eventLog } from '@/modules/events/schema';
 import { hr } from '@/modules/hr/index';
 import { clients as clientsModule } from '@/modules/clients/index';
 import { assignments } from '@/modules/assignments/index';
-import { recordDTR, getDTR, closePeriod } from './index';
+import {
+  recordDTR,
+  getDTR,
+  closePeriod,
+  isPeriodClosed,
+  summarizePeriod,
+  bulkFillWorked,
+} from './index';
 
 // ─── Fixture helpers ─────────────────────────────────────────────────────────
 
@@ -128,5 +135,59 @@ describe('dtr module', () => {
     await expect(
       closePeriod('2026-05-01', '2026-05-15'),
     ).rejects.toThrow(/already closed/i);
+  });
+
+  // ─── Test 7: isPeriodClosed reflects period_closes table ──────────────────
+  it('isPeriodClosed returns true after the period is closed, false before', async () => {
+    expect(await isPeriodClosed('2026-06-01', '2026-06-15')).toBe(false);
+    await closePeriod('2026-06-01', '2026-06-15');
+    expect(await isPeriodClosed('2026-06-01', '2026-06-15')).toBe(true);
+    // A different period stays open.
+    expect(await isPeriodClosed('2026-06-16', '2026-06-30')).toBe(false);
+  });
+
+  // ─── Test 8: summarizePeriod counts recorded days per employee ────────────
+  it('summarizePeriod returns counts for each employee with entries in range', async () => {
+    const { employee } = await makeFixtures();
+    const employee2 = await makeEmployee('CG-D002');
+
+    await recordDTR({ employeeId: employee.id, date: '2026-05-01' });
+    await recordDTR({ employeeId: employee.id, date: '2026-05-02' });
+    await recordDTR({ employeeId: employee.id, date: '2026-05-03' });
+    await recordDTR({ employeeId: employee2.id, date: '2026-05-01' });
+    // Outside the period; should not count.
+    await recordDTR({ employeeId: employee.id, date: '2026-05-20' });
+
+    const summary = await summarizePeriod(
+      [employee.id, employee2.id],
+      '2026-05-01',
+      '2026-05-15',
+    );
+    const byId = new Map(summary.map((s) => [s.employeeId, s.recordedDays]));
+    expect(byId.get(employee.id)).toBe(3);
+    expect(byId.get(employee2.id)).toBe(1);
+  });
+
+  // ─── Test 9: bulkFillWorked records every missing day in range ────────────
+  it('bulkFillWorked fills missing days as worked and skips already-recorded ones', async () => {
+    const { employee } = await makeFixtures();
+
+    // Pre-existing entry for the 3rd — should be skipped.
+    await recordDTR({ employeeId: employee.id, date: '2026-05-03', status: 'absent' });
+
+    const result = await bulkFillWorked(employee.id, '2026-05-01', '2026-05-05');
+    expect(result.recorded).toBe(4);
+    expect(result.skipped).toBe(1);
+
+    const rows = await getDTR(employee.id, '2026-05-01', '2026-05-05');
+    expect(rows).toHaveLength(5);
+    // The pre-existing absent entry stays absent.
+    const may3 = rows.find((r) => r.date === '2026-05-03');
+    expect(may3?.status).toBe('absent');
+    // Filled days are worked with the default time window.
+    const may1 = rows.find((r) => r.date === '2026-05-01');
+    expect(may1?.status).toBe('worked');
+    expect(may1?.timeIn).toBe('07:00:00');
+    expect(may1?.timeOut).toBe('15:00:00');
   });
 });
