@@ -20,6 +20,11 @@
 
   --shadow-soft: 0 1px 0 rgba(20, 16, 10, 0.04);
   --radius: 2px;
+
+  /* Stack Sans Text drives both display and body. Loaded via Google Fonts
+     stylesheet in app/layout.tsx. Mono stays Plex Mono via next/font. */
+  --ff-display: "Stack Sans Text";
+  --ff-body: "Stack Sans Text";
 }
 
 *,
@@ -50,9 +55,9 @@ a {
 }
 
 h1, h2, h3, h4, h5 {
-  font-family: var(--ff-display), Impact, "Roboto Condensed", "Arial Narrow", sans-serif;
-  font-weight: 500;
-  letter-spacing: 0.005em;
+  font-family: var(--ff-display), system-ui, -apple-system, sans-serif;
+  font-weight: 600;
+  letter-spacing: -0.005em;
   margin: 0;
 }
 
@@ -204,11 +209,11 @@ h1, h2, h3, h4, h5 {
 }
 
 .masthead-title {
-  font-family: var(--ff-display), Impact, "Roboto Condensed", sans-serif;
+  font-family: var(--ff-display), system-ui, sans-serif;
   font-size: 1.875rem;
-  font-weight: 500;
+  font-weight: 600;
   line-height: 1;
-  letter-spacing: 0.02em;
+  letter-spacing: -0.01em;
   color: var(--navy);
 }
 
@@ -316,10 +321,11 @@ h1, h2, h3, h4, h5 {
 }
 
 .page-title {
+  font-family: var(--ff-display), system-ui, -apple-system, sans-serif;
   font-size: 2.625rem;
-  font-weight: 500;
+  font-weight: 600;
   line-height: 1.05;
-  letter-spacing: 0.01em;
+  letter-spacing: -0.01em;
   color: var(--navy);
 }
 
@@ -563,7 +569,7 @@ h1, h2, h3, h4, h5 {
 }
 
 .auth-wordmark {
-  font-family: var(--ff-display), Impact, "Roboto Condensed", sans-serif;
+  font-family: var(--ff-display), system-ui, sans-serif;
   font-size: 1.875rem;
   font-weight: 500;
   letter-spacing: -0.022em;
@@ -682,7 +688,7 @@ th.cell-num { text-align: right; }
 }
 
 .empty-state h3 {
-  font-family: var(--ff-display), Impact, "Roboto Condensed", sans-serif;
+  font-family: var(--ff-display), system-ui, sans-serif;
   font-size: 1.625rem;
   color: var(--navy);
   margin-bottom: 0.5rem;
@@ -742,7 +748,7 @@ th.cell-num { text-align: right; }
 }
 
 .import-result-summary strong {
-  font-family: var(--ff-display), Impact, "Roboto Condensed", sans-serif;
+  font-family: var(--ff-display), system-ui, sans-serif;
   font-size: 1.75rem;
   font-weight: 500;
   color: var(--navy);
