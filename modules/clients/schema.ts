@@ -5,6 +5,7 @@ export const clients = pgTable('clients', {
   name: text('name').notNull(),
   contactEmail: text('contact_email'),
   contactPhone: text('contact_phone'),
+  defaultPayrollCalendarId: uuid('default_payroll_calendar_id'),  // FK added by SQL migration
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({ nameIdx: index('clients_name_idx').on(t.name) }));
 
