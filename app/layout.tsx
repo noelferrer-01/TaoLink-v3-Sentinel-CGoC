@@ -1,9 +1,9 @@
 import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
-import { Fraunces, Hanken_Grotesk, IBM_Plex_Mono } from 'next/font/google';
+import { Oswald, Hanken_Grotesk, IBM_Plex_Mono } from 'next/font/google';
 import './globals.css';
 
-const fraunces = Fraunces({
+const oswald = Oswald({
   subsets: ['latin'],
   weight: ['400', '500', '600'],
   variable: '--ff-display',
@@ -38,7 +38,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html
       lang="en"
-      className={`${fraunces.variable} ${hanken.variable} ${plexMono.variable}`}
+      className={`${oswald.variable} ${hanken.variable} ${plexMono.variable}`}
     >
       <body>{children}</body>
     </html>
