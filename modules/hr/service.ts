@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import Papa from 'papaparse';
 import { z } from 'zod';
 import { getDb } from '@/core/db';
@@ -55,6 +55,12 @@ export async function createEmployee(input: CreateEmployeeInput): Promise<Employ
 export async function getEmployee(id: string): Promise<Employee | null> {
   const db = getDb();
   const rows = await db.select().from(employees).where(eq(employees.id, id));
+  return rows[0] ?? null;
+}
+
+export async function getEmployeeByCode(code: string): Promise<Employee | null> {
+  const db = getDb();
+  const rows = await db.select().from(employees).where(eq(employees.employeeCode, code));
   return rows[0] ?? null;
 }
 
@@ -121,6 +127,100 @@ export async function changeStatus(
   return updated;
 }
 
+// ─── Update employee ─────────────────────────────────────────────────────────
+
+/** Fields that must never change after creation. The patch is sanitised by deleting these keys. */
+const IMMUTABLE_FIELDS = ['id', 'employeeCode', 'createdAt'] as const;
+
+type UpdateEmployeePatch = Partial<Omit<Employee, 'id' | 'employeeCode' | 'createdAt'>>;
+
+export async function updateEmployee(
+  id: string,
+  patch: UpdateEmployeePatch,
+  actorUserId?: string | null,
+): Promise<Employee> {
+  const db = getDb();
+  // Sanitise: strip immutable keys the caller should not touch
+  const safePatch = { ...patch } as Record<string, unknown>;
+  for (const field of IMMUTABLE_FIELDS) {
+    delete safePatch[field];
+  }
+
+  const before = await getEmployee(id);
+  if (!before) throw new Error(`[hr/updateEmployee] employee ${id} not found`);
+
+  const [updated] = await db
+    .update(employees)
+    .set({ ...safePatch, updatedAt: new Date() })
+    .where(eq(employees.id, id))
+    .returning();
+  if (!updated) throw new Error(`[hr/updateEmployee] update returned no row for ${id}`);
+
+  const changedFields = Object.keys(safePatch).filter(
+    (k) => (before as Record<string, unknown>)[k] !== (updated as Record<string, unknown>)[k],
+  );
+
+  await audit.record({
+    actor: actorUserId ?? null,
+    action: 'hr.employee.updated',
+    target: { kind: 'hr_employee', id },
+    payload: {
+      before: Object.fromEntries(changedFields.map((k) => [k, (before as Record<string, unknown>)[k]])),
+      after:  Object.fromEntries(changedFields.map((k) => [k, (updated as Record<string, unknown>)[k]])),
+      changedFields,
+    },
+  });
+  await events.publish('hr.employee.updated', { id, changedFields });
+  return updated;
+}
+
+// ─── Search employees ─────────────────────────────────────────────────────────
+
+export type SearchEmployeeOptions = {
+  limit?: number;
+  employmentType?: Employee['employmentType'];
+  status?: Employee['status'];
+};
+
+export async function searchEmployees(
+  query: string,
+  opts: SearchEmployeeOptions = {},
+): Promise<Employee[]> {
+  const db = getDb();
+  const limit = Math.min(opts.limit ?? 20, 100);
+  const trimmedQuery = query.trim();
+
+  const conditions: ReturnType<typeof eq>[] = [];
+
+  if (trimmedQuery.length > 0) {
+    conditions.push(
+      sql`(
+        similarity(${employees.firstName} || ' ' || ${employees.lastName}, ${trimmedQuery}) > 0.2
+        OR ${employees.employeeCode} ILIKE ${'%' + trimmedQuery + '%'}
+      )` as unknown as ReturnType<typeof eq>,
+    );
+  }
+  if (opts.employmentType) {
+    conditions.push(eq(employees.employmentType, opts.employmentType));
+  }
+  if (opts.status) {
+    conditions.push(eq(employees.status, opts.status));
+  }
+
+  const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+  return db
+    .select()
+    .from(employees)
+    .where(where)
+    .orderBy(
+      trimmedQuery.length > 0
+        ? (sql`similarity(${employees.firstName} || ' ' || ${employees.lastName}, ${trimmedQuery}) DESC NULLS LAST` as unknown as ReturnType<typeof eq>)
+        : employees.lastName,
+    )
+    .limit(limit);
+}
+
 // ─── Bulk import ─────────────────────────────────────────────────────────────
 
 const csvRowSchema = z.object({
@@ -132,12 +232,21 @@ const csvRowSchema = z.object({
     (v) => !Number.isNaN(parseFloat(v)) && parseFloat(v) > 0,
     'basic salary must be a positive number',
   ),
-  pay_frequency: z.enum(['MONTHLY', 'SEMI_MONTHLY']).default('SEMI_MONTHLY'),
-  hired_on:      z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'hired_on must be YYYY-MM-DD'),
+  pay_frequency:   z.enum(['MONTHLY', 'SEMI_MONTHLY']).default('SEMI_MONTHLY'),
+  hired_on:        z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'hired_on must be YYYY-MM-DD'),
+  employment_type: z.enum(['GUARD', 'OFFICE_STAFF', 'SUPERVISOR', 'DRIVER', 'JANITOR', 'OTHER']).default('GUARD'),
   sss_number:        z.string().optional(),
   philhealth_number: z.string().optional(),
   pagibig_number:    z.string().optional(),
   tin_number:        z.string().optional(),
+  // BIR 2316 fields — optional in CSV
+  rdo_code:      z.string().max(3).optional().or(z.literal('')),
+  date_of_birth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date_of_birth must be YYYY-MM-DD').optional().or(z.literal('')),
+  address_line1: z.string().optional(),
+  address_line2: z.string().optional(),
+  city:          z.string().optional(),
+  province:      z.string().optional(),
+  postal_code:   z.string().max(4).optional().or(z.literal('')),
 });
 
 const blankToNull = (v: string | undefined): string | null => (v && v.trim() !== '' ? v.trim() : null);
@@ -187,11 +296,19 @@ export async function bulkImportEmployees(
       email: r.email || null,
       basicSalary: String(parseFloat(r.basic_salary)),
       payFrequency: r.pay_frequency,
+      employmentType: r.employment_type,
       hiredOn: r.hired_on,
       sssNumber: blankToNull(r.sss_number),
       philhealthNumber: blankToNull(r.philhealth_number),
       pagibigNumber: blankToNull(r.pagibig_number),
       tinNumber: blankToNull(r.tin_number),
+      rdoCode: blankToNull(r.rdo_code),
+      dateOfBirth: blankToNull(r.date_of_birth),
+      addressLine1: blankToNull(r.address_line1),
+      addressLine2: blankToNull(r.address_line2),
+      city: blankToNull(r.city),
+      province: blankToNull(r.province),
+      postalCode: blankToNull(r.postal_code),
     });
   });
 

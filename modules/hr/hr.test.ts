@@ -5,6 +5,17 @@ import { assignments as assignmentsTable } from '@/modules/assignments/schema';
 import { dtrEntries, dtrPeriodCloses } from '@/modules/dtr/schema';
 import { payslips, payRuns } from '@/modules/payroll/schema';
 import { hr } from './index';
+import { _resetEventsForTests } from '@/modules/events';
+
+// FK-ordered cleanup helper reused across describe blocks
+async function cleanupEmployees() {
+  await getDb().delete(payslips);
+  await getDb().delete(payRuns);
+  await getDb().delete(dtrEntries);
+  await getDb().delete(dtrPeriodCloses);
+  await getDb().delete(assignmentsTable);
+  await getDb().delete(employees);
+}
 
 describe('hr.createEmployee + state machine', () => {
   beforeEach(async () => {
@@ -141,5 +152,186 @@ describe('hr.listEmployees', () => {
       hiredOn: '2026-05-01',
     });
     expect(Number(row?.basicSalary)).toBe(18000);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 3.1 — updateEmployee
+// ─────────────────────────────────────────────────────────────────────────────
+describe('hr.updateEmployee', () => {
+  beforeEach(cleanupEmployees);
+  afterAll(async () => { await closeDb(); });
+
+  it('updates editable fields and emits audit', async () => {
+    const e = await hr.createEmployee({
+      firstName: 'Juan', lastName: 'Cruz', employeeCode: 'CG-U-0001',
+      basicSalary: '20000', payFrequency: 'SEMI_MONTHLY', hiredOn: '2026-01-01',
+    });
+    const updated = await hr.updateEmployee(e.id, {
+      lastName: 'Cruzal',
+      employmentType: 'OFFICE_STAFF',
+    });
+    expect(updated.lastName).toBe('Cruzal');
+    expect(updated.employmentType).toBe('OFFICE_STAFF');
+    // Immutable fields cannot be changed
+    expect(updated.employeeCode).toBe('CG-U-0001');
+    expect(updated.id).toBe(e.id);
+  });
+
+  it('rejects changes to employeeCode, id, createdAt (silently ignored)', async () => {
+    const e = await hr.createEmployee({
+      firstName: 'A', lastName: 'B', employeeCode: 'CG-U-0002',
+      basicSalary: '1', payFrequency: 'MONTHLY', hiredOn: '2026-01-01',
+    });
+    const updated = await hr.updateEmployee(e.id, { employeeCode: 'HACKED' } as any);
+    expect(updated.employeeCode).toBe('CG-U-0002');
+  });
+
+  it('throws on missing id', async () => {
+    await expect(
+      hr.updateEmployee('00000000-0000-0000-0000-000000000000', { lastName: 'x' }),
+    ).rejects.toThrow(/not found/);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 3.2 — searchEmployees
+// ─────────────────────────────────────────────────────────────────────────────
+describe('hr.searchEmployees', () => {
+  beforeEach(async () => {
+    await cleanupEmployees();
+    await hr.createEmployee({ firstName: 'Juan', lastName: 'Cruz', employeeCode: 'CG-S-0001', basicSalary: '1', payFrequency: 'MONTHLY', hiredOn: '2026-01-01' });
+    await hr.createEmployee({ firstName: 'Maria', lastName: 'Reyes', employeeCode: 'CG-S-0002', basicSalary: '1', payFrequency: 'MONTHLY', hiredOn: '2026-01-01', employmentType: 'OFFICE_STAFF' });
+    await hr.createEmployee({ firstName: 'Pedro', lastName: 'Santos', employeeCode: 'CG-S-0003', basicSalary: '1', payFrequency: 'MONTHLY', hiredOn: '2026-01-01' });
+  });
+  afterAll(async () => { await closeDb(); });
+
+  it('fuzzy matches on name via pg_trgm', async () => {
+    const r = await hr.searchEmployees('cru');
+    const codes = r.map((e) => e.employeeCode);
+    expect(codes).toContain('CG-S-0001'); // "Juan Cruz" matches "cru"
+  });
+
+  it('exact-matches by employee_code substring', async () => {
+    const r = await hr.searchEmployees('S-0002');
+    expect(r.some((e) => e.employeeCode === 'CG-S-0002')).toBe(true);
+  });
+
+  it('respects employmentType filter', async () => {
+    const r = await hr.searchEmployees('', { employmentType: 'OFFICE_STAFF' });
+    expect(r.every((e) => e.employmentType === 'OFFICE_STAFF')).toBe(true);
+    expect(r.some((e) => e.firstName === 'Maria')).toBe(true);
+  });
+
+  it('respects limit (default 20, capped at 100)', async () => {
+    const r = await hr.searchEmployees('a', { limit: 2 });
+    expect(r.length).toBeLessThanOrEqual(2);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 3.3 — createEmployee accepts employmentType
+// ─────────────────────────────────────────────────────────────────────────────
+describe('hr.createEmployee + employmentType', () => {
+  beforeEach(cleanupEmployees);
+  afterAll(async () => { await closeDb(); });
+
+  it('accepts employmentType from input', async () => {
+    const e = await hr.createEmployee({
+      firstName: 'A', lastName: 'B', employeeCode: 'CG-T-0001',
+      basicSalary: '1', payFrequency: 'MONTHLY', hiredOn: '2026-01-01',
+      employmentType: 'OFFICE_STAFF',
+    });
+    expect(e.employmentType).toBe('OFFICE_STAFF');
+  });
+
+  it('defaults to GUARD when omitted', async () => {
+    const e = await hr.createEmployee({
+      firstName: 'A', lastName: 'B', employeeCode: 'CG-T-0002',
+      basicSalary: '1', payFrequency: 'MONTHLY', hiredOn: '2026-01-01',
+    });
+    expect(e.employmentType).toBe('GUARD');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 3.4 — createEmployee accepts BIR fields
+// ─────────────────────────────────────────────────────────────────────────────
+describe('hr.createEmployee + BIR fields', () => {
+  beforeEach(cleanupEmployees);
+  afterAll(async () => { await closeDb(); });
+
+  it('stores RDO, DOB, address fields', async () => {
+    const e = await hr.createEmployee({
+      firstName: 'A', lastName: 'B', employeeCode: 'CG-T-0003',
+      basicSalary: '1', payFrequency: 'MONTHLY', hiredOn: '2026-01-01',
+      rdoCode: '044', dateOfBirth: '1990-03-15',
+      addressLine1: '123 Rizal St', city: 'Manila', province: 'Metro Manila', postalCode: '1000',
+    });
+    expect(e.rdoCode).toBe('044');
+    expect(e.city).toBe('Manila');
+    // Drizzle returns date columns as string (YYYY-MM-DD) for pg `date` type
+    expect(e.dateOfBirth).toBe('1990-03-15');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 3.5 — bulkImportEmployees accepts new columns
+// ─────────────────────────────────────────────────────────────────────────────
+describe('hr.bulkImportEmployees + new columns', () => {
+  beforeEach(cleanupEmployees);
+  afterAll(async () => { await closeDb(); });
+
+  it('accepts employment_type + BIR columns', async () => {
+    const csv = `first_name,last_name,employee_code,basic_salary,pay_frequency,hired_on,employment_type,rdo_code,date_of_birth,address_line1,city,province,postal_code
+Juan,Cruz,CG-B-0001,20000,SEMI_MONTHLY,2026-01-01,GUARD,044,1990-01-01,123 Rizal,Manila,Metro Manila,1000
+Maria,Reyes,CG-B-0002,30000,SEMI_MONTHLY,2026-01-01,OFFICE_STAFF,044,1985-05-15,456 Bonifacio,Quezon City,Metro Manila,1100`;
+    const r = await hr.bulkImportEmployees(csv);
+    expect(r.imported).toBe(2);
+    const maria = await hr.getEmployeeByCode('CG-B-0002');
+    expect(maria?.employmentType).toBe('OFFICE_STAFF');
+    expect(maria?.rdoCode).toBe('044');
+    expect(maria?.city).toBe('Quezon City');
+  });
+
+  it('defaults employment_type to GUARD when column missing from CSV', async () => {
+    const csv = `first_name,last_name,employee_code,basic_salary,pay_frequency,hired_on
+A,B,CG-B-0003,1,MONTHLY,2026-01-01`;
+    const r = await hr.bulkImportEmployees(csv);
+    expect(r.imported).toBe(1);
+    const e = await hr.getEmployeeByCode('CG-B-0003');
+    expect(e?.employmentType).toBe('GUARD');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 3.6 — updateEmployee emits hr.employee.updated event
+// ─────────────────────────────────────────────────────────────────────────────
+describe('hr.updateEmployee event emission', () => {
+  beforeEach(async () => {
+    _resetEventsForTests();
+    await cleanupEmployees();
+  });
+  afterAll(async () => { await closeDb(); });
+
+  it('emits hr.employee.updated event', async () => {
+    const { events } = await import('@/modules/events');
+    const received: Record<string, unknown>[] = [];
+    const unsub = events.subscribe('hr.employee.updated', (payload) => {
+      received.push(payload);
+    });
+
+    const e = await hr.createEmployee({
+      firstName: 'A', lastName: 'B', employeeCode: 'CG-EV-0001',
+      basicSalary: '1', payFrequency: 'MONTHLY', hiredOn: '2026-01-01',
+    });
+    await hr.updateEmployee(e.id, { lastName: 'Changed' });
+
+    // setImmediate fires after current tick; wait a tick for delivery
+    await new Promise((resolve) => setImmediate(resolve));
+    unsub();
+
+    expect(received).toHaveLength(1);
+    expect(received[0]).toMatchObject({ id: e.id });
   });
 });

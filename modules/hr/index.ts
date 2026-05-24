@@ -1,5 +1,32 @@
-import { createEmployee, getEmployee, listEmployees, changeStatus, bulkImportEmployees } from './service';
-export type { BulkImportResult, EmployeeListItem } from './service';
+import {
+  createEmployee,
+  getEmployee,
+  getEmployeeByCode,
+  listEmployees,
+  changeStatus,
+  bulkImportEmployees,
+  updateEmployee,
+  searchEmployees,
+} from './service';
+export type { BulkImportResult, EmployeeListItem, SearchEmployeeOptions } from './service';
 
-export const hr = { createEmployee, getEmployee, listEmployees, changeStatus, bulkImportEmployees };
-export { createEmployee, getEmployee, listEmployees, changeStatus, bulkImportEmployees };
+export const hr = {
+  createEmployee,
+  getEmployee,
+  getEmployeeByCode,
+  listEmployees,
+  changeStatus,
+  bulkImportEmployees,
+  updateEmployee,
+  searchEmployees,
+};
+export {
+  createEmployee,
+  getEmployee,
+  getEmployeeByCode,
+  listEmployees,
+  changeStatus,
+  bulkImportEmployees,
+  updateEmployee,
+  searchEmployees,
+};
