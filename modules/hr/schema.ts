@@ -8,6 +8,15 @@ export const employeeStatus = pgEnum('hr_employee_status', [
 // pay_frequency. Daily rate is derived, not stored.
 export const payFrequency = pgEnum('hr_pay_frequency', ['MONTHLY', 'SEMI_MONTHLY']);
 
+export const employmentType = pgEnum('employment_type', [
+  'GUARD',
+  'OFFICE_STAFF',
+  'SUPERVISOR',
+  'DRIVER',
+  'JANITOR',
+  'OTHER',
+]);
+
 export const employees = pgTable('hr_employees', {
   id: uuid('id').primaryKey().defaultRandom(),
   employeeCode: text('employee_code').notNull(), // CGoC-facing ID, e.g. "CG-00001"
@@ -18,6 +27,7 @@ export const employees = pgTable('hr_employees', {
   phone: text('phone'),
   basicSalary: numeric('basic_salary', { precision: 12, scale: 2 }).notNull(),
   payFrequency: payFrequency('pay_frequency').notNull().default('SEMI_MONTHLY'),
+  employmentType: employmentType('employment_type').notNull().default('GUARD'),
   status: employeeStatus('status').notNull().default('hired'),
   hiredOn: date('hired_on').notNull(),
   terminatedOn: date('terminated_on'),
