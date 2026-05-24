@@ -1,8 +1,9 @@
 import Link from 'next/link';
 import { assignments } from '@/modules/assignments';
 import { clients } from '@/modules/clients';
+import { PageShell } from '@/components/page-shell';
 import { AssignForm } from './assign-form';
-import { EndAssignmentRow } from './end-assignment-row';
+import { AssignmentsListBody } from './assignments-list-body';
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
@@ -21,17 +22,12 @@ export default async function AssignmentsPage() {
   const blocked = !hasGuards || !hasDetachments;
 
   return (
-    <>
-      <header className="page-header">
-        <div className="breadcrumb">Sentinel · Operations</div>
-        <h1 className="page-title">Assignments</h1>
-        <p className="page-sub">
-          Who&rsquo;s working where. Assign an employee to a detachment, end an
-          assignment when the contract changes or the employee moves on. An employee
-          can have only one active assignment at a time.
-        </p>
-      </header>
-
+    <PageShell
+      breadcrumb={<>Sentinel · Operations · Assignments</>}
+      title="Assignments"
+      description="Who's working where. Assign an employee to a detachment, end an assignment when the contract changes or the employee moves on. An employee can have only one active assignment at a time."
+      footerHint="Select rows to transfer or end in bulk. Use the form above to add one assignment at a time."
+    >
       <div className="page-toolbar">
         <div className="page-toolbar-meta">
           {active.length} active {active.length === 1 ? 'assignment' : 'assignments'}
@@ -64,52 +60,13 @@ export default async function AssignmentsPage() {
             ) : null}
           </div>
         </div>
-      ) : active.length === 0 ? (
-        <div className="empty-state">
-          <h3>No active assignments</h3>
-          <p>Use the &ldquo;Assign an employee&rdquo; button above to put an employee on a detachment.</p>
-        </div>
       ) : (
-        <div className="table-wrap">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Employee</th>
-                <th>Client &amp; detachment</th>
-                <th>Started</th>
-                <th aria-label="Actions"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {active.map((a) => (
-                <tr key={a.id}>
-                  <td>
-                    <div className="cell-name">
-                      {a.employee.lastName}, {a.employee.firstName}
-                    </div>
-                    <div className="cell-sub" style={{ fontFamily: 'var(--ff-mono)' }}>
-                      {a.employee.employeeCode}
-                    </div>
-                  </td>
-                  <td>
-                    <div className="cell-name">{a.detachment.name}</div>
-                    <div className="cell-sub">{a.client.name}</div>
-                  </td>
-                  <td className="cell-num">{a.startDate}</td>
-                  <td>
-                    <EndAssignmentRow
-                      assignmentId={a.id}
-                      today={asOf}
-                      employeeName={`${a.employee.firstName} ${a.employee.lastName}`}
-                      detachmentName={a.detachment.name}
-                    />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <AssignmentsListBody
+          rows={active}
+          clientsWithDetachments={clientsWithDetachments}
+          today={asOf}
+        />
       )}
-    </>
+    </PageShell>
   );
 }
