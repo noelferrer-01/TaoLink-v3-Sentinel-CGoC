@@ -46,7 +46,7 @@ export function ImportForm() {
           <div className="import-result-summary">
             <strong className="numeric">{state.imported}</strong>
             <span>
-              {state.imported === 1 ? 'guard imported.' : 'guards imported.'}
+              {state.imported === 1 ? 'employee imported.' : 'employees imported.'}
             </span>
           </div>
 

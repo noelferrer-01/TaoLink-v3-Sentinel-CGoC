@@ -157,7 +157,19 @@ export function DataTable<TRow>({
             <button
               key={action.label}
               className={action.variant === 'ghost' ? 'btn btn--ghost' : 'btn btn--ochre'}
-              style={{ fontSize: '0.8125rem', padding: '0.375rem 0.875rem' }}
+              style={
+                action.variant === 'ghost'
+                  ? {
+                      fontSize: '0.8125rem',
+                      padding: '0.375rem 0.875rem',
+                      // The bulk-action bar is dark navy; ghost's default ink-on-paper colors
+                      // are invisible there. Override for legibility on the dark bar.
+                      background: 'transparent',
+                      color: 'var(--paper)',
+                      borderColor: 'rgba(255,255,255,0.35)',
+                    }
+                  : { fontSize: '0.8125rem', padding: '0.375rem 0.875rem' }
+              }
               onClick={() => action.onClick(selectedKeys!)}
             >
               {action.label}

@@ -297,8 +297,9 @@ h1, h2, h3, h4, h5 {
 
 .admin-main {
   padding: 2.75rem 3.25rem 4rem;
-  max-width: 1080px;
   width: 100%;
+  /* Body fills the screen so right padding matches left visually. Line-length is
+     constrained per-element (e.g. `.page-sub` uses max-width: 62ch). */
 }
 
 .page-header {
@@ -326,7 +327,7 @@ h1, h2, h3, h4, h5 {
   margin: 0.875rem 0 0;
   color: var(--ink-soft);
   max-width: 62ch;
-  font-size: 1.0625rem;
+  font-size: 0.9375rem; /* 15px — matches body */
   line-height: 1.55;
 }
 

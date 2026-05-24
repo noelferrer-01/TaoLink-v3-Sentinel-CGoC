@@ -30,14 +30,21 @@ export function SearchInput({
   'aria-label': ariaLabel = 'Search',
   id,
 }: SearchInputProps) {
-  // Local display value (updates immediately on keystroke)
+  // Local display value (updates immediately on keystroke).
   const [local, setLocal] = useState(value);
-  // Keep local in sync when parent resets value externally
-  const prevValueRef = useRef(value);
-  if (prevValueRef.current !== value && local !== value) {
-    setLocal(value);
-    prevValueRef.current = value;
-  }
+  // Mirror local into a ref so the useEffect below can compare without re-running on every keystroke.
+  const localRef = useRef(local);
+  localRef.current = local;
+
+  // Sync down from parent — but only when parent's value diverges from what we last set locally.
+  // Reason: during typing, the debounce means parent's `value` lags `local`. We must NOT
+  // overwrite `local` in that window. Only react when parent's value differs from local
+  // (= external reset, e.g. "Clear filters" button).
+  useEffect(() => {
+    if (value !== localRef.current) {
+      setLocal(value);
+    }
+  }, [value]);
 
   // Debounce: fire onChange after delay
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
