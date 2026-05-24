@@ -20,6 +20,7 @@ export default defineConfig({
       '@/app': path.resolve(__dirname, 'app'),
       '@/core': path.resolve(__dirname, 'core'),
       '@/modules': path.resolve(__dirname, 'modules'),
+      '@/components': path.resolve(__dirname, 'components'),
     },
   },
 });
