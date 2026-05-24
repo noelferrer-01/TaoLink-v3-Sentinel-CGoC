@@ -300,3 +300,44 @@ export async function listPayslips(filter: {
 
   return db.select().from(payslips).where(where);
 }
+
+// ─── Read helpers for the UI ─────────────────────────────────────────────────
+
+export async function listPayRuns(): Promise<PayRun[]> {
+  return getDb().select().from(payRuns).orderBy(desc(payRuns.periodStart));
+}
+
+export async function getPayRun(id: string): Promise<PayRun | null> {
+  const rows = await getDb().select().from(payRuns).where(eq(payRuns.id, id)).limit(1);
+  return rows[0] ?? null;
+}
+
+export type PayslipWithEmployee = Payslip & {
+  employee: { id: string; employeeCode: string; firstName: string; lastName: string };
+};
+
+export async function listPayslipsWithEmployee(payRunId: string): Promise<PayslipWithEmployee[]> {
+  const db = getDb();
+  const rows = await db
+    .select({
+      payslip: payslips,
+      employeeId: employees.id,
+      employeeCode: employees.employeeCode,
+      firstName: employees.firstName,
+      lastName: employees.lastName,
+    })
+    .from(payslips)
+    .innerJoin(employees, eq(employees.id, payslips.employeeId))
+    .where(eq(payslips.payRunId, payRunId))
+    .orderBy(employees.lastName, employees.firstName);
+
+  return rows.map((r) => ({
+    ...r.payslip,
+    employee: {
+      id: r.employeeId,
+      employeeCode: r.employeeCode,
+      firstName: r.firstName,
+      lastName: r.lastName,
+    },
+  }));
+}
