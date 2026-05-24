@@ -7,13 +7,14 @@ export default function ImportEmployeesPage() {
       <header className="page-header">
         <div className="breadcrumb">
           <Link href="/employees" style={{ textDecoration: 'none' }}>
-            Guards
+            Employees
           </Link>{' '}
           · Import
         </div>
-        <h1 className="page-title">Import guards from CSV</h1>
+        <h1 className="page-title">Import employees from CSV</h1>
         <p className="page-sub">
-          Upload a CSV with one row per guard. Sentinel checks every row{' '}
+          Upload a CSV with one row per employee — guards, office staff,
+          supervisors, anyone on the CGoC payroll. Sentinel checks every row{' '}
           <em>before</em> importing anything and tells you exactly what to fix
           if a row has a problem. Good rows are imported; bad rows are skipped
           with a clear reason.

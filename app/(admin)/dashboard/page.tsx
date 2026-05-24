@@ -41,9 +41,9 @@ export default async function DashboardPage() {
         <li className="step">
           <div className="step-number">02</div>
           <div className="step-body">
-            <h3>Import your guards</h3>
+            <h3>Import your employees</h3>
             <p>
-              Upload a CSV with each guard&rsquo;s name, monthly rate, hire
+              Upload a CSV with each employee&rsquo;s name, monthly rate, hire
               date, and pay schedule. Sentinel checks every row and tells you
               exactly what to fix before importing anything.
             </p>
@@ -60,7 +60,7 @@ export default async function DashboardPage() {
           <div className="step-body">
             <h3>Run your first payroll</h3>
             <p>
-              Once guards are assigned and you&rsquo;ve recorded their daily
+              Once employees are assigned and you&rsquo;ve recorded their daily
               time, close the period and Sentinel computes payslips with the
               four legal deductions: SSS, PhilHealth, Pag-IBIG, and
               withholding&nbsp;tax.

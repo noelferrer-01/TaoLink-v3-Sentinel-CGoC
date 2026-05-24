@@ -32,13 +32,13 @@ export function AssignForm({
           disabled={!hasGuards || !hasDetachments}
           title={
             !hasGuards
-              ? 'No unassigned guards. Add or import guards first.'
+              ? 'No unassigned employees. Add or import employees first.'
               : !hasDetachments
                 ? 'No detachments. Add a client and a detachment first.'
                 : ''
           }
         >
-          Assign a guard
+          Assign an employee
         </button>
       </div>
     );
@@ -47,7 +47,7 @@ export function AssignForm({
   return (
     <div className="card" style={{ marginBottom: '1.5rem' }}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: '1rem' }}>
-        <h2 style={{ fontSize: '1.125rem', fontWeight: 500 }}>Assign a guard</h2>
+        <h2 style={{ fontSize: '1.125rem', fontWeight: 500 }}>Assign an employee</h2>
         <button
           type="button"
           onClick={() => setOpen(false)}
@@ -68,10 +68,10 @@ export function AssignForm({
 
       <form action={formAction} className="form-stack">
         <label className="field">
-          <span className="field-label">Guard</span>
+          <span className="field-label">Employee</span>
           <select className="input" name="employeeId" required defaultValue="">
             <option value="" disabled>
-              Pick a guard…
+              Pick an employee…
             </option>
             {assignableEmployees.map((e) => (
               <option key={e.id} value={e.id}>

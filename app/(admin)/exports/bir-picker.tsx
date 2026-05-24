@@ -17,7 +17,7 @@ export function BirPicker({
   if (employees.length === 0) {
     return (
       <p style={{ color: 'var(--muted)' }}>
-        No guards yet. Import or add at least one guard.
+        No employees yet. Import or add at least one employee.
       </p>
     );
   }
@@ -25,7 +25,7 @@ export function BirPicker({
   return (
     <div className="form-stack">
       <label className="field">
-        <span className="field-label">Guard</span>
+        <span className="field-label">Employee</span>
         <select
           className="input"
           value={employeeId}

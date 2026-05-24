@@ -42,7 +42,7 @@ export default async function DTRPage({
         <div className="breadcrumb">Sentinel · Payroll</div>
         <h1 className="page-title">Time records</h1>
         <p className="page-sub">
-          Record which days each guard worked. When you close the period,
+          Record which days each employee worked. When you close the period,
           Sentinel locks the DTR and computes payslips automatically. Sentinel
           uses two cutoffs per month (the 1<sup>st</sup>–15<sup>th</sup> and
           the 16<sup>th</sup>–end of month).
@@ -74,16 +74,16 @@ export default async function DTRPage({
           ) : (
             <span style={{ color: 'var(--success)' }}>● Open</span>
           )}{' '}
-          · {totalDays} days · {guards.length} active {guards.length === 1 ? 'guard' : 'guards'}
+          · {totalDays} days · {guards.length} active {guards.length === 1 ? 'employee' : 'employees'}
         </div>
       </form>
 
       {guards.length === 0 ? (
         <div className="empty-state">
-          <h3>No guards to record for this period</h3>
+          <h3>No employees to record for this period</h3>
           <p>
-            Time records are only created for guards with an active assignment.
-            Assign at least one guard to a detachment first, then come back
+            Time records are only created for employees with an active assignment.
+            Assign at least one employee to a detachment first, then come back
             here.
           </p>
           <div className="empty-state-actions">
@@ -98,7 +98,7 @@ export default async function DTRPage({
             <div className="card" style={{ marginBottom: '1.5rem' }}>
               <div style={{ fontSize: '0.9375rem', marginBottom: '0.75rem', color: 'var(--ink-soft)' }}>
                 <strong>Quick fill:</strong> mark every empty day in this
-                period as a worked day (7am–3pm) for every active guard. You
+                period as a worked day (7am–3pm) for every active employee. You
                 can override individual days later (coming soon — for now, use
                 the database directly for exceptions).
               </div>
@@ -110,7 +110,7 @@ export default async function DTRPage({
             <table className="table">
               <thead>
                 <tr>
-                  <th>Guard</th>
+                  <th>Employee</th>
                   <th>Detachment</th>
                   <th className="cell-num">Days recorded</th>
                   <th aria-label="Actions"></th>

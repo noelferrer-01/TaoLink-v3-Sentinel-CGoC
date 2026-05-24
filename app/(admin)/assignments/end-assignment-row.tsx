@@ -8,12 +8,12 @@ const initialState: FormState = { kind: 'idle' };
 export function EndAssignmentRow({
   assignmentId,
   today,
-  guardName,
+  employeeName,
   detachmentName,
 }: {
   assignmentId: string;
   today: string;
-  guardName: string;
+  employeeName: string;
   detachmentName: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -36,7 +36,7 @@ export function EndAssignmentRow({
   return (
     <form action={formAction} style={{ display: 'grid', gap: '0.625rem', minWidth: 280 }}>
       <p style={{ margin: 0, fontSize: '0.8125rem', color: 'var(--ink-soft)' }}>
-        Ending <strong>{guardName}</strong>&rsquo;s assignment at{' '}
+        Ending <strong>{employeeName}</strong>&rsquo;s assignment at{' '}
         <strong>{detachmentName}</strong>.
       </p>
       <label className="field">

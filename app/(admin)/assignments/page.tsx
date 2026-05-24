@@ -26,8 +26,8 @@ export default async function AssignmentsPage() {
         <div className="breadcrumb">Sentinel · Operations</div>
         <h1 className="page-title">Assignments</h1>
         <p className="page-sub">
-          Who&rsquo;s working where. Assign a guard to a detachment, end an
-          assignment when the contract changes or the guard moves on. A guard
+          Who&rsquo;s working where. Assign an employee to a detachment, end an
+          assignment when the contract changes or the employee moves on. An employee
           can have only one active assignment at a time.
         </p>
       </header>
@@ -48,13 +48,13 @@ export default async function AssignmentsPage() {
         <div className="empty-state">
           <h3>Nothing assigned yet</h3>
           <p>
-            Before you can assign anyone, you need at least one guard on file{' '}
+            Before you can assign anyone, you need at least one employee on file{' '}
             <strong>and</strong> at least one client with a detachment.
           </p>
           <div className="empty-state-actions">
             {!hasGuards ? (
               <Link href="/employees/import" className="btn btn--ghost">
-                Import guards →
+                Import employees →
               </Link>
             ) : null}
             {!hasDetachments ? (
@@ -67,14 +67,14 @@ export default async function AssignmentsPage() {
       ) : active.length === 0 ? (
         <div className="empty-state">
           <h3>No active assignments</h3>
-          <p>Use the &ldquo;Assign a guard&rdquo; button above to put a guard on a detachment.</p>
+          <p>Use the &ldquo;Assign an employee&rdquo; button above to put an employee on a detachment.</p>
         </div>
       ) : (
         <div className="table-wrap">
           <table className="table">
             <thead>
               <tr>
-                <th>Guard</th>
+                <th>Employee</th>
                 <th>Client &amp; detachment</th>
                 <th>Started</th>
                 <th aria-label="Actions"></th>
@@ -100,7 +100,7 @@ export default async function AssignmentsPage() {
                     <EndAssignmentRow
                       assignmentId={a.id}
                       today={asOf}
-                      guardName={`${a.employee.firstName} ${a.employee.lastName}`}
+                      employeeName={`${a.employee.firstName} ${a.employee.lastName}`}
                       detachmentName={a.detachment.name}
                     />
                   </td>

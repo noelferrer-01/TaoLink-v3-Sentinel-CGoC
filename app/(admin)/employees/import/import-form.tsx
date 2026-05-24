@@ -31,7 +31,7 @@ export function ImportForm() {
         </label>
 
         <button type="submit" className="btn" disabled={pending}>
-          {pending ? 'Importing…' : 'Import guards'}
+          {pending ? 'Importing…' : 'Import employees'}
         </button>
       </form>
 
@@ -69,12 +69,12 @@ export function ImportForm() {
             </>
           ) : (
             <p style={{ marginTop: '0.75rem', color: 'var(--ink-soft)' }}>
-              Every row checked out. You can view the new guards on the{' '}
+              Every row checked out. You can view the new employees on the{' '}
               <Link
                 href="/employees"
                 style={{ color: 'var(--navy)', textDecoration: 'underline' }}
               >
-                Guards page
+                Employees page
               </Link>
               .
             </p>

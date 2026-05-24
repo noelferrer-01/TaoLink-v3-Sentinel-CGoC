@@ -12,7 +12,7 @@ export default async function ClientsPage() {
         <h1 className="page-title">Clients</h1>
         <p className="page-sub">
           The companies that pay you for guard services. Each client has one or
-          more detachments — the actual locations where guards are deployed.
+          more detachments — the actual locations where employees are deployed.
         </p>
       </header>
 
@@ -29,7 +29,7 @@ export default async function ClientsPage() {
           <h3>No clients yet</h3>
           <p>
             Add your first client to start. Once it&rsquo;s in, you can add
-            detachments and then assign guards to those detachments.
+            detachments and then assign employees to those detachments.
           </p>
         </div>
       ) : (

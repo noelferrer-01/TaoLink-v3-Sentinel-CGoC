@@ -25,7 +25,7 @@ export default async function ClientDetailPage({
         <h1 className="page-title">{client.name}</h1>
         <p className="page-sub">
           Manage the detachments &mdash; the actual locations where this
-          client&rsquo;s guards are deployed. You&rsquo;ll assign guards to
+          client&rsquo;s employees are deployed. You&rsquo;ll assign employees to
           detachments, not directly to clients.
         </p>
       </header>
@@ -62,7 +62,7 @@ export default async function ClientDetailPage({
           <h3>No detachments yet</h3>
           <p>
             Add the first detachment for {client.name}. A detachment is the
-            physical location where guards work — for example a mall, an office
+            physical location where employees work — for example a mall, an office
             tower, or a warehouse.
           </p>
         </div>

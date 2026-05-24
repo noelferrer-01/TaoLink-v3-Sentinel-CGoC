@@ -6,7 +6,7 @@ import { assignments } from '@/modules/assignments';
 import { getSessionFromCookie } from '@/modules/auth';
 
 const assignSchema = z.object({
-  employeeId: z.string().uuid('Pick a guard from the dropdown.'),
+  employeeId: z.string().uuid('Pick an employee from the dropdown.'),
   detachmentId: z.string().uuid('Pick a detachment from the dropdown.'),
   startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Pick a start date.'),
 });
@@ -46,10 +46,10 @@ export async function assignAction(
       actorUserId: session.user.id,
     });
     revalidatePath('/assignments');
-    return { kind: 'success', message: 'Guard assigned.' };
+    return { kind: 'success', message: 'Employee assigned.' };
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
-    return { kind: 'error', message: `Couldn't assign the guard: ${message}` };
+    return { kind: 'error', message: `Couldn't assign the employee: ${message}` };
   }
 }
 

@@ -52,7 +52,7 @@ export default async function PayRunPage({
           <h3>No payslips for this run</h3>
           <p>
             This pay run was created but produced zero payslips. That usually
-            means no guards had DTR entries for the period.
+            means no employees had DTR entries for the period.
           </p>
         </div>
       ) : (
@@ -60,7 +60,7 @@ export default async function PayRunPage({
           <table className="table">
             <thead>
               <tr>
-                <th>Guard</th>
+                <th>Employee</th>
                 <th className="cell-num">Days</th>
                 <th className="cell-num">Gross</th>
                 <th className="cell-num">SSS</th>

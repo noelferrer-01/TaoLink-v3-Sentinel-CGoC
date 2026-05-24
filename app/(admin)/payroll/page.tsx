@@ -28,7 +28,7 @@ export default async function PayrollPage() {
         <div className="breadcrumb">Sentinel · Payroll</div>
         <h1 className="page-title">Pay runs</h1>
         <p className="page-sub">
-          One row per closed DTR period. Open a pay run to see every guard&rsquo;s
+          One row per closed DTR period. Open a pay run to see every employee&rsquo;s
           payslip with the four statutory deductions (SSS, PhilHealth,
           Pag-IBIG, withholding tax). Lock the run when you&rsquo;re ready to
           file government reports.
