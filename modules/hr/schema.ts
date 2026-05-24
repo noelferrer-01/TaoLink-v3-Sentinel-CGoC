@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, numeric, date, pgEnum, timestamp, unique, index } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, varchar, numeric, date, pgEnum, timestamp, unique, index } from 'drizzle-orm/pg-core';
 
 export const employeeStatus = pgEnum('hr_employee_status', [
   'applicant', 'hired', 'deployed', 'reliever', 'floating', 'on_leave', 'terminated',
@@ -37,6 +37,15 @@ export const employees = pgTable('hr_employees', {
   philhealthNumber: text('philhealth_number'),
   pagibigNumber: text('pagibig_number'),
   tinNumber: text('tin_number'),
+  // BIR 2316 fields — nullable; populated on file. Phase 7 PDF export warns on
+  // missing values rather than blocking the export.
+  rdoCode: varchar('rdo_code', { length: 3 }),         // Revenue District Office, e.g. '044'
+  dateOfBirth: date('date_of_birth'),
+  addressLine1: text('address_line1'),
+  addressLine2: text('address_line2'),
+  city: text('city'),
+  province: text('province'),
+  postalCode: varchar('postal_code', { length: 4 }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
