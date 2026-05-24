@@ -5,33 +5,20 @@ import Link from 'next/link';
 import { useMemo, useState, useTransition } from 'react';
 import { DataTable, type ColumnDef, type SortState } from '@/components/data-table';
 import { SearchInput } from '@/components/search-input';
-
-const EMPLOYMENT_TYPE_LABELS: Record<string, string> = {
-  GUARD: 'Guard',
-  OFFICE_STAFF: 'Office staff',
-  SUPERVISOR: 'Supervisor',
-  DRIVER: 'Driver',
-  JANITOR: 'Janitor',
-  OTHER: 'Other',
-};
-
-const STATUS_LABELS: Record<string, string> = {
-  applicant: 'Applicant',
-  hired: 'Hired',
-  deployed: 'Deployed',
-  reliever: 'Reliever',
-  floating: 'Floating',
-  on_leave: 'On leave',
-  terminated: 'Terminated',
-};
+import {
+  EMPLOYMENT_TYPE_LABELS,
+  STATUS_LABELS,
+  type EmploymentType,
+  type Status,
+} from '@/modules/hr/labels';
 
 export interface EmployeeRow {
   id: string;
   employeeCode: string;
   firstName: string;
   lastName: string;
-  employmentType: string;
-  status: string;
+  employmentType: EmploymentType;
+  status: Status;
 }
 
 interface Props {
@@ -187,21 +174,11 @@ export function EmployeesListBody({ initialQuery, initialType, employees, hasAny
           />
         </div>
         <select
+          className="input"
           value={type}
           onChange={(e) => handleTypeChange(e.target.value)}
           aria-label="Filter by employment type"
-          style={{
-            padding: '0.5rem 2.5rem 0.5rem 0.75rem',
-            border: '1px solid var(--rule)',
-            borderRadius: '4px',
-            background:
-              "var(--surface, white) url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' stroke='%23677' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>\") no-repeat right 0.85rem center",
-            fontSize: '0.875rem',
-            fontFamily: 'inherit',
-            appearance: 'none',
-            WebkitAppearance: 'none',
-            MozAppearance: 'none',
-          }}
+          style={{ fontSize: '0.875rem' }}
         >
           <option value="">All types</option>
           {Object.entries(EMPLOYMENT_TYPE_LABELS).map(([value, label]) => (

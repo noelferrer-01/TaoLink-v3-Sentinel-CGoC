@@ -34,14 +34,18 @@ export default async function EmployeesPage({
   }));
 
   const toolbar = (
-    <Link href="/employees/import" className="btn">
-      Import a CSV →
-    </Link>
+    <div style={{ display: 'flex', gap: '0.5rem' }}>
+      <Link href="/employees/new" className="btn">
+        + Add employee
+      </Link>
+      <Link href="/employees/import" className="btn btn--ghost">
+        Import a CSV
+      </Link>
+    </div>
   );
 
   return (
     <PageShell
-      breadcrumb="Sentinel · Operations"
       title="Employees"
       description="Everyone on the CGoC payroll — guards, office staff, supervisors, drivers. Import a CSV to add many at once, or add them one at a time."
       toolbar={toolbar}

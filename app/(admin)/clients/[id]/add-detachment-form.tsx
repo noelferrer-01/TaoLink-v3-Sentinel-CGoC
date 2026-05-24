@@ -10,7 +10,7 @@ export function AddDetachmentForm({ clientId }: { clientId: string }) {
   const boundAction = createDetachmentAction.bind(null, clientId);
   const [state, formAction, pending] = useActionState(boundAction, initialState);
 
-  if (!open && state.kind !== 'success') {
+  if (!open) {
     return (
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
         <button type="button" className="btn" onClick={() => setOpen(true)}>
