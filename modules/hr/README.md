@@ -14,10 +14,13 @@ import { hr, type BulkImportResult } from '@/modules/hr';
 
 | Function | Signature | What it does |
 |---|---|---|
-| `hr.createEmployee` | `(input: CreateEmployeeInput) => Promise<Employee>` | Insert one employee. Auto-audits + publishes `hr.employee.created`. Throws plain-language error on duplicate email. |
+| `hr.createEmployee` | `(input: CreateEmployeeInput) => Promise<Employee>` | Insert one employee. Auto-audits + publishes `hr.employee.created`. Throws plain-language error on duplicate email. Accepts `employmentType` (defaults to `'GUARD'`) and all BIR 2316 fields (`rdoCode`, `dateOfBirth`, `addressLine1/2`, `city`, `province`, `postalCode`). |
 | `hr.getEmployee` | `(id: string) => Promise<Employee \| null>` | Read by id. |
+| `hr.getEmployeeByCode` | `(code: string) => Promise<Employee \| null>` | Read by `employeeCode`. Useful for post-import lookups and tests. |
+| `hr.updateEmployee` | `(id: string, patch: UpdateEmployeePatch, actorUserId?) => Promise<Employee>` | Partial update. Immutable fields (`id`, `employeeCode`, `createdAt`) are silently stripped from the patch. Throws `[hr/updateEmployee] employee <id> not found` if the row doesn't exist. Audits with before/after snapshot + `changedFields` list. Publishes `hr.employee.updated` event. |
+| `hr.searchEmployees` | `(query: string, opts?: SearchEmployeeOptions) => Promise<Employee[]>` | Fuzzy search via `pg_trgm` `similarity()` on full name, with OR fallback to `ILIKE` on `employeeCode`. Supports `employmentType` and `status` filters. Default limit 20, hard cap 100. Returns results ordered by similarity score (descending) when a query is provided, or by `lastName` when no query. |
 | `hr.changeStatus` | `(id, next, reason, opts?) => Promise<Employee>` | Move through the state machine. Sets `terminatedOn` when `next === 'terminated'`. Audits + publishes `hr.employee.status_changed`. Throws on disallowed transitions. |
-| `hr.bulkImportEmployees` | `(csvText: string, opts?) => Promise<BulkImportResult>` | Parse a CSV (columns: `employee_code,first_name,last_name,email,basic_salary,pay_frequency,hired_on`), validate per row, insert valid rows in one batch, return `{ imported, errors }`. Per-row failures do NOT abort the batch — they are reported in `errors`. Plain-language error messages per the UX rule. |
+| `hr.bulkImportEmployees` | `(csvText: string, opts?) => Promise<BulkImportResult>` | Parse a CSV, validate per row, insert valid rows in one batch, return `{ imported, errors }`. Per-row failures do NOT abort the batch. Accepts new columns: `employment_type`, `rdo_code`, `date_of_birth`, `address_line1`, `address_line2`, `city`, `province`, `postal_code`. All new columns are optional. |
 
 `Employee`, `NewEmployee`, and `BulkImportResult` types are re-exported from the entry point.
 
@@ -48,13 +51,21 @@ The bulk-import CSV requires these headers (case-sensitive, in any order):
 | `basic_salary` | yes | Positive number. Stored as `numeric(12,2)`. |
 | `pay_frequency` | no | `MONTHLY` or `SEMI_MONTHLY`. Defaults to `SEMI_MONTHLY` if blank or column missing. |
 | `hired_on` | yes | `YYYY-MM-DD`. |
+| `employment_type` | no | `GUARD`, `OFFICE_STAFF`, `SUPERVISOR`, `DRIVER`, `JANITOR`, or `OTHER`. Defaults to `GUARD`. |
+| `rdo_code` | no | Up to 3 characters. BIR Revenue District Office code, e.g. `044`. |
+| `date_of_birth` | no | `YYYY-MM-DD`. BIR 2316 field. |
+| `address_line1` | no | Street address. |
+| `address_line2` | no | Unit / barangay. |
+| `city` | no | City or municipality. |
+| `province` | no | Province or region (e.g. `Metro Manila`). |
+| `postal_code` | no | Up to 4 characters. |
 
 ## Dependencies
 
 - **Env:** `DATABASE_URL`.
-- **Modules:** `@/modules/audit` (writes audit rows on every mutation), `@/modules/events` (publishes `hr.employee.created` and `hr.employee.status_changed`). Both are non-fatal — a failure in audit or events does NOT roll back the HR insert.
-- **External:** `papaparse` (CSV parsing), `zod` (per-row validation).
-- **Tables:** `hr_employees`. Enums: `hr_employee_status`, `hr_pay_frequency`.
+- **Modules:** `@/modules/audit` (writes audit rows on every mutation), `@/modules/events` (publishes `hr.employee.created`, `hr.employee.status_changed`, and `hr.employee.updated`). Both are non-fatal — a failure in audit or events does NOT roll back the HR insert.
+- **External:** `papaparse` (CSV parsing), `zod` (per-row validation), `pg_trgm` Postgres extension (required for `searchEmployees`).
+- **Tables:** `hr_employees`. Enums: `hr_employee_status`, `hr_pay_frequency`, `hr_employment_type`.
 
 ## Known failure modes
 
@@ -90,3 +101,25 @@ The bulk-import CSV requires these headers (case-sensitive, in any order):
 ### Partial state if `audit.record` or `events.publish` fails mid-loop
 **Trigger:** `bulkImportEmployees` inserts succeed but a downstream audit/publish call throws.
 **Fix:** the employees are in the DB; the audit trail is incomplete. Today this mirrors the single-create path. Wrapping `insert + audit + publish` in a `db.transaction` is tracked as a follow-up.
+
+### pg_trgm extension missing
+**Error:** `function similarity(text, text) does not exist` (SQL error from `searchEmployees`).
+**Trigger:** the `pg_trgm` extension was not enabled on the database. It is enabled via the Phase 1 migration `0009_slice2_pg_trgm.sql` (or equivalent).
+**Fix:** connect to the DB and run `CREATE EXTENSION IF NOT EXISTS pg_trgm;`, then re-run the migration.
+
+### updateEmployee: changes to immutable fields silently ignored
+**Trigger:** caller passes `id`, `employeeCode`, or `createdAt` in the patch.
+**Fix:** this is by design — the patch is sanitised server-side before the DB write. The returned row will always reflect the original immutable values. No error is thrown; the extra keys are silently dropped.
+
+### updateEmployee: throws on missing id
+**Error:** `[hr/updateEmployee] employee <id> not found`
+**Trigger:** the UUID passed as `id` does not match any row in `hr_employees`.
+**Fix:** verify the id with `getEmployee(id)` before calling `updateEmployee`.
+
+### Bulk import: employment_type defaults to GUARD
+**Trigger:** the `employment_type` column is absent or blank in the CSV.
+**Fix:** this is by design — guards are the default employment type at CGoC. To assign a different type, include the column with one of `GUARD`, `OFFICE_STAFF`, `SUPERVISOR`, `DRIVER`, `JANITOR`, `OTHER`.
+
+### Bulk import: BIR fields silently skipped when absent
+**Trigger:** any of `rdo_code`, `date_of_birth`, `address_*` columns are absent or blank in the CSV.
+**Fix:** these fields are nullable; a missing value simply stores `NULL`. They can be added later via `updateEmployee`. The BIR 2316 export warns on missing values but does not block the export.
