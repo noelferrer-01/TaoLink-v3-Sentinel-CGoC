@@ -4,6 +4,7 @@ import {
   updateClient,
   deleteClient,
   listClients,
+  listClientsPage,
   listClientsWithDetachments,
   createDetachment,
   getDetachment,
@@ -11,9 +12,18 @@ import {
   listDetachments,
   getDetachmentDeploymentSummary,
   listDetachmentsWithDeployment,
+  listDetachmentsWithDeploymentPage,
 } from './service';
 
-export type { ClientWithDetachments, DeploymentSummary, DetachmentWithDeployment } from './service';
+export type {
+  ClientWithDetachments,
+  DeploymentSummary,
+  DetachmentWithDeployment,
+  ListClientsPageOptions,
+  ListClientsPageResult,
+  ListDetachmentsWithDeploymentPageOptions,
+  ListDetachmentsWithDeploymentPageResult,
+} from './service';
 
 export const clients = {
   createClient,
@@ -21,6 +31,7 @@ export const clients = {
   updateClient,
   deleteClient,
   listClients,
+  listClientsPage,
   listClientsWithDetachments,
   createDetachment,
   getDetachment,
@@ -28,6 +39,7 @@ export const clients = {
   listDetachments,
   getDetachmentDeploymentSummary,
   listDetachmentsWithDeployment,
+  listDetachmentsWithDeploymentPage,
 };
 export {
   createClient,
@@ -35,6 +47,7 @@ export {
   updateClient,
   deleteClient,
   listClients,
+  listClientsPage,
   listClientsWithDetachments,
   createDetachment,
   getDetachment,
@@ -42,4 +55,5 @@ export {
   listDetachments,
   getDetachmentDeploymentSummary,
   listDetachmentsWithDeployment,
+  listDetachmentsWithDeploymentPage,
 };

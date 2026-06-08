@@ -63,12 +63,12 @@ If any criterion below ever flips from ✓ to ✗ on `main`, Slice 2 is no longe
 ### 7. Assignments list — paginated + multi-select + bulk actions + typeahead pickers
 **Status:** ✓
 **Evidence:**
-- Pagination at 50/page on the page itself ([`app/(admin)/assignments/page.tsx`](../../app/%28admin%29/assignments/page.tsx)) via `?page=N` searchParam; backend support in `assignments.listActiveAssignments(asOf, {limit, offset})` returning `{rows, total}` ([`modules/assignments/service.ts`](../../modules/assignments/service.ts)).
-- Pagination control: shared [`components/pagination.tsx`](../../components/pagination.tsx) — readout (`Showing 1–50 of 90 · page 1 of 2`) + Prev/Next links that preserve other URL params.
+- Pagination at 50/page (configurable 25 / 50 / 100 / 200 via the size dropdown) on the page itself ([`app/(admin)/assignments/page.tsx`](../../app/%28admin%29/assignments/page.tsx)) via `?page=N` and `?size=N` searchParams; backend support in `assignments.listActiveAssignments(asOf, {limit, offset})` returning `{rows, total}` ([`modules/assignments/service.ts`](../../modules/assignments/service.ts)).
+- Pagination control: shared [`components/pagination.tsx`](../../components/pagination.tsx) + client island [`components/pagination-size-form.tsx`](../../components/pagination-size-form.tsx). Readout (`Showing 1–50 of 90 · page 1 of 2`) + Rows-per-page dropdown + Prev/Next links that preserve other URL params. The same control is used by /clients, client detail (detachments), /payroll, and the per-run payslip list — pagination is on every list table that can plausibly grow past one screen at CGoC scale, not only on the contract-mandated ones.
 - UI: [`assignments-list-body.tsx`](../../app/%28admin%29/assignments/assignments-list-body.tsx) — multi-select checkboxes, sticky bulk-action bar, bulk-end / bulk-transfer modals via `ModalShell`, result panel after each action.
 - Typeahead pickers: [`app/(admin)/assignments/_assign-form.tsx`](../../app/%28admin%29/assignments/_assign-form.tsx) uses the shared `Typeahead` component over `hr.searchEmployees` + a detachment search.
-- Verified Phase 10.5 walk: "90 active assignments" header, page 1 shows rows 1–50, page 2 shows 51–90, footer + Prev/Next render correctly. Backend test coverage in `assignments.test.ts` (tests 6 + 7 assert `{rows, total}` shape).
-**Test coverage:** `modules/assignments/assignments.test.ts` — bulkAssign / bulkEnd / bulkTransfer suites + the updated `listActiveAssignments` return-shape tests.
+- Verified Phase 10.5 walk: "90 active assignments" header, page 1 shows rows 1–50, page 2 shows 51–90, footer + Prev/Next + Rows-per-page render correctly. Backend test coverage in `assignments.test.ts` (tests 6 + 7 assert `{rows, total}` shape).
+**Test coverage:** `modules/assignments/assignments.test.ts` — bulkAssign / bulkEnd / bulkTransfer suites + the updated `listActiveAssignments` return-shape tests + the existing `list (paginated)` tests (now using deterministic seeding per cb17b6b).
 
 ### 8. Payroll calendar — per-client + resolveForPeriod + DTR/PayRun badges + frozen on run
 **Status:** ✓

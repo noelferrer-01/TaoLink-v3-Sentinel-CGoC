@@ -785,6 +785,31 @@ th.cell-num { text-align: right; }
   gap: 0.5rem;
 }
 
+.pagination__sizer {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.pagination__sizer label {
+  font-family: var(--ff-mono), monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.75rem;
+}
+
+.pagination__sizer select {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.8125rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+
 .btn--sm {
   padding: 0.35rem 0.75rem;
   font-size: 0.8125rem;

@@ -89,6 +89,44 @@ describe('clients module', () => {
     expect(list.map((c) => c.name)).toEqual(['Alpha Corp', 'Mu Industries', 'Zeta Holdings']);
   });
 
+  it('listClientsPage paginates + reports total', async () => {
+    for (let i = 1; i <= 5; i++) {
+      await clients.createClient({ name: `Client ${String(i).padStart(2, '0')}` });
+    }
+    const page1 = await clients.listClientsPage({ limit: 2, offset: 0 });
+    expect(page1.rows).toHaveLength(2);
+    expect(page1.total).toBe(5);
+    expect(page1.rows.map((c) => c.name)).toEqual(['Client 01', 'Client 02']);
+
+    const page3 = await clients.listClientsPage({ limit: 2, offset: 4 });
+    expect(page3.rows).toHaveLength(1);
+    expect(page3.total).toBe(5);
+    expect(page3.rows[0]!.name).toBe('Client 05');
+  });
+
+  it('listDetachmentsWithDeploymentPage paginates and respects clientId filter', async () => {
+    const cA = await clients.createClient({ name: 'A Corp' });
+    const cB = await clients.createClient({ name: 'B Corp' });
+    for (let i = 1; i <= 3; i++) {
+      await clients.createDetachment({ clientId: cA.id, name: `A-Post-${i}` });
+    }
+    for (let i = 1; i <= 2; i++) {
+      await clients.createDetachment({ clientId: cB.id, name: `B-Post-${i}` });
+    }
+
+    const filteredA = await clients.listDetachmentsWithDeploymentPage({ clientId: cA.id, limit: 10 });
+    expect(filteredA.total).toBe(3);
+    expect(filteredA.rows).toHaveLength(3);
+    expect(filteredA.rows.every((d) => d.clientId === cA.id)).toBe(true);
+
+    const all = await clients.listDetachmentsWithDeploymentPage({ limit: 10 });
+    expect(all.total).toBe(5);
+
+    const slice = await clients.listDetachmentsWithDeploymentPage({ limit: 2, offset: 2 });
+    expect(slice.rows).toHaveLength(2);
+    expect(slice.total).toBe(5);
+  });
+
   it('getClient returns null for unknown id', async () => {
     const result = await clients.getClient('00000000-0000-4000-8000-000000000003');
     expect(result).toBeNull();

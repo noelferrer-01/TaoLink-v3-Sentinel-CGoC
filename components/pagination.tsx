@@ -1,15 +1,38 @@
 import Link from 'next/link';
+import { PaginationSizeForm } from './pagination-size-form';
 
 /**
- * Pagination — small shared control for paginated list pages.
+ * Pagination — shared control for paginated list pages.
  *
- * Renders nothing when total <= pageSize. Otherwise renders a plain-language
- * range readout ("Showing 1–50 of 90 · page 1 of 2") + Prev / Next links that
- * carry forward all other URL params (so search + filter survive paging).
+ * Renders a plain-language range readout ("Showing 1–50 of 90 · page 1 of 2")
+ * + a page-size <select> (25/50/100/200) + Prev / Next links. The dropdown
+ * is a plain form GET to the same path so it works without client-side JS.
  *
- * Used by /assignments and /employees (Slice 2 contract criterion #7;
- * #2 implies pagination at scale). Server components only.
+ * URL params used:
+ *   ?page=N   — 1-based page index (default 1)
+ *   ?size=N   — rows per page; must be one of PAGE_SIZE_OPTIONS
+ *
+ * Used by /assignments, /employees, /clients, client detail (detachments),
+ * /payroll, and pay-run detail (payslips). Server components only.
  */
+
+export const PAGE_SIZE_OPTIONS = [25, 50, 100, 200] as const;
+export type PageSizeOption = (typeof PAGE_SIZE_OPTIONS)[number];
+export const DEFAULT_PAGE_SIZE: PageSizeOption = 50;
+
+/**
+ * Clamp a raw `?size` URL param to one of the allowlisted options.
+ * Returns DEFAULT_PAGE_SIZE for anything missing / invalid / out-of-list.
+ * Centralised here so every page hits the same allowlist (DoS guard).
+ */
+export function clampPageSize(raw: string | undefined): PageSizeOption {
+  const n = Number.parseInt(raw ?? '', 10);
+  if (!Number.isFinite(n)) return DEFAULT_PAGE_SIZE;
+  return (PAGE_SIZE_OPTIONS as readonly number[]).includes(n)
+    ? (n as PageSizeOption)
+    : DEFAULT_PAGE_SIZE;
+}
+
 export interface PaginationProps {
   total: number;
   page: number;       // 1-based
@@ -30,20 +53,29 @@ export function Pagination({
   basePath,
   unitLabel = 'row',
 }: PaginationProps) {
-  if (total <= pageSize && page === 1) return null;
+  if (total === 0) return null;
 
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const from = total === 0 ? 0 : (page - 1) * pageSize + 1;
   const to = Math.min(page * pageSize, total);
   const unit = total === 1 ? unitLabel : `${unitLabel}s`;
 
-  function hrefForPage(targetPage: number): string {
-    const params = new URLSearchParams();
+  /** Preserve current search params, override the named keys, drop empties. */
+  function buildQuery(overrides: Record<string, string | null>): string {
+    const out = new URLSearchParams();
     for (const [k, v] of Object.entries(searchParams)) {
-      if (v != null && v !== '' && k !== 'page') params.set(k, v);
+      if (v == null || v === '') continue;
+      if (k in overrides) continue; // overridden below
+      out.set(k, v);
     }
-    if (targetPage > 1) params.set('page', String(targetPage));
-    const qs = params.toString();
+    for (const [k, v] of Object.entries(overrides)) {
+      if (v != null && v !== '') out.set(k, v);
+    }
+    return out.toString();
+  }
+
+  function hrefForPage(targetPage: number): string {
+    const qs = buildQuery({ page: targetPage > 1 ? String(targetPage) : null });
     return qs ? `${basePath}?${qs}` : basePath;
   }
 
@@ -53,6 +85,13 @@ export function Pagination({
         Showing <strong>{from}</strong>–<strong>{to}</strong> of <strong>{total}</strong> {unit}
         {pageCount > 1 ? <> · page {page} of {pageCount}</> : null}
       </div>
+
+      <PaginationSizeForm
+        basePath={basePath}
+        pageSize={pageSize}
+        searchParams={searchParams}
+      />
+
       <div className="pagination__controls">
         {page > 1 ? (
           <Link href={hrefForPage(page - 1)} className="btn btn--ghost btn--sm" prefetch={false}>

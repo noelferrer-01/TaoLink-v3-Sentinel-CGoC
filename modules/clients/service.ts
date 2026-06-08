@@ -65,6 +65,30 @@ export async function listClients(): Promise<Client[]> {
   return db.select().from(clients).orderBy(clients.name);
 }
 
+// Paginated list-page sibling. Returns the same shape as the existing flat
+// `listClients` plus a total. Kept separate so the dropdown callers
+// (e.g. /dtr, /payroll/[runId] forms) still get the full list.
+export type ListClientsPageOptions = {
+  limit?: number;
+  offset?: number;
+};
+export type ListClientsPageResult = {
+  rows: Client[];
+  total: number;
+};
+export async function listClientsPage(
+  opts: ListClientsPageOptions = {},
+): Promise<ListClientsPageResult> {
+  const db = getDb();
+  const limit = Math.max(1, Math.min(opts.limit ?? 50, 500));
+  const offset = Math.max(opts.offset ?? 0, 0);
+  const [rows, countResult] = await Promise.all([
+    db.select().from(clients).orderBy(clients.name).limit(limit).offset(offset),
+    db.select({ total: count() }).from(clients),
+  ]);
+  return { rows, total: countResult[0]?.total ?? 0 };
+}
+
 export type ClientWithDetachments = {
   id: string;
   name: string;
@@ -393,4 +417,79 @@ export async function listDetachmentsWithDeployment(
       gap: required !== null ? deployed - required : null,
     };
   });
+}
+
+// Paginated list-page sibling of listDetachmentsWithDeployment. Same join
+// (active-counts subquery) + COUNT(*) for total. Returns the joined rows
+// for one client page or across all clients when `clientId` is omitted.
+export type ListDetachmentsWithDeploymentPageOptions = {
+  clientId?: string;
+  limit?: number;
+  offset?: number;
+};
+export type ListDetachmentsWithDeploymentPageResult = {
+  rows: DetachmentWithDeployment[];
+  total: number;
+};
+export async function listDetachmentsWithDeploymentPage(
+  opts: ListDetachmentsWithDeploymentPageOptions = {},
+): Promise<ListDetachmentsWithDeploymentPageResult> {
+  const db = getDb();
+  const limit = Math.max(1, Math.min(opts.limit ?? 50, 500));
+  const offset = Math.max(opts.offset ?? 0, 0);
+  const today = new Date().toISOString().slice(0, 10);
+
+  const activeCountsSq = db
+    .select({
+      detachmentId: assignments.detachmentId,
+      deployedCount: count().as('deployed_count'),
+    })
+    .from(assignments)
+    .where(
+      and(
+        lte(assignments.startDate, today),
+        or(isNull(assignments.endDate), gte(assignments.endDate, today)),
+      ),
+    )
+    .groupBy(assignments.detachmentId)
+    .as('active_counts');
+
+  const where = opts.clientId ? eq(detachments.clientId, opts.clientId) : undefined;
+
+  const [rows, countResult] = await Promise.all([
+    db
+      .select({
+        id: detachments.id,
+        clientId: detachments.clientId,
+        name: detachments.name,
+        address: detachments.address,
+        requiredHeadcount: detachments.requiredHeadcount,
+        createdAt: detachments.createdAt,
+        deployedCount: activeCountsSq.deployedCount,
+      })
+      .from(detachments)
+      .leftJoin(activeCountsSq, eq(activeCountsSq.detachmentId, detachments.id))
+      .where(where)
+      .orderBy(detachments.createdAt)
+      .limit(limit)
+      .offset(offset),
+    db.select({ total: count() }).from(detachments).where(where),
+  ]);
+
+  const shaped: DetachmentWithDeployment[] = rows.map((r) => {
+    const deployed = Number(r.deployedCount ?? 0);
+    const required = r.requiredHeadcount ?? null;
+    return {
+      id: r.id,
+      clientId: r.clientId,
+      name: r.name,
+      address: r.address,
+      requiredHeadcount: r.requiredHeadcount,
+      createdAt: r.createdAt,
+      deployed,
+      gap: required !== null ? deployed - required : null,
+    };
+  });
+
+  return { rows: shaped, total: countResult[0]?.total ?? 0 };
 }

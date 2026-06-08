@@ -2,11 +2,9 @@ import Link from 'next/link';
 import { assignments } from '@/modules/assignments';
 import { clients } from '@/modules/clients';
 import { PageShell } from '@/components/page-shell';
-import { Pagination } from '@/components/pagination';
+import { Pagination, clampPageSize } from '@/components/pagination';
 import { AssignForm } from './assign-form';
 import { AssignmentsListBody } from './assignments-list-body';
-
-const PAGE_SIZE = 50;
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
@@ -24,12 +22,13 @@ export default async function AssignmentsPage({
 }) {
   const params = await searchParams;
   const page = parsePage(params.page);
+  const pageSize = clampPageSize(params.size);
   const asOf = today();
 
   const [activeResult, assignable, clientsWithDetachments] = await Promise.all([
     assignments.listActiveAssignments(asOf, {
-      limit: PAGE_SIZE,
-      offset: (page - 1) * PAGE_SIZE,
+      limit: pageSize,
+      offset: (page - 1) * pageSize,
     }),
     assignments.listAssignableEmployees(asOf),
     clients.listClientsWithDetachments(),
@@ -89,7 +88,7 @@ export default async function AssignmentsPage({
           <Pagination
             total={total}
             page={page}
-            pageSize={PAGE_SIZE}
+            pageSize={pageSize}
             searchParams={params}
             basePath="/assignments"
             unitLabel="assignment"

@@ -1,13 +1,11 @@
 import Link from 'next/link';
 import { hr } from '@/modules/hr';
 import { PageShell } from '@/components/page-shell';
-import { Pagination } from '@/components/pagination';
+import { Pagination, clampPageSize } from '@/components/pagination';
 import { EmployeesListBody, type EmployeeRow } from './employees-list-body';
 
 const EMPLOYMENT_TYPES = ['GUARD', 'OFFICE_STAFF', 'SUPERVISOR', 'DRIVER', 'JANITOR', 'OTHER'] as const;
 type EmploymentType = (typeof EMPLOYMENT_TYPES)[number];
-
-const PAGE_SIZE = 50;
 
 function isEmploymentType(v: string | undefined): v is EmploymentType {
   return v != null && (EMPLOYMENT_TYPES as readonly string[]).includes(v);
@@ -27,12 +25,13 @@ export default async function EmployeesPage({
   const q = params.q?.trim() ?? '';
   const type = isEmploymentType(params.type) ? params.type : undefined;
   const page = parsePage(params.page);
+  const pageSize = clampPageSize(params.size);
 
   const { rows: results, total } = await hr.listEmployeesPage({
     query: q,
     employmentType: type,
-    limit: PAGE_SIZE,
-    offset: (page - 1) * PAGE_SIZE,
+    limit: pageSize,
+    offset: (page - 1) * pageSize,
   });
 
   const employees: EmployeeRow[] = results.map((e) => ({
@@ -71,7 +70,7 @@ export default async function EmployeesPage({
       <Pagination
         total={total}
         page={page}
-        pageSize={PAGE_SIZE}
+        pageSize={pageSize}
         searchParams={params}
         basePath="/employees"
         unitLabel="employee"

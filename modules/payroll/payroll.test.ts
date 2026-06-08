@@ -28,7 +28,7 @@ import { auditLog } from '@/modules/audit/schema';
 import { eventLog } from '@/modules/events/schema';
 import { hr } from '@/modules/hr/index';
 import { seedComplianceRates } from '@/modules/compliance/seed';
-import { runPayroll, lockPayRun, getPayslip, listPayslips, initPayrollSubscriptions, _resetPayrollSubscriptionsForTests } from './index';
+import { runPayroll, lockPayRun, getPayslip, listPayslips, listPayRunsPage, listPayslipsWithEmployeePage, getPayRunTotals, initPayrollSubscriptions, _resetPayrollSubscriptionsForTests } from './index';
 import { dtr } from '@/modules/dtr/index';
 import { events, _resetEventsForTests } from '@/modules/events/index';
 
@@ -655,6 +655,95 @@ describe('payroll module — getPayslip / listPayslips', () => {
     await expect(listPayslips({})).rejects.toThrow(
       'listPayslips requires at least one of payRunId or employeeId',
     );
+  });
+
+  // ─── Test R7: listPayRunsPage paginates + reports total ──────────────────
+  it('listPayRunsPage returns {rows, total}; offset slices correctly', async () => {
+    const emp = await makeEmployee('CG-R007');
+    await makeDtrEntries(emp.id, ['2026-04-16', '2026-04-17']);
+    await makeDtrEntries(emp.id, ['2026-05-01', '2026-05-02']);
+    await makeDtrEntries(emp.id, ['2026-05-16', '2026-05-17']);
+
+    await runPayroll('2026-04-16', '2026-04-30');
+    await runPayroll('2026-05-01', '2026-05-15');
+    await runPayroll('2026-05-16', '2026-05-31');
+
+    const page1 = await listPayRunsPage({ limit: 2, offset: 0 });
+    expect(page1.rows).toHaveLength(2);
+    expect(page1.total).toBe(3);
+    // Ordered by periodStart desc, so May 16–31 is first.
+    expect(page1.rows[0]!.periodStart).toBe('2026-05-16');
+
+    const page2 = await listPayRunsPage({ limit: 2, offset: 2 });
+    expect(page2.rows).toHaveLength(1);
+    expect(page2.total).toBe(3);
+    expect(page2.rows[0]!.periodStart).toBe('2026-04-16');
+  });
+
+  // ─── Test R8: listPayslipsWithEmployeePage paginates + filters by run ────
+  it('listPayslipsWithEmployeePage paginates within a run', async () => {
+    const empA = await makeEmployee('CG-R008A');
+    const empB = await makeEmployee('CG-R008B');
+    const empC = await makeEmployee('CG-R008C');
+    for (const e of [empA, empB, empC]) {
+      await makeDtrEntries(e.id, ['2026-05-16', '2026-05-17']);
+    }
+    const run = await runPayroll('2026-05-16', '2026-05-31');
+
+    const page1 = await listPayslipsWithEmployeePage(run.id, { limit: 2, offset: 0 });
+    expect(page1.rows).toHaveLength(2);
+    expect(page1.total).toBe(3);
+    expect(page1.rows.every((r) => r.payRunId === run.id)).toBe(true);
+
+    const page2 = await listPayslipsWithEmployeePage(run.id, { limit: 2, offset: 2 });
+    expect(page2.rows).toHaveLength(1);
+    expect(page2.total).toBe(3);
+  });
+
+  // ─── Test R9: getPayRunTotals aggregates across the whole run ────────────
+  it('getPayRunTotals returns full-run sums (matches manual aggregate over listPayslips)', async () => {
+    const empA = await makeEmployee('CG-R009A');
+    const empB = await makeEmployee('CG-R009B');
+    await makeDtrEntries(empA.id, ['2026-05-16', '2026-05-17']);
+    await makeDtrEntries(empB.id, ['2026-05-16', '2026-05-17']);
+    const run = await runPayroll('2026-05-16', '2026-05-31');
+
+    const totals = await getPayRunTotals(run.id);
+    expect(totals.count).toBe(2);
+
+    // Re-aggregate from the raw payslips and compare — proves SUM() matches the
+    // per-row sum, which is what the UI's totals row needs across pagination.
+    const all = await listPayslips({ payRunId: run.id });
+    const expected = all.reduce(
+      (acc, p) => ({
+        gross: acc.gross + Number(p.grossPay),
+        sss: acc.sss + Number(p.sssEE),
+        philhealth: acc.philhealth + Number(p.philhealthEE),
+        pagibig: acc.pagibig + Number(p.pagibigEE),
+        birWtax: acc.birWtax + Number(p.birWtax),
+        net: acc.net + Number(p.netPay),
+      }),
+      { gross: 0, sss: 0, philhealth: 0, pagibig: 0, birWtax: 0, net: 0 },
+    );
+    expect(totals.gross).toBeCloseTo(expected.gross, 2);
+    expect(totals.sss).toBeCloseTo(expected.sss, 2);
+    expect(totals.philhealth).toBeCloseTo(expected.philhealth, 2);
+    expect(totals.pagibig).toBeCloseTo(expected.pagibig, 2);
+    expect(totals.birWtax).toBeCloseTo(expected.birWtax, 2);
+    expect(totals.net).toBeCloseTo(expected.net, 2);
+  });
+
+  it('getPayRunTotals returns zeros for a run with no payslips', async () => {
+    // Make a run id by creating one through runPayroll then wiping its payslips.
+    const emp = await makeEmployee('CG-R009Z');
+    await makeDtrEntries(emp.id, ['2026-05-16']);
+    const run = await runPayroll('2026-05-16', '2026-05-31');
+    await db.delete(payslips);
+
+    const totals = await getPayRunTotals(run.id);
+    expect(totals.count).toBe(0);
+    expect(totals.gross).toBe(0);
+    expect(totals.net).toBe(0);
   });
 });
 

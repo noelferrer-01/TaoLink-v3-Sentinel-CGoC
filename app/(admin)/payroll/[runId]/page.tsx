@@ -4,6 +4,7 @@ import { payroll } from '@/modules/payroll';
 import { clients } from '@/modules/clients';
 import { payrollCalendars } from '@/modules/payroll-calendars';
 import { PageShell } from '@/components/page-shell';
+import { Pagination, clampPageSize } from '@/components/pagination';
 import { CountdownBadge } from '@/components/countdown-badge';
 import { LockPayRunButton } from './lock-button';
 import { formatPeso } from '../peso';
@@ -12,19 +13,35 @@ function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+function parsePage(raw: string | undefined): number {
+  const n = Number.parseInt(raw ?? '1', 10);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
 export default async function PayRunPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ runId: string }>;
+  searchParams: Promise<Record<string, string | undefined>>;
 }) {
   const { runId } = await params;
+  const sp = await searchParams;
+  const page = parsePage(sp.page);
+  const pageSize = clampPageSize(sp.size);
+
   const run = await payroll.getPayRun(runId);
   if (!run) notFound();
 
-  const [payslips, allClients] = await Promise.all([
-    payroll.listPayslipsWithEmployee(runId),
+  const [payslipsResult, totals, allClients] = await Promise.all([
+    payroll.listPayslipsWithEmployeePage(runId, {
+      limit: pageSize,
+      offset: (page - 1) * pageSize,
+    }),
+    payroll.getPayRunTotals(runId),
     clients.listClients(),
   ]);
+  const { rows: payslips, total: payslipCount } = payslipsResult;
 
   // Cut-off + payday for the v1 single-client demo — resolve via the first
   // client's calendar. Multi-client per-period dashboard is Slice 3+.
@@ -37,18 +54,6 @@ export default async function PayRunPage({
         new Date(run.periodEnd + 'T00:00:00Z'),
       )
     : null;
-
-  const totals = payslips.reduce(
-    (acc, p) => ({
-      gross: acc.gross + Number(p.grossPay),
-      sss: acc.sss + Number(p.sssEE),
-      ph: acc.ph + Number(p.philhealthEE),
-      pi: acc.pi + Number(p.pagibigEE),
-      wtax: acc.wtax + Number(p.birWtax),
-      net: acc.net + Number(p.netPay),
-    }),
-    { gross: 0, sss: 0, ph: 0, pi: 0, wtax: 0, net: 0 },
-  );
 
   const period = `${run.periodStart} → ${run.periodEnd}`;
   const isLocked = run.status === 'locked';
@@ -73,11 +78,11 @@ export default async function PayRunPage({
         </>
       }
       title={period}
-      description={`${payslips.length} ${payslips.length === 1 ? 'payslip' : 'payslips'} ${isLocked ? 'locked' : 'computed'} for this period. Status: ${run.status}${run.lockedAt ? `, locked on ${run.lockedAt.toISOString().slice(0, 10)}` : ''}.`}
+      description={`${payslipCount} ${payslipCount === 1 ? 'payslip' : 'payslips'} ${isLocked ? 'locked' : 'computed'} for this period. Status: ${run.status}${run.lockedAt ? `, locked on ${run.lockedAt.toISOString().slice(0, 10)}` : ''}.`}
       toolbar={toolbar}
     >
 
-      {payslips.length === 0 ? (
+      {payslipCount === 0 ? (
         <div className="empty-state">
           <h3>No payslips for this run</h3>
           <p>
@@ -127,13 +132,13 @@ export default async function PayRunPage({
                 </tr>
               ))}
               <tr style={{ borderTop: '2px solid var(--rule-strong)' }}>
-                <td style={{ fontWeight: 500 }}>Totals ({payslips.length})</td>
+                <td style={{ fontWeight: 500 }}>Totals (all {totals.count})</td>
                 <td className="cell-num">—</td>
                 <td className="cell-num">{formatPeso(totals.gross)}</td>
                 <td className="cell-num">{formatPeso(totals.sss)}</td>
-                <td className="cell-num">{formatPeso(totals.ph)}</td>
-                <td className="cell-num">{formatPeso(totals.pi)}</td>
-                <td className="cell-num">{formatPeso(totals.wtax)}</td>
+                <td className="cell-num">{formatPeso(totals.philhealth)}</td>
+                <td className="cell-num">{formatPeso(totals.pagibig)}</td>
+                <td className="cell-num">{formatPeso(totals.birWtax)}</td>
                 <td className="cell-num" style={{ fontWeight: 600 }}>{formatPeso(totals.net)}</td>
                 <td></td>
               </tr>
@@ -141,6 +146,15 @@ export default async function PayRunPage({
           </table>
         </div>
       )}
+
+      <Pagination
+        total={payslipCount}
+        page={page}
+        pageSize={pageSize}
+        searchParams={sp}
+        basePath={`/payroll/${runId}`}
+        unitLabel="payslip"
+      />
 
       <div style={{ marginTop: '2rem', paddingTop: '1.5rem', borderTop: '1px solid var(--rule)' }}>
         {isLocked ? (

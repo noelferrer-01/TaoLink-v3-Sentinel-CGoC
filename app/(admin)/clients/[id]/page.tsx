@@ -3,24 +3,40 @@ import { notFound } from 'next/navigation';
 import { clients } from '@/modules/clients';
 import { payrollCalendars } from '@/modules/payroll-calendars';
 import { PageShell } from '@/components/page-shell';
+import { Pagination, clampPageSize } from '@/components/pagination';
 import { AddDetachmentForm } from './add-detachment-form';
 import { ClientDetailBody } from './client-detail-body';
 import { DetachmentsList } from './detachments-list';
 
+function parsePage(raw: string | undefined): number {
+  const n = Number.parseInt(raw ?? '1', 10);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
 export default async function ClientDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<Record<string, string | undefined>>;
 }) {
   const { id } = await params;
+  const sp = await searchParams;
+  const page = parsePage(sp.page);
+  const pageSize = clampPageSize(sp.size);
 
-  const [client, detachments, allCalendars] = await Promise.all([
+  const [client, detachmentResult, allCalendars] = await Promise.all([
     clients.getClient(id),
-    clients.listDetachmentsWithDeployment(id),
+    clients.listDetachmentsWithDeploymentPage({
+      clientId: id,
+      limit: pageSize,
+      offset: (page - 1) * pageSize,
+    }),
     payrollCalendars.list(),
   ]);
   if (!client) notFound();
 
+  const { rows: detachments, total } = detachmentResult;
   const currentCalendar =
     client.defaultPayrollCalendarId
       ? allCalendars.find((c) => c.id === client.defaultPayrollCalendarId) ?? null
@@ -49,12 +65,20 @@ export default async function ClientDetailPage({
 
       <div className="page-toolbar">
         <div className="page-toolbar-meta">
-          {detachments.length}{' '}
-          {detachments.length === 1 ? 'detachment' : 'detachments'}
+          {total}{' '}
+          {total === 1 ? 'detachment' : 'detachments'}
         </div>
       </div>
 
       <DetachmentsList clientId={client.id} rows={detachments} />
+      <Pagination
+        total={total}
+        page={page}
+        pageSize={pageSize}
+        searchParams={sp}
+        basePath={`/clients/${client.id}`}
+        unitLabel="detachment"
+      />
 
       <AddDetachmentForm clientId={client.id} />
     </PageShell>

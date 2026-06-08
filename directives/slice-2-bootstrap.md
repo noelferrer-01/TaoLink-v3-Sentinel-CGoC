@@ -34,9 +34,9 @@ If you need the slow path (manual setup, no seed) for a presentation that includ
 - Navigate to `http://localhost:3000`. Sign in with `SEED_ADMIN_EMAIL` + `SEED_ADMIN_PASSWORD` from `.env` (default `admin@sentinel.local` / `admin-change-me`).
 - **Expected:** redirect to `/dashboard`. Sidebar Operations section orders Dashboard → Clients → Employees → Assignments → DTR → Pay runs → Exports. The "Guards" copy is gone (Done criterion #1).
 
-### 2. Visit Clients — 5 rows
+### 2. Visit Clients — 5 rows, paginated
 - Sidebar → **Clients**.
-- **Expected:** 5 rows in alphabetical order (Ayala Land, Filinvest Land, Megaworld Corporation, Robinsons Land, SM Prime Holdings). Footer: "5 clients on file." Each row's contact email follows `payroll@<slug>.example.ph`.
+- **Expected:** 5 rows in alphabetical order (Ayala Land, Filinvest Land, Megaworld Corporation, Robinsons Land, SM Prime Holdings). Header: "5 clients on file." Each row's contact email follows `payroll@<slug>.example.ph`. Pagination footer reads `Showing 1–5 of 5 clients · Rows per page [50] · Prev / Next` (Prev/Next disabled at this scale; visible to confirm pagination is wired). The page-size dropdown lets a clerk pick 25 / 50 / 100 / 200.
 
 ### 3. Visit Detachments via a client — see deployment badges
 - Click into **SM Prime Holdings**.
@@ -78,7 +78,9 @@ If you need the slow path (manual setup, no seed) for a presentation that includ
 - If you sampled all 10 employees from one detachment, expect 1 pay run for that client only. That's still correct.
 
 ### 11. Review payslips + reconciliation
-- Sidebar → **Pay runs**. Click into the most recent run. Click into any payslip.
+- Sidebar → **Pay runs**. Pay Runs is paginated — at the start of the demo there's at most a handful of runs. Footer reads `Showing 1–N of N pay runs`.
+- Click into the most recent run. The payslips table is also paginated (default 50/page). At 100 employees with all on this run, you'll see `Showing 1–50 of 100 payslips · page 1 of 2`. The **Totals (all 100)** row at the bottom of the table aggregates over the **whole run**, not just the visible page — this is critical for filing accuracy (lock-decision is based on the run total).
+- Click into any payslip row to view the per-employee payslip.
 - **Expected payslip shape:** gross = `(basicSalary / WORK_DAYS_PER_MONTH) × daysWorked` + OT; four deduction lines (SSS_EE, PhilHealth_EE, Pag-IBIG_EE, BIR_WHT); net floored at ₱0. (Done criterion #12.)
 - **Reconciliation bar:** the same payslip numbers reconcile within ₱1 of v2's engine — verified by `pnpm test modules/payroll/reconciliation.test.ts` (already green from Phase 10.1).
 - **Lock the run** so exports are available.

@@ -7,7 +7,7 @@
  * numeric column contract.
  */
 
-import { and, between, count, desc, eq, inArray, notInArray } from 'drizzle-orm';
+import { and, between, count, desc, eq, inArray, notInArray, sql } from 'drizzle-orm';
 import { getDb } from '@/core/db';
 import { payRuns, payslips, type PayRun, type Payslip } from './schema';
 import { computePayrollLine, type PayrollRates } from './compute';
@@ -331,6 +331,23 @@ export async function listPayRuns(): Promise<PayRun[]> {
   return getDb().select().from(payRuns).orderBy(desc(payRuns.periodStart));
 }
 
+// Paginated list-page sibling of listPayRuns. Kept separate so the dropdown
+// callers (e.g. /exports) still get the full list.
+export type ListPayRunsPageOptions = { limit?: number; offset?: number };
+export type ListPayRunsPageResult = { rows: PayRun[]; total: number };
+export async function listPayRunsPage(
+  opts: ListPayRunsPageOptions = {},
+): Promise<ListPayRunsPageResult> {
+  const db = getDb();
+  const limit = Math.max(1, Math.min(opts.limit ?? 50, 500));
+  const offset = Math.max(opts.offset ?? 0, 0);
+  const [rows, countResult] = await Promise.all([
+    db.select().from(payRuns).orderBy(desc(payRuns.periodStart)).limit(limit).offset(offset),
+    db.select({ total: count() }).from(payRuns),
+  ]);
+  return { rows, total: countResult[0]?.total ?? 0 };
+}
+
 export async function getPayRun(id: string): Promise<PayRun | null> {
   const rows = await getDb().select().from(payRuns).where(eq(payRuns.id, id)).limit(1);
   return rows[0] ?? null;
@@ -364,4 +381,93 @@ export async function listPayslipsWithEmployee(payRunId: string): Promise<Paysli
       lastName: r.lastName,
     },
   }));
+}
+
+// Paginated list-page sibling of listPayslipsWithEmployee. Same JOIN +
+// COUNT(*) over payslips for the run. Per-run payslip count can hit
+// 500+ at full agency scale (BIR-2316-ZIP at year-end), so paginate.
+export type ListPayslipsWithEmployeePageOptions = {
+  limit?: number;
+  offset?: number;
+};
+export type ListPayslipsWithEmployeePageResult = {
+  rows: PayslipWithEmployee[];
+  total: number;
+};
+export async function listPayslipsWithEmployeePage(
+  payRunId: string,
+  opts: ListPayslipsWithEmployeePageOptions = {},
+): Promise<ListPayslipsWithEmployeePageResult> {
+  const db = getDb();
+  const limit = Math.max(1, Math.min(opts.limit ?? 50, 500));
+  const offset = Math.max(opts.offset ?? 0, 0);
+
+  const [rows, countResult] = await Promise.all([
+    db
+      .select({
+        payslip: payslips,
+        employeeId: employees.id,
+        employeeCode: employees.employeeCode,
+        firstName: employees.firstName,
+        lastName: employees.lastName,
+      })
+      .from(payslips)
+      .innerJoin(employees, eq(employees.id, payslips.employeeId))
+      .where(eq(payslips.payRunId, payRunId))
+      .orderBy(employees.lastName, employees.firstName)
+      .limit(limit)
+      .offset(offset),
+    db.select({ total: count() }).from(payslips).where(eq(payslips.payRunId, payRunId)),
+  ]);
+
+  return {
+    rows: rows.map((r) => ({
+      ...r.payslip,
+      employee: {
+        id: r.employeeId,
+        employeeCode: r.employeeCode,
+        firstName: r.firstName,
+        lastName: r.lastName,
+      },
+    })),
+    total: countResult[0]?.total ?? 0,
+  };
+}
+
+// SQL-aggregated totals for a pay run. Used by the payslips list page so the
+// "Totals" footer row stays accurate across pagination — without this, the
+// totals row would only reflect the currently-rendered page and silently
+// lie about the run.
+export type PayRunTotals = {
+  count: number;
+  gross: number;
+  sss: number;
+  philhealth: number;
+  pagibig: number;
+  birWtax: number;
+  net: number;
+};
+export async function getPayRunTotals(payRunId: string): Promise<PayRunTotals> {
+  const db = getDb();
+  const [row] = await db
+    .select({
+      count: count(),
+      gross: sql<string>`COALESCE(SUM(${payslips.grossPay}), 0)::text`,
+      sss: sql<string>`COALESCE(SUM(${payslips.sssEE}), 0)::text`,
+      philhealth: sql<string>`COALESCE(SUM(${payslips.philhealthEE}), 0)::text`,
+      pagibig: sql<string>`COALESCE(SUM(${payslips.pagibigEE}), 0)::text`,
+      birWtax: sql<string>`COALESCE(SUM(${payslips.birWtax}), 0)::text`,
+      net: sql<string>`COALESCE(SUM(${payslips.netPay}), 0)::text`,
+    })
+    .from(payslips)
+    .where(eq(payslips.payRunId, payRunId));
+  return {
+    count: row?.count ?? 0,
+    gross: Number(row?.gross ?? 0),
+    sss: Number(row?.sss ?? 0),
+    philhealth: Number(row?.philhealth ?? 0),
+    pagibig: Number(row?.pagibig ?? 0),
+    birWtax: Number(row?.birWtax ?? 0),
+    net: Number(row?.net ?? 0),
+  };
 }

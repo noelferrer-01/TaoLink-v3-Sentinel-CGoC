@@ -4,12 +4,22 @@ import {
   getPayslip,
   listPayslips,
   listPayRuns,
+  listPayRunsPage,
   getPayRun,
   listPayslipsWithEmployee,
+  listPayslipsWithEmployeePage,
+  getPayRunTotals,
 } from './service';
 import { initPayrollSubscriptions, _resetPayrollSubscriptionsForTests } from './subscriptions';
 
-export type { PayslipWithEmployee } from './service';
+export type {
+  PayslipWithEmployee,
+  ListPayRunsPageOptions,
+  ListPayRunsPageResult,
+  ListPayslipsWithEmployeePageOptions,
+  ListPayslipsWithEmployeePageResult,
+  PayRunTotals,
+} from './service';
 
 export const payroll = {
   runPayroll,
@@ -17,8 +27,11 @@ export const payroll = {
   getPayslip,
   listPayslips,
   listPayRuns,
+  listPayRunsPage,
   getPayRun,
   listPayslipsWithEmployee,
+  listPayslipsWithEmployeePage,
+  getPayRunTotals,
   initPayrollSubscriptions,
 };
 export {
@@ -27,8 +40,11 @@ export {
   getPayslip,
   listPayslips,
   listPayRuns,
+  listPayRunsPage,
   getPayRun,
   listPayslipsWithEmployee,
+  listPayslipsWithEmployeePage,
+  getPayRunTotals,
   initPayrollSubscriptions,
   _resetPayrollSubscriptionsForTests,
 };
