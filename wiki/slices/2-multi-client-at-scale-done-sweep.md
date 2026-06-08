@@ -20,13 +20,14 @@ If any criterion below ever flips from ✓ to ✗ on `main`, Slice 2 is no longe
 - Collapse logic + localStorage persistence in [`app/(admin)/_admin-shell.tsx:13-52`](../../app/%28admin%29/_admin-shell.tsx#L13-L52) (key `sentinel.sidebar.collapsed`, syncs across tabs via the `storage` event).
 **Test coverage:** sidebar primitives covered indirectly by route-rendering smoke (Phase 9.10 verified all 14 admin routes render). No dedicated unit test — the LS-roundtrip would mostly test localStorage; not worth a test gate.
 
-### 2. Employees list — search / filter / sort / multi-select / bulk-action / row-click / empty-state
+### 2. Employees list — search / filter / sort / multi-select / bulk-action / row-click / empty-state / paginated
 **Status:** ✓
 **Evidence:**
-- UI: [`app/(admin)/employees/page.tsx`](../../app/%28admin%29/employees/page.tsx) + [`employees-list.tsx`](../../app/%28admin%29/employees/employees-list.tsx) (server search via `hr.searchEmployees` with 250ms debounce, `pg_trgm`-backed). Filter dropdown for `employment_type`. Sortable headers via shared [`components/data-table.tsx`](../../components/data-table.tsx). Row-click navigation.
-- Verified in-browser at Phase 10.2 walk: `Type: Guard` → 80, `Office staff` → 15, `Driver` → 2, `Supervisor` → 3.
-- Empty state distinguishes "nothing exists" from "nothing matches" — see the `EmptyState` switch in `employees-list.tsx`.
-**Test coverage:** `modules/hr/hr.test.ts` covers `searchEmployees` happy + filter paths.
+- UI: [`app/(admin)/employees/page.tsx`](../../app/%28admin%29/employees/page.tsx) + [`employees-list-body.tsx`](../../app/%28admin%29/employees/employees-list-body.tsx). Server search via `hr.listEmployeesPage` (`pg_trgm`-backed similarity match); filter dropdown for `employment_type`; sortable headers via shared [`components/data-table.tsx`](../../components/data-table.tsx); whole-row click navigation.
+- Pagination: 50/page via `?page=N` searchParam; shared [`components/pagination.tsx`](../../components/pagination.tsx) control. Backend `hr.listEmployeesPage({query, employmentType, status, limit, offset})` returns `{rows, total}` ([`modules/hr/service.ts`](../../modules/hr/service.ts)). `hr.searchEmployees` stays flat-array for the typeahead caller per contract.
+- Verified Phase 10.5 walk: `Type: Guard` → 80, `Office staff` → 15, `Driver` → 2, `Supervisor` → 3. Footer reads `Showing 1–50 of 100 · page 1 of 2`; Next loads rows 51–100.
+- Empty state distinguishes "nothing exists" from "nothing matches" — see the `EmptyState` switch in `employees-list-body.tsx`.
+**Test coverage:** `modules/hr/hr.test.ts` covers `searchEmployees` (typeahead) + the new `listEmployeesPage` path.
 
 ### 3. Employees CSV import accepts `employment_type` + sample CSV updated
 **Status:** ✓
@@ -62,11 +63,12 @@ If any criterion below ever flips from ✓ to ✗ on `main`, Slice 2 is no longe
 ### 7. Assignments list — paginated + multi-select + bulk actions + typeahead pickers
 **Status:** ✓
 **Evidence:**
-- Pagination at 50/page in `assignments.list` ([`modules/assignments/service.ts`](../../modules/assignments/service.ts)).
-- UI: [`app/(admin)/assignments/page.tsx`](../../app/%28admin%29/assignments/page.tsx) + [`assignments-list-body.tsx`](../../app/%28admin%29/assignments/assignments-list-body.tsx) — multi-select checkboxes, sticky bulk-action bar, bulk-assign / bulk-end / bulk-transfer modals via `ModalShell`, result panel after each action.
+- Pagination at 50/page on the page itself ([`app/(admin)/assignments/page.tsx`](../../app/%28admin%29/assignments/page.tsx)) via `?page=N` searchParam; backend support in `assignments.listActiveAssignments(asOf, {limit, offset})` returning `{rows, total}` ([`modules/assignments/service.ts`](../../modules/assignments/service.ts)).
+- Pagination control: shared [`components/pagination.tsx`](../../components/pagination.tsx) — readout (`Showing 1–50 of 90 · page 1 of 2`) + Prev/Next links that preserve other URL params.
+- UI: [`assignments-list-body.tsx`](../../app/%28admin%29/assignments/assignments-list-body.tsx) — multi-select checkboxes, sticky bulk-action bar, bulk-end / bulk-transfer modals via `ModalShell`, result panel after each action.
 - Typeahead pickers: [`app/(admin)/assignments/_assign-form.tsx`](../../app/%28admin%29/assignments/_assign-form.tsx) uses the shared `Typeahead` component over `hr.searchEmployees` + a detachment search.
-- Verified Phase 10.2 walk: "90 active assignments" header rendered, pagination chip live.
-**Test coverage:** `modules/assignments/assignments.test.ts` — bulkAssign / bulkEnd / bulkTransfer suites.
+- Verified Phase 10.5 walk: "90 active assignments" header, page 1 shows rows 1–50, page 2 shows 51–90, footer + Prev/Next render correctly. Backend test coverage in `assignments.test.ts` (tests 6 + 7 assert `{rows, total}` shape).
+**Test coverage:** `modules/assignments/assignments.test.ts` — bulkAssign / bulkEnd / bulkTransfer suites + the updated `listActiveAssignments` return-shape tests.
 
 ### 8. Payroll calendar — per-client + resolveForPeriod + DTR/PayRun badges + frozen on run
 **Status:** ✓

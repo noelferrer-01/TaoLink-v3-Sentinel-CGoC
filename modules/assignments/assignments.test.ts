@@ -164,8 +164,9 @@ describe('assignments module', () => {
       startDate: '2026-05-01',
     });
 
-    const rows = await assignments.listActiveAssignments('2026-05-15');
+    const { rows, total } = await assignments.listActiveAssignments('2026-05-15');
     expect(rows).toHaveLength(1);
+    expect(total).toBe(1);
     expect(rows[0]).toMatchObject({
       startDate: '2026-05-01',
       employee: { employeeCode: 'CG-A001', firstName: 'Juan', lastName: 'Dela Cruz' },
@@ -184,8 +185,9 @@ describe('assignments module', () => {
     });
     await assignments.endAssignment(a.id, '2026-05-10', 'transferred');
 
-    const rows = await assignments.listActiveAssignments('2026-05-15');
+    const { rows, total } = await assignments.listActiveAssignments('2026-05-15');
     expect(rows).toHaveLength(0);
+    expect(total).toBe(0);
   });
 
   // ─── Test 8: listAssignableEmployees excludes already-assigned + terminated ─

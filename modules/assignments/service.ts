@@ -102,45 +102,69 @@ export async function assign(input: {
 // ─── listActiveAssignments ───────────────────────────────────────────────────
 // Returns currently-active assignments joined with employee + detachment +
 // client, in last-name-first-name order. Used by the /assignments page.
-export async function listActiveAssignments(asOf: string): Promise<ActiveAssignmentRow[]> {
-  const db = getDb();
-  const rows = await db
-    .select({
-      id: assignments.id,
-      startDate: assignments.startDate,
-      employeeId: employees.id,
-      employeeCode: employees.employeeCode,
-      firstName: employees.firstName,
-      lastName: employees.lastName,
-      detachmentId: detachments.id,
-      detachmentName: detachments.name,
-      clientId: clients.id,
-      clientName: clients.name,
-    })
-    .from(assignments)
-    .innerJoin(employees, eq(employees.id, assignments.employeeId))
-    .innerJoin(detachments, eq(detachments.id, assignments.detachmentId))
-    .innerJoin(clients, eq(clients.id, detachments.clientId))
-    .where(
-      and(
-        lte(assignments.startDate, asOf),
-        or(isNull(assignments.endDate), gte(assignments.endDate, asOf)),
-      ),
-    )
-    .orderBy(employees.lastName, employees.firstName);
+// Paginated per Slice 2 contract criterion #7 (default 50/page).
+export type ListActiveAssignmentsOptions = {
+  limit?: number;
+  offset?: number;
+};
+export type ListActiveAssignmentsResult = {
+  rows: ActiveAssignmentRow[];
+  total: number;
+};
 
-  return rows.map((r) => ({
-    id: r.id,
-    startDate: r.startDate,
-    employee: {
-      id: r.employeeId,
-      employeeCode: r.employeeCode,
-      firstName: r.firstName,
-      lastName: r.lastName,
-    },
-    detachment: { id: r.detachmentId, name: r.detachmentName },
-    client: { id: r.clientId, name: r.clientName },
-  }));
+export async function listActiveAssignments(
+  asOf: string,
+  opts: ListActiveAssignmentsOptions = {},
+): Promise<ListActiveAssignmentsResult> {
+  const db = getDb();
+  const limit = opts.limit ?? 50;
+  const offset = opts.offset ?? 0;
+
+  const activeWhere = and(
+    lte(assignments.startDate, asOf),
+    or(isNull(assignments.endDate), gte(assignments.endDate, asOf)),
+  );
+
+  const [rows, countResult] = await Promise.all([
+    db
+      .select({
+        id: assignments.id,
+        startDate: assignments.startDate,
+        employeeId: employees.id,
+        employeeCode: employees.employeeCode,
+        firstName: employees.firstName,
+        lastName: employees.lastName,
+        detachmentId: detachments.id,
+        detachmentName: detachments.name,
+        clientId: clients.id,
+        clientName: clients.name,
+      })
+      .from(assignments)
+      .innerJoin(employees, eq(employees.id, assignments.employeeId))
+      .innerJoin(detachments, eq(detachments.id, assignments.detachmentId))
+      .innerJoin(clients, eq(clients.id, detachments.clientId))
+      .where(activeWhere)
+      .orderBy(employees.lastName, employees.firstName)
+      .limit(limit)
+      .offset(offset),
+    db.select({ total: count() }).from(assignments).where(activeWhere),
+  ]);
+
+  return {
+    rows: rows.map((r) => ({
+      id: r.id,
+      startDate: r.startDate,
+      employee: {
+        id: r.employeeId,
+        employeeCode: r.employeeCode,
+        firstName: r.firstName,
+        lastName: r.lastName,
+      },
+      detachment: { id: r.detachmentId, name: r.detachmentName },
+      client: { id: r.clientId, name: r.clientName },
+    })),
+    total: countResult[0]?.total ?? 0,
+  };
 }
 
 // ─── listAssignmentsOverlappingPeriod ────────────────────────────────────────

@@ -8,8 +8,10 @@ import { getSessionFromCookie } from '@/modules/auth';
  *
  * Streams a BIR Form 2316 PDF as application/pdf with Content-Disposition
  * attachment. Warnings (missing RDO / DOB / address / no locked pay runs)
- * are surfaced as X-BIR-2316-Warnings response header so the UI can display
- * a banner.
+ * are surfaced *separately* via the filing-readiness preview server action
+ * before the user clicks download — see app/(admin)/exports/bir-picker.tsx.
+ * The download response intentionally carries no warning headers because
+ * HTTP headers are Latin-1 and warning copy contains em dashes (UTF-8).
  *
  * Mirrors the SSS R-3 route-handler pattern.
  */
@@ -34,7 +36,7 @@ export async function GET(
   }
 
   try {
-    const { pdf, warnings } = await complianceExports.exportBIR_2316(employeeId, yearNum, {
+    const { pdf } = await complianceExports.exportBIR_2316(employeeId, yearNum, {
       actorUserId: session.user.id,
     });
 
@@ -46,11 +48,6 @@ export async function GET(
       headers: {
         'Content-Type': 'application/pdf',
         'Content-Disposition': `attachment; filename="${filename}"`,
-        'X-BIR-2316-Warnings': String(warnings.length),
-        // Surface warning messages as a JSON-encoded header for the UI banner.
-        'X-BIR-2316-Warning-Messages': warnings.length > 0
-          ? JSON.stringify(warnings)
-          : '[]',
       },
     });
   } catch (e) {

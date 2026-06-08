@@ -2,21 +2,40 @@ import Link from 'next/link';
 import { assignments } from '@/modules/assignments';
 import { clients } from '@/modules/clients';
 import { PageShell } from '@/components/page-shell';
+import { Pagination } from '@/components/pagination';
 import { AssignForm } from './assign-form';
 import { AssignmentsListBody } from './assignments-list-body';
+
+const PAGE_SIZE = 50;
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-export default async function AssignmentsPage() {
+function parsePage(raw: string | undefined): number {
+  const n = Number.parseInt(raw ?? '1', 10);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
+export default async function AssignmentsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | undefined>>;
+}) {
+  const params = await searchParams;
+  const page = parsePage(params.page);
   const asOf = today();
-  const [active, assignable, clientsWithDetachments] = await Promise.all([
-    assignments.listActiveAssignments(asOf),
+
+  const [activeResult, assignable, clientsWithDetachments] = await Promise.all([
+    assignments.listActiveAssignments(asOf, {
+      limit: PAGE_SIZE,
+      offset: (page - 1) * PAGE_SIZE,
+    }),
     assignments.listAssignableEmployees(asOf),
     clients.listClientsWithDetachments(),
   ]);
 
+  const { rows: active, total } = activeResult;
   const hasGuards = assignable.length > 0;
   const hasDetachments = clientsWithDetachments.some((c) => c.detachments.length > 0);
   const blocked = !hasGuards || !hasDetachments;
@@ -30,7 +49,7 @@ export default async function AssignmentsPage() {
     >
       <div className="page-toolbar">
         <div className="page-toolbar-meta">
-          {active.length} active {active.length === 1 ? 'assignment' : 'assignments'}
+          {total} active {total === 1 ? 'assignment' : 'assignments'}
         </div>
       </div>
 
@@ -40,7 +59,7 @@ export default async function AssignmentsPage() {
         today={asOf}
       />
 
-      {blocked && active.length === 0 ? (
+      {blocked && total === 0 ? (
         <div className="empty-state">
           <h3>Nothing assigned yet</h3>
           <p>
@@ -61,11 +80,21 @@ export default async function AssignmentsPage() {
           </div>
         </div>
       ) : (
-        <AssignmentsListBody
-          rows={active}
-          clientsWithDetachments={clientsWithDetachments}
-          today={asOf}
-        />
+        <>
+          <AssignmentsListBody
+            rows={active}
+            clientsWithDetachments={clientsWithDetachments}
+            today={asOf}
+          />
+          <Pagination
+            total={total}
+            page={page}
+            pageSize={PAGE_SIZE}
+            searchParams={params}
+            basePath="/assignments"
+            unitLabel="assignment"
+          />
+        </>
       )}
     </PageShell>
   );

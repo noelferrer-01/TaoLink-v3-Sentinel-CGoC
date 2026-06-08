@@ -246,6 +246,47 @@ describe('hr.searchEmployees', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// listEmployeesPage — paginated list-page-shaped sibling of searchEmployees.
+// Sibling so the typeahead consumer keeps its flat-array shape.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('hr.listEmployeesPage', () => {
+  beforeEach(async () => {
+    await cleanupEmployees();
+    // Seed 7 employees so we can exercise pagination boundaries.
+    for (let i = 1; i <= 7; i++) {
+      await hr.createEmployee({
+        firstName: 'P', lastName: `Page${String(i).padStart(2, '0')}`,
+        employeeCode: `CG-P-${String(i).padStart(4, '0')}`,
+        basicSalary: '1', payFrequency: 'MONTHLY', hiredOn: '2026-01-01',
+        employmentType: i % 2 === 0 ? 'OFFICE_STAFF' : 'GUARD',
+      });
+    }
+  });
+  afterAll(async () => { await closeDb(); });
+
+  it('returns {rows, total} with total counting the full filtered set, not the page', async () => {
+    const r = await hr.listEmployeesPage({ limit: 3, offset: 0 });
+    expect(r.rows).toHaveLength(3);
+    expect(r.total).toBe(7);
+  });
+
+  it('paginates: offset 3 with limit 3 returns rows 4–6', async () => {
+    const all = await hr.listEmployeesPage({ limit: 100, offset: 0 });
+    const page2 = await hr.listEmployeesPage({ limit: 3, offset: 3 });
+    expect(page2.rows.map((e) => e.employeeCode)).toEqual(
+      all.rows.slice(3, 6).map((e) => e.employeeCode),
+    );
+    expect(page2.total).toBe(7);
+  });
+
+  it('employmentType filter narrows both rows and total', async () => {
+    const r = await hr.listEmployeesPage({ employmentType: 'OFFICE_STAFF' });
+    expect(r.total).toBe(3); // even-indexed: 2, 4, 6
+    expect(r.rows.every((e) => e.employmentType === 'OFFICE_STAFF')).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Task 3.3 — createEmployee accepts employmentType
 // ─────────────────────────────────────────────────────────────────────────────
 describe('hr.createEmployee + employmentType', () => {

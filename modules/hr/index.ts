@@ -3,6 +3,7 @@ import {
   getEmployee,
   getEmployeeByCode,
   listEmployees,
+  listEmployeesPage,
   changeStatus,
   undoTermination,
   getLatestTerminationTimestamp,
@@ -10,7 +11,13 @@ import {
   updateEmployee,
   searchEmployees,
 } from './service';
-export type { BulkImportResult, EmployeeListItem, SearchEmployeeOptions } from './service';
+export type {
+  BulkImportResult,
+  EmployeeListItem,
+  SearchEmployeeOptions,
+  ListEmployeesPageOptions,
+  ListEmployeesPageResult,
+} from './service';
 export {
   STATUS_LABELS,
   EMPLOYMENT_TYPE_LABELS,
@@ -26,6 +33,7 @@ export const hr = {
   getEmployee,
   getEmployeeByCode,
   listEmployees,
+  listEmployeesPage,
   changeStatus,
   undoTermination,
   getLatestTerminationTimestamp,
@@ -38,6 +46,7 @@ export {
   getEmployee,
   getEmployeeByCode,
   listEmployees,
+  listEmployeesPage,
   changeStatus,
   undoTermination,
   getLatestTerminationTimestamp,

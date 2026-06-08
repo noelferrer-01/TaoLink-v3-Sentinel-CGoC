@@ -1,4 +1,4 @@
-import { eq, and, desc, sql } from 'drizzle-orm';
+import { eq, and, desc, sql, count } from 'drizzle-orm';
 import Papa from 'papaparse';
 import { z } from 'zod';
 import { getDb } from '@/core/db';
@@ -289,6 +289,68 @@ export async function searchEmployees(
         : employees.lastName,
     )
     .limit(limit);
+}
+
+// ─── List employees (paginated, list-page-shaped) ────────────────────────────
+//
+// Sibling of `searchEmployees`. `searchEmployees` returns a flat array shaped
+// for the typeahead component (Slice 2 contract: typeahead-backing endpoint).
+// `listEmployeesPage` returns `{ rows, total }` so the /employees list page
+// can render real pagination controls (criterion #2 at 10k scale).
+//
+// Same matching rules (similarity + ILIKE code + optional type/status), just
+// adds offset + total count for the page.
+
+export type ListEmployeesPageOptions = {
+  query?: string;
+  employmentType?: Employee['employmentType'];
+  status?: Employee['status'];
+  limit?: number;
+  offset?: number;
+};
+
+export type ListEmployeesPageResult = {
+  rows: Employee[];
+  total: number;
+};
+
+export async function listEmployeesPage(
+  opts: ListEmployeesPageOptions = {},
+): Promise<ListEmployeesPageResult> {
+  const db = getDb();
+  const limit = Math.min(opts.limit ?? 50, 200);
+  const offset = Math.max(opts.offset ?? 0, 0);
+  const trimmedQuery = (opts.query ?? '').trim();
+
+  const conditions: ReturnType<typeof eq>[] = [];
+
+  if (trimmedQuery.length > 0) {
+    conditions.push(
+      sql`(
+        similarity(${employees.firstName} || ' ' || ${employees.lastName}, ${trimmedQuery}) > 0.2
+        OR ${employees.employeeCode} ILIKE ${'%' + trimmedQuery + '%'}
+      )` as unknown as ReturnType<typeof eq>,
+    );
+  }
+  if (opts.employmentType) {
+    conditions.push(eq(employees.employmentType, opts.employmentType));
+  }
+  if (opts.status) {
+    conditions.push(eq(employees.status, opts.status));
+  }
+
+  const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+  const orderBy = trimmedQuery.length > 0
+    ? (sql`similarity(${employees.firstName} || ' ' || ${employees.lastName}, ${trimmedQuery}) DESC NULLS LAST` as unknown as ReturnType<typeof eq>)
+    : employees.lastName;
+
+  const [rows, countResult] = await Promise.all([
+    db.select().from(employees).where(where).orderBy(orderBy).limit(limit).offset(offset),
+    db.select({ total: count() }).from(employees).where(where),
+  ]);
+
+  return { rows, total: countResult[0]?.total ?? 0 };
 }
 
 // ─── Bulk import ─────────────────────────────────────────────────────────────

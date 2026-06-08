@@ -1,8 +1,6 @@
-# Slice 2 — UX walk findings (TBD)
+# Slice 2 — UX walk findings (2026-06-08, first pass)
 
-**Source:** Noel walks the Slice 2 demo end-to-end against [`directives/slice-2-bootstrap.md`](../../directives/slice-2-bootstrap.md) on a freshly seeded DB (`pnpm db:seed:slice2-demo`). Findings collected live during the walk.
-
-**Status:** scaffold — Noel has not yet run the walk. This file gets filled in during/after the walk, then committed alongside any genuine Slice-2 bug fixes (deferred polish goes to the Slice 3 backlog per [`2-multi-client-at-scale-plan.md`](2-multi-client-at-scale-plan.md) §10.5 Step 3).
+**Source:** Noel walked Steps 1–13 of [`directives/slice-2-bootstrap.md`](../../directives/slice-2-bootstrap.md) against the seeded DB. Walk paused at Step 12 (BIR export 500'd) — pagination + export bugs fixed, directive updated, re-walk pending.
 
 ## How to use this file during the walk
 
@@ -19,14 +17,14 @@ When the walk completes:
 
 ---
 
-## Walk metadata (fill in as you go)
+## Walk metadata (first pass)
 
-- **Date walked:**
-- **Walked by:**
-- **Starting DB state:** (fresh `docker compose down -v` / post-seed / other)
-- **Wall-clock for Steps 1–14:**          minutes (target: ≤ 30 min — criterion #11)
-- **Needed coaching at any step?** (Y/N — criterion #15)
-- **Outcome:** ☐ Pass · ☐ Pass with fixes · ☐ Blocked at Step __
+- **Date walked:** 2026-06-08
+- **Walked by:** Noel (live, with Claude assisting on fixes)
+- **Starting DB state:** post-seed (`pnpm db:seed:slice2-demo`)
+- **Wall-clock for Steps 1–14:** N/A first pass (paused at Step 12). Re-walk required for criterion #11 timing.
+- **Needed coaching at any step?** Yes — Steps 6, 8, 9, 12 (see below). All four causes addressed in this commit.
+- **Outcome:** **Pass with fixes** (4 things addressed, 2 are real bugs + 2 are directive corrections). Re-walk pending.
 
 ---
 
@@ -34,17 +32,33 @@ When the walk completes:
 
 | # | Bug | Where | Fix |
 |---|---|---|---|
-| **B1** | _(none yet)_ | | |
+| **B1** | `/assignments` page rendered all 90 rows on one page; no pagination control. Criterion #7 explicitly requires "paginated (default 50 per page)". Page called `assignments.listActiveAssignments(asOf)` which had no `limit`/`offset` and returned the full set. | [`modules/assignments/service.ts`](../../modules/assignments/service.ts), [`app/(admin)/assignments/page.tsx`](../../app/%28admin%29/assignments/page.tsx) | Extended `listActiveAssignments(asOf, {limit?, offset?})` to return `{rows, total}` with a single JOIN'd count query. Added `?page=N` searchParam to the page, default 50/page. Updated the existing 2 callers in the test suite. |
+| **B2** | `/employees` page silently capped at the top 100 matches ("Showing first 100 matches") with no pagination — non-issue at 100 employees, breaks at 10k scale. | [`modules/hr/service.ts`](../../modules/hr/service.ts), [`app/(admin)/employees/page.tsx`](../../app/%28admin%29/employees/page.tsx) | Added new `hr.listEmployeesPage({query, employmentType, status, limit, offset})` returning `{rows, total}`. `searchEmployees` stays flat-array (typeahead-shaped per contract). Page reads `?page=N`, default 50/page. New test coverage added to `hr.test.ts`. |
+| **B3** | BIR 2316 PDF download returned `500 Internal Server Error` with the message `Cannot convert argument to a ByteString because the character at index 100 has a value of 8212`. Root cause: the response handler set `X-BIR-2316-Warning-Messages` to a JSON string containing the em dash (`—`, U+2014) used in the warning copy. HTTP headers are Latin-1 only. | [`app/api/exports/bir-2316/[employeeId]/[year]/route.ts`](../../app/api/exports/bir-2316/%5BemployeeId%5D/%5Byear%5D/route.ts) | Removed both `X-BIR-2316-Warnings*` headers — they were dead code, no UI reads them. Warnings are surfaced separately via the readiness-preview server action that already powers the in-page warning banner ([`app/(admin)/exports/bir-picker.tsx`](../../app/%28admin%29/exports/bir-picker.tsx)). Comment in the route now explains why headers are intentionally absent. Download verified: 200 + 6436-byte `application/pdf`. |
+| **B4** | Shared `Pagination` component + CSS class hooks did not exist. | [`components/pagination.tsx`](../../components/pagination.tsx), [`app/globals.css`](../../app/globals.css) | New shared component renders "Showing 1–50 of 90 · page 1 of 2" + Prev/Next links that preserve other URL params. CSS for `.pagination`, `.btn--sm`, `.btn.is-disabled`. |
 
 ---
 
-## Slice-3 polish backlog (everything else)
+## Directive corrections (not bugs — wording fixes)
+
+| Step | What was wrong | Fix |
+|---|---|---|
+| **Step 4** | Expected "Showing first 100 matches" — copy was right at the time but is now stale since pagination shipped. | Rewritten to expect `100 employees` total + footer `Showing 1–50 of 100 · page 1 of 2` + Next-button behavior + filter math (`Type: Guard` → `80 employees`). |
+| **Step 6** | Expected "pagination chip at the bottom shows `1–50 of 90`" — was a forward-looking promise before pagination shipped. | Now matches the shipped UI: explicit Prev/Next + page-2 expectation. |
+| **Step 8** | Suggested picking past period `2026-05-16 → 2026-05-31` without warning that the badges would turn red. Noel hit this as "is this broken?" — it's not, it's the **late-DTR warning surface** (criterion #9). | Rewritten to distinguish current vs past period expectations, and to call out the red badges as the deliberate warning signal. |
+| **Step 9** | Said "pick the first 10 employees in the list. Quick-fill each…" — but DTR has no per-row select checkboxes (entry is grid-level). | Rewritten to use the **Mark all worked** affordance that's actually shipped. Per-row select is on the Slice-3 polish backlog. |
+
+---
+
+## Slice-3 polish backlog (deferred)
 
 ### A. Sidebar & navigation
 - _(none yet)_
 
 ### B. Tables — interactions & affordances
-- _(none yet)_
+- **B1.** Per-row select checkboxes on the DTR grid → "fill selected rows" partial-bulk action. Useful when only some guards worked the period (the Mark-all-then-edit-exceptions pattern works but is more clicks than necessary).
+- **B2.** Employees list "Bulk-assign" button currently `alert()`s `"wire in Phase 9.5"` — needs a real modal that opens against an unassigned-employees view (typeahead detachment + start date). Walk didn't hit this because the demo doesn't ask for it; would surface if a clerk tries to bulk-assign from the Employees page instead of the Assignments page. ([`app/(admin)/employees/employees-list-body.tsx:114`](../../app/%28admin%29/employees/employees-list-body.tsx#L114))
+- **B3.** Employees list "Change status" button currently `alert()`s — same pattern.
 
 ### C. Search & forms
 - _(none yet)_
@@ -68,7 +82,7 @@ When the walk completes:
 - _(none yet)_
 
 ### J. UI design process (meta)
-- _(none yet)_
+- **J1.** Three of the four Step-8/9/etc. directive corrections were "directive promised behavior the UI doesn't have." Lesson: **the bootstrap directive should be written by walking the actual UI, not by walking the contract.** The Slice-1 directive was written after Phase 9 shipped; the Slice-2 directive was written from the contract walk-through. The contract describes the intended demo; the UI describes what exists. The directive should follow the UI. Apply to Slice 3.
 
 ---
 

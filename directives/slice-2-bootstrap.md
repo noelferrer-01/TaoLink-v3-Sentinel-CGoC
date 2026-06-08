@@ -42,10 +42,11 @@ If you need the slow path (manual setup, no seed) for a presentation that includ
 - Click into **SM Prime Holdings**.
 - **Expected:** 2 detachments (`SM Megamall`, `SM Mall of Asia`), each with a deployment gauge showing `10 / 10` (green — required headcount met). Filinvest Land's two detachments will show `5 / 5`. (Done criterion #6.)
 
-### 4. Visit Employees — 100 rows, sortable, filterable
+### 4. Visit Employees — 100 rows, paginated, sortable, filterable
 - Sidebar → **Employees**.
-- **Expected:** "Showing first 100 matches" header. Default sort is `last_name` asc. Type any letter into search → debounced result; clear it. Use the **Type** dropdown → pick `Guard` → list shrinks to 80 rows. Pick `Office staff` → 15. Pick `Driver` → 2. Pick `Supervisor` → 3. (Done criterion #2 + #3.)
-- Sort by **Code** desc. Top row should be `CG-10100`.
+- **Expected:** header reads `100 employees` (or current total). Default sort is `last_name` asc. Table shows 50 rows; footer reads `Showing 1–50 of 100 employees · page 1 of 2` with **Prev / Next** links. Click **Next** → page 2 shows the remaining 50.
+- Type any letter into search → debounced result; clear it. Use the **Type** dropdown → pick `Guard` → footer should read `Showing 1–50 of 80` (page 1 of 2). Pick `Office staff` → `15 employees` (single page). Pick `Driver` → `2`. Pick `Supervisor` → `3`. (Done criterion #2 + #3.)
+- Sort by **Code** desc. Top row of page 1 should be `CG-10100`.
 
 ### 5. Open one employee — verify view-mode-default + Edit toggle
 - Click any row, e.g. `Cruz, Juan` if it exists (or the first row).
@@ -53,7 +54,7 @@ If you need the slow path (manual setup, no seed) for a presentation that includ
 
 ### 6. Visit Assignments — 90 rows, paginated, bulk-select
 - Sidebar → **Assignments**.
-- **Expected:** "90 active assignments" header. List paginated at 50 per page; pagination chip at the bottom shows `1–50 of 90`. The header has a select-all checkbox; per-row checkboxes. (Done criterion #7.)
+- **Expected:** "90 active assignments" header. List paginated at 50 per page; footer reads `Showing 1–50 of 90 active assignments · page 1 of 2` with **Prev / Next** links. Click **Next** → page 2 shows rows 51–90 (last name alphabetical). The table header has a select-all checkbox + per-row checkboxes for bulk actions. (Done criterion #7.)
 
 ### 7. Bulk-transfer 5 employees as a demo
 - On the assignments list, check the first 5 rows. Sticky bulk-action bar appears at the bottom.
@@ -62,12 +63,14 @@ If you need the slow path (manual setup, no seed) for a presentation that includ
 - **Expected:** modal closes; result panel briefly shows "5 transferred, 0 errors." Original 5 assignments now have end dates; 5 new assignments exist on Lucky Chinatown. Active count is still 90.
 
 ### 8. Visit DTR — countdown badge sourced from payroll calendar
-- Sidebar → **DTR**. Choose a period — for the demo, use the most recent semi-monthly period the system offers (e.g. **2026-05-16 → 2026-05-31** or the prior).
-- **Expected:** page header shows two badges: `Cutoff: Jun 2 (in N days)` and `Payday: Jun 5 (in N days)`. Both come from the seeded payroll calendar (Done criterion #8). If the period start is far in the past, badges may say "overdue" / "done" — that's the `CountdownBadge` pastVariant in action.
+- Sidebar → **DTR**. Choose a period — for the demo, use the **current** semi-monthly period (the system defaults to it). If you pick a past period like **2026-05-16 → 2026-05-31**, the badges will turn red and read "Cutoff 7 days ago" / "Payday 4 days ago" — **that's not a bug**, it's the late-DTR warning surface (Done criterion #9) telling the clerk the period is past due.
+- **Expected (current period):** page header shows two amber badges: `Cutoff: <date> in N days` and `Payday: <date> in N days`. Both come from the seeded payroll calendar (Done criterion #8).
+- **Expected (past period):** same badges but red, with "N days ago." This is the visible signal that this period needed to be closed already.
 
-### 9. Quick-fill DTR for a slice of the roster
-- The full 100-employee DTR is heavy for a demo. For the walk: pick the first 10 employees in the list. Quick-fill each with `worked` for the whole period (`06:00 → 18:00`).
-- **Expected:** the grid shows 10 green rows. Banner says "Open" with a **Close period** button.
+### 9. Quick-fill DTR for the period
+- The DTR page does **not** have per-row select checkboxes — entry is grid-level. Click **Mark all worked** (or the equivalent bulk-fill button shown on the page) to fill every assigned employee × every day with the default time-in/time-out for the period.
+- **Expected:** the grid populates as green/worked across all 90 active employees × N days. Banner says "Open" with a **Close period** button.
+- The Slice 1 walk filled DTR for 10 guards one at a time. At Slice 2 scale, that flow is unusable; "Mark all" is the right affordance and a real clerk would use it. Per-row select + partial-fill is on the Slice-3 polish backlog.
 
 ### 10. Close period — payroll auto-runs
 - Click **Close period**. Confirmation dialog → confirm.
