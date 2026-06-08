@@ -68,8 +68,9 @@ If you need the slow path (manual setup, no seed) for a presentation that includ
 - **Expected (past period):** same badges but red, with "N days ago." This is the visible signal that this period needed to be closed already.
 
 ### 9. Quick-fill DTR for the period
-- The DTR page does **not** have per-row select checkboxes — entry is grid-level. Click **Mark all worked** (or the equivalent bulk-fill button shown on the page) to fill every assigned employee × every day with the default time-in/time-out for the period.
-- **Expected:** the grid populates as green/worked across all 90 active employees × N days. Banner says "Open" with a **Close period** button.
+- The DTR page is paginated like every other list (default 50/page, dropdown for 25 / 50 / 100 / 200). Header shows the total: "● Open · 15 days · 90 active employees". Pagination footer at the bottom: "Showing 1–50 of 90 · Prev / Next".
+- DTR has no per-row select checkboxes — entry is grid-level. Click the **Mark all 90 employees as worked for this period** button. The label deliberately names the full count: the action fills every assigned employee × every day, **not just the current page**.
+- **Expected:** the grid populates as green/worked across all 90 employees × N days (re-paginate to see every row turn). Banner says "Open" with a **Close period** button.
 - The Slice 1 walk filled DTR for 10 guards one at a time. At Slice 2 scale, that flow is unusable; "Mark all" is the right affordance and a real clerk would use it. Per-row select + partial-fill is on the Slice-3 polish backlog.
 
 ### 10. Close period — payroll auto-runs

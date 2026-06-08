@@ -380,6 +380,77 @@ describe('assignments module', () => {
     });
   });
 
+  // ─── listOverlappingEmployeesPage + listOverlappingEmployeeIds ───────────
+  // DTR-shaped helpers. Page returns one row per employee (DISTINCT ON);
+  // the ID-only helper returns the full set for the Mark-all-worked action.
+  describe('listOverlappingEmployeesPage / listOverlappingEmployeeIds', () => {
+    const PERIOD_START = '2026-05-16';
+    const PERIOD_END = '2026-05-31';
+
+    it('deduplicates per employee even when a guard has two overlapping assignments (transfer)', async () => {
+      const { employee, detachment } = await makeFixtures();
+      const client2 = await clients.createClient({ name: 'Other Client' });
+      const det2 = await clients.createDetachment({ clientId: client2.id, name: 'Other Post' });
+
+      // First assignment, then transfer mid-period.
+      const first = await assignments.assign({
+        employeeId: employee.id, detachmentId: detachment.id, startDate: '2026-05-10',
+      });
+      await assignments.endAssignment(first.id, '2026-05-20', 'transfer');
+      await assignments.assign({
+        employeeId: employee.id, detachmentId: det2.id, startDate: '2026-05-21',
+      });
+
+      const result = await assignments.listOverlappingEmployeesPage(PERIOD_START, PERIOD_END);
+      expect(result.total).toBe(1);
+      expect(result.rows).toHaveLength(1);
+      // DISTINCT ON picks the most recent assignment (start_date DESC).
+      expect(result.rows[0]!.detachment.id).toBe(det2.id);
+
+      const ids = await assignments.listOverlappingEmployeeIds(PERIOD_START, PERIOD_END);
+      expect(ids).toEqual([employee.id]);
+    });
+
+    it('paginates: 5 distinct employees, limit=2 → 2 rows, total=5', async () => {
+      const { detachment } = await makeFixtures();
+      const empIds: string[] = [];
+      // Create 5 employees and assign each to the detachment so the overlap
+      // WHERE picks them up. (Don't try to reuse the makeFixtures employee
+      // here — it has no assignment yet, so it wouldn't match the overlap.)
+      for (let i = 1; i <= 5; i++) {
+        const code = `CG-OV${String(i).padStart(3, '0')}`;
+        const emp = await hr.createEmployee({
+          employeeCode: code, firstName: `First${i}`, lastName: `Last${i}`,
+          basicSalary: 18000, hiredOn: '2026-05-01',
+        });
+        await assignments.assign({
+          employeeId: emp.id, detachmentId: detachment.id, startDate: '2026-05-10',
+        });
+        empIds.push(emp.id);
+      }
+
+      const page1 = await assignments.listOverlappingEmployeesPage(PERIOD_START, PERIOD_END, { limit: 2, offset: 0 });
+      expect(page1.rows).toHaveLength(2);
+      expect(page1.total).toBe(5);
+
+      const page3 = await assignments.listOverlappingEmployeesPage(PERIOD_START, PERIOD_END, { limit: 2, offset: 4 });
+      expect(page3.rows).toHaveLength(1);
+      expect(page3.total).toBe(5);
+
+      const ids = await assignments.listOverlappingEmployeeIds(PERIOD_START, PERIOD_END);
+      expect(new Set(ids)).toEqual(new Set(empIds));
+    });
+
+    it('returns empty when no assignments overlap the period', async () => {
+      const result = await assignments.listOverlappingEmployeesPage(PERIOD_START, PERIOD_END);
+      expect(result.rows).toHaveLength(0);
+      expect(result.total).toBe(0);
+
+      const ids = await assignments.listOverlappingEmployeeIds(PERIOD_START, PERIOD_END);
+      expect(ids).toEqual([]);
+    });
+  });
+
   // ─── bulkTransfer ─────────────────────────────────────────────────────────
   describe('bulkTransfer', () => {
     it('transfers an employee: ends old assignment, creates new one', async () => {

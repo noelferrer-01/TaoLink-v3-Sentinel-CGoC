@@ -4,6 +4,8 @@ import {
   getActiveAssignment,
   listActiveAssignments,
   listAssignmentsOverlappingPeriod,
+  listOverlappingEmployeesPage,
+  listOverlappingEmployeeIds,
   listAssignableEmployees,
   bulkAssign,
   bulkEndAssignments,
@@ -21,6 +23,8 @@ export type {
   UpdateAssignmentPatch,
   ListAssignmentsOptions,
   ListAssignmentsResult,
+  ListOverlappingEmployeesPageOptions,
+  ListOverlappingEmployeesPageResult,
 } from './service';
 
 export const assignments = {
@@ -29,6 +33,8 @@ export const assignments = {
   getActiveAssignment,
   listActiveAssignments,
   listAssignmentsOverlappingPeriod,
+  listOverlappingEmployeesPage,
+  listOverlappingEmployeeIds,
   listAssignableEmployees,
   bulkAssign,
   bulkEndAssignments,
@@ -43,6 +49,8 @@ export {
   getActiveAssignment,
   listActiveAssignments,
   listAssignmentsOverlappingPeriod,
+  listOverlappingEmployeesPage,
+  listOverlappingEmployeeIds,
   listAssignableEmployees,
   bulkAssign,
   bulkEndAssignments,

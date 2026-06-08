@@ -1,4 +1,4 @@
-import { and, eq, lte, gte, or, isNull, desc, notInArray, ne, count } from 'drizzle-orm';
+import { and, eq, lte, gte, or, isNull, desc, notInArray, ne, count, sql } from 'drizzle-orm';
 import { getDb } from '@/core/db';
 import { assignments, type Assignment } from './schema';
 import { employees } from '@/modules/hr/schema';
@@ -215,6 +215,128 @@ export async function listAssignmentsOverlappingPeriod(
     detachment: { id: r.detachmentId, name: r.detachmentName },
     client: { id: r.clientId, name: r.clientName },
   }));
+}
+
+// ─── listOverlappingEmployeesPage ────────────────────────────────────────────
+// DTR-shaped sibling: returns ONE row per employee (deduplicated via
+// DISTINCT ON), paginated, with the most-recent assignment in the period
+// chosen as the representative. Used by the /dtr grid which lists each
+// guard once per period regardless of mid-period transfers.
+//
+// Returns the same row shape as listAssignmentsOverlappingPeriod, plus a
+// total count of *distinct employees* (not assignment rows).
+export type ListOverlappingEmployeesPageOptions = {
+  limit?: number;
+  offset?: number;
+};
+export type ListOverlappingEmployeesPageResult = {
+  rows: ActiveAssignmentRow[];
+  total: number;
+};
+export async function listOverlappingEmployeesPage(
+  periodStart: string,
+  periodEnd: string,
+  opts: ListOverlappingEmployeesPageOptions = {},
+): Promise<ListOverlappingEmployeesPageResult> {
+  const db = getDb();
+  const limit = Math.max(1, Math.min(opts.limit ?? 50, 500));
+  const offset = Math.max(opts.offset ?? 0, 0);
+
+  // DISTINCT ON keeps one row per employee. The inner ORDER BY chooses
+  // which assignment "wins" (most recent startDate); the outer ORDER BY
+  // sorts the deduped result for display. Drizzle's typed query builder
+  // can't express both orderings in one query, so we use raw SQL — values
+  // are bound via the `sql` template, no string concatenation.
+  const rowsResult = await db.execute<{
+    id: string;
+    start_date: string;
+    employee_id: string;
+    employee_code: string;
+    first_name: string;
+    last_name: string;
+    detachment_id: string;
+    detachment_name: string;
+    client_id: string;
+    client_name: string;
+  }>(sql`
+    SELECT * FROM (
+      SELECT DISTINCT ON (e.id)
+        a.id, a.start_date,
+        e.id AS employee_id, e.employee_code, e.first_name, e.last_name,
+        d.id AS detachment_id, d.name AS detachment_name,
+        c.id AS client_id, c.name AS client_name
+      FROM assignments a
+      INNER JOIN hr_employees e ON e.id = a.employee_id
+      INNER JOIN detachments d ON d.id = a.detachment_id
+      INNER JOIN clients c ON c.id = d.client_id
+      WHERE a.start_date <= ${periodEnd}
+        AND (a.end_date IS NULL OR a.end_date >= ${periodStart})
+      ORDER BY e.id, a.start_date DESC
+    ) dedup
+    ORDER BY last_name, first_name
+    LIMIT ${limit} OFFSET ${offset}
+  `);
+
+  // Count distinct employees matching the overlap (separate query so it
+  // ignores LIMIT/OFFSET).
+  const countResult = await db.execute<{ total: number }>(sql`
+    SELECT COUNT(DISTINCT a.employee_id)::int AS total
+    FROM assignments a
+    WHERE a.start_date <= ${periodEnd}
+      AND (a.end_date IS NULL OR a.end_date >= ${periodStart})
+  `);
+
+  const rawRows = rowsResult as unknown as Array<{
+    id: string;
+    start_date: string;
+    employee_id: string;
+    employee_code: string;
+    first_name: string;
+    last_name: string;
+    detachment_id: string;
+    detachment_name: string;
+    client_id: string;
+    client_name: string;
+  }>;
+  const rawCount = countResult as unknown as Array<{ total: number }>;
+
+  return {
+    rows: rawRows.map((r) => ({
+      id: r.id,
+      startDate: r.start_date,
+      employee: {
+        id: r.employee_id,
+        employeeCode: r.employee_code,
+        firstName: r.first_name,
+        lastName: r.last_name,
+      },
+      detachment: { id: r.detachment_id, name: r.detachment_name },
+      client: { id: r.client_id, name: r.client_name },
+    })),
+    total: rawCount[0]?.total ?? 0,
+  };
+}
+
+// ─── listOverlappingEmployeeIds ──────────────────────────────────────────────
+// Cheap "just the IDs" helper for DTR's Mark-all-worked action. Returns the
+// full set of distinct employee IDs whose assignments overlap the period —
+// the page can paginate the visible rows but the bulk-fill action must still
+// fire over every employee, not just the current page.
+export async function listOverlappingEmployeeIds(
+  periodStart: string,
+  periodEnd: string,
+): Promise<string[]> {
+  const db = getDb();
+  const rows = await db
+    .selectDistinct({ employeeId: assignments.employeeId })
+    .from(assignments)
+    .where(
+      and(
+        lte(assignments.startDate, periodEnd),
+        or(isNull(assignments.endDate), gte(assignments.endDate, periodStart)),
+      ),
+    );
+  return rows.map((r) => r.employeeId);
 }
 
 // ─── listAssignableEmployees ─────────────────────────────────────────────────

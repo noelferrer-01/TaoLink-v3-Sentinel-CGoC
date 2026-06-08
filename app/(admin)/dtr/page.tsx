@@ -4,6 +4,7 @@ import { clients } from '@/modules/clients';
 import { dtr } from '@/modules/dtr';
 import { payrollCalendars } from '@/modules/payroll-calendars';
 import { PageShell } from '@/components/page-shell';
+import { Pagination, clampPageSize } from '@/components/pagination';
 import { CountdownBadge } from '@/components/countdown-badge';
 import { ClosePeriodButton } from './close-period-button';
 import { FillRowButton, FillAllButton } from './fill-buttons';
@@ -13,21 +14,36 @@ function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+function parsePage(raw: string | undefined): number {
+  const n = Number.parseInt(raw ?? '1', 10);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
 export default async function DTRPage({
   searchParams,
 }: {
-  searchParams: Promise<{ start?: string }>;
+  searchParams: Promise<Record<string, string | undefined>>;
 }) {
   const params = await searchParams;
   const safePeriod = params.start ? periodForDate(params.start) : currentPeriod();
   const totalDays = countDays(safePeriod.start, safePeriod.end);
   const today = todayIso();
+  const page = parsePage(params.page);
+  const pageSize = clampPageSize(params.size);
 
-  const [active, closed, allClients] = await Promise.all([
-    assignments.listAssignmentsOverlappingPeriod(safePeriod.start, safePeriod.end),
+  // The visible employee grid is paginated; the Mark-all-worked action must
+  // still see every employee in the period, so it gets its own cheap ID-only
+  // query alongside the joined page.
+  const [pageResult, allEmployeeIds, closed, allClients] = await Promise.all([
+    assignments.listOverlappingEmployeesPage(safePeriod.start, safePeriod.end, {
+      limit: pageSize,
+      offset: (page - 1) * pageSize,
+    }),
+    assignments.listOverlappingEmployeeIds(safePeriod.start, safePeriod.end),
     dtr.isPeriodClosed(safePeriod.start, safePeriod.end),
     clients.listClients(),
   ]);
+  const { rows: guards, total: totalGuards } = pageResult;
 
   // Resolve cut-off + payday via the first client's calendar (or fallback
   // defaults if there are no clients yet). Multi-client per-period dashboard
@@ -40,18 +56,12 @@ export default async function DTRPage({
     ? await payrollCalendars.resolveForPeriod(calendarOwner.id, periodStartDate, periodEndDate)
     : null;
 
-  // Dedupe by employee — a guard may show twice if they had a transfer, but
-  // for DTR we only care once per period.
-  const seen = new Set<string>();
-  const guards = active.filter((a) => {
-    if (seen.has(a.employee.id)) return false;
-    seen.add(a.employee.id);
-    return true;
-  });
-  const guardIds = guards.map((g) => g.employee.id);
+  // Dedup happens at the DB level via DISTINCT ON in listOverlappingEmployeesPage,
+  // so each guard appears once even after a mid-period transfer.
+  const visibleGuardIds = guards.map((g) => g.employee.id);
 
-  const summary = guardIds.length > 0
-    ? await dtr.summarizePeriod(guardIds, safePeriod.start, safePeriod.end)
+  const summary = visibleGuardIds.length > 0
+    ? await dtr.summarizePeriod(visibleGuardIds, safePeriod.start, safePeriod.end)
     : [];
   const recordedByGuard = new Map(summary.map((s) => [s.employeeId, s.recordedDays]));
 
@@ -73,6 +83,8 @@ export default async function DTRPage({
       footerHint="Close the period when every employee shows ✓ All days. Closing locks the DTR and triggers payslip computation."
     >
       <form method="get" action="/dtr" className="page-toolbar" style={{ alignItems: 'center' }}>
+        {/* Preserve the rows-per-page preference across period changes. */}
+        <input type="hidden" name="size" value={String(pageSize)} />
         <label className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: '0.75rem' }}>
           <span className="field-label" style={{ margin: 0 }}>Period</span>
           <select
@@ -97,11 +109,11 @@ export default async function DTRPage({
           ) : (
             <span style={{ color: 'var(--success)' }}>● Open</span>
           )}{' '}
-          · {totalDays} days · {guards.length} active {guards.length === 1 ? 'employee' : 'employees'}
+          · {totalDays} days · {totalGuards} active {totalGuards === 1 ? 'employee' : 'employees'}
         </div>
       </form>
 
-      {guards.length === 0 ? (
+      {totalGuards === 0 ? (
         <div className="empty-state">
           <h3>No employees to record for this period</h3>
           <p>
@@ -121,11 +133,12 @@ export default async function DTRPage({
             <div className="card" style={{ marginBottom: '1.5rem' }}>
               <div style={{ fontSize: '0.9375rem', marginBottom: '0.75rem', color: 'var(--ink-soft)' }}>
                 <strong>Quick fill:</strong> mark every empty day in this
-                period as a worked day (7am–3pm) for every active employee. You
-                can override individual days later (coming soon — for now, use
-                the database directly for exceptions).
+                period as a worked day (7am–3pm) for{' '}
+                <strong>all {totalGuards} active {totalGuards === 1 ? 'employee' : 'employees'}</strong>{' '}
+                (not just this page). You can override individual days later
+                (coming soon — for now, use the database directly for exceptions).
               </div>
-              <FillAllButton employeeIds={guardIds} start={safePeriod.start} end={safePeriod.end} />
+              <FillAllButton employeeIds={allEmployeeIds} start={safePeriod.start} end={safePeriod.end} />
             </div>
           ) : null}
 
@@ -188,6 +201,15 @@ export default async function DTRPage({
               </tbody>
             </table>
           </div>
+
+          <Pagination
+            total={totalGuards}
+            page={page}
+            pageSize={pageSize}
+            searchParams={params}
+            basePath="/dtr"
+            unitLabel="employee"
+          />
 
           <div style={{ marginTop: '2rem', paddingTop: '1.5rem', borderTop: '1px solid var(--rule)' }}>
             {closed ? (
