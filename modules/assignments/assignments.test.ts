@@ -505,11 +505,11 @@ describe('assignments module', () => {
   describe('list (paginated)', () => {
     async function seedN(n: number) {
       // Need distinct employees (one per assignment, no overlap violations)
-      const { detachment } = await makeFixtures(); // creates CG-A001 + detachment
+      const { employee, detachment } = await makeFixtures(); // creates CG-A001 + detachment
 
-      const empIds: string[] = [];
-      // Create 49 more employees (total 50 with the one from makeFixtures)
-      // makeFixtures employee is CG-A001; we create CG-P002 … CG-P050
+      const allIds: string[] = [employee.id];
+      // Create n-1 more employees (total n with the makeFixtures employee).
+      // makeFixtures employee is CG-A001; we create CG-P002 … CG-P{n}.
       for (let i = 2; i <= n; i++) {
         const code = `CG-P${String(i).padStart(3, '0')}`;
         const emp = await hr.createEmployee({
@@ -519,15 +519,14 @@ describe('assignments module', () => {
           basicSalary: 18000,
           hiredOn: '2026-05-01',
         });
-        empIds.push(emp.id);
+        allIds.push(emp.id);
       }
 
-      // Get the first employee (from makeFixtures)
-      const firstEmpRows = await getDb().select().from(employeesTable).limit(1);
-      const firstEmpId = firstEmpRows[0]!.id;
-
-      // Assign all employees (use different start dates to avoid overlap issues)
-      const allIds = [firstEmpId, ...empIds];
+      // Assign each employee to the detachment once. Using the IDs we just
+      // created avoids the previous bug where re-fetching "first employee"
+      // via .limit(1) (no ORDER BY) was nondeterministic — sometimes it
+      // returned an ID already in the list and the second assign() threw
+      // on the overlap rule. (CI hit this; local order happened to be lucky.)
       for (let i = 0; i < allIds.length; i++) {
         await assignments.assign({
           employeeId: allIds[i]!,
