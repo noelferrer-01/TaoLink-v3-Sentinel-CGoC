@@ -468,3 +468,23 @@ describe('hr.undoTermination', () => {
     expect(payload.undo).toBe(true);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Slice 3 — next employee-code generator (used by Recruitment hire flow)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('hr.generateNextEmployeeCode', () => {
+  beforeEach(async () => { await cleanupEmployees(); });
+  afterAll(async () => { await closeDb(); });
+
+  it('returns the next CG- code after the current max', async () => {
+    await hr.createEmployee({ employeeCode: 'CG-10001', firstName: 'A', lastName: 'B', basicSalary: 18000, hiredOn: '2026-05-01' });
+    await hr.createEmployee({ employeeCode: 'CG-10009', firstName: 'C', lastName: 'D', basicSalary: 18000, hiredOn: '2026-05-01' });
+    const next = await hr.generateNextEmployeeCode('CG-');
+    expect(next).toBe('CG-10010');
+  });
+
+  it('starts at 10001 when no codes exist for the prefix', async () => {
+    const next = await hr.generateNextEmployeeCode('CG-');
+    expect(next).toBe('CG-10001');
+  });
+});

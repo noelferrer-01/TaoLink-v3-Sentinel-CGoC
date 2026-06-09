@@ -460,3 +460,23 @@ export async function bulkImportEmployees(
   }
   return { imported, errors };
 }
+
+/**
+ * Returns the next employee code for a prefix by finding the max numeric suffix
+ * among existing codes and incrementing, padded to 5 digits (matching the
+ * CG-10001 seed convention). Recruitment's hire flow uses this so recruiters
+ * don't hand-type unique codes; the value remains overridable at hire time.
+ */
+export async function generateNextEmployeeCode(prefix = 'CG-'): Promise<string> {
+  const db = getDb();
+  const rows = await db
+    .select({ code: employees.employeeCode })
+    .from(employees)
+    .where(sql`${employees.employeeCode} LIKE ${prefix + '%'}`);
+  let max = 10000; // so the first generated code is <prefix>10001
+  for (const { code } of rows) {
+    const suffix = Number(code.slice(prefix.length));
+    if (Number.isInteger(suffix) && suffix > max) max = suffix;
+  }
+  return `${prefix}${String(max + 1).padStart(5, '0')}`;
+}

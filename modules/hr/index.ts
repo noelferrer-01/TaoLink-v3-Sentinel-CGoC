@@ -10,6 +10,7 @@ import {
   bulkImportEmployees,
   updateEmployee,
   searchEmployees,
+  generateNextEmployeeCode,
 } from './service';
 export type {
   BulkImportResult,
@@ -40,6 +41,7 @@ export const hr = {
   bulkImportEmployees,
   updateEmployee,
   searchEmployees,
+  generateNextEmployeeCode,
 };
 export {
   createEmployee,
@@ -53,4 +55,5 @@ export {
   bulkImportEmployees,
   updateEmployee,
   searchEmployees,
+  generateNextEmployeeCode,
 };
