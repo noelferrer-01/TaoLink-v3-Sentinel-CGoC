@@ -38,14 +38,16 @@ export function BirPicker({
         const message = await res.text();
         throw new Error(message || `Server returned ${res.status}`);
       }
-      // Force application/pdf on the Blob so Chrome respects the .pdf
-      // extension in the download filename. If we use the raw response
-      // blob, its `type` is whatever the server sent ("application/pdf"
-      // is normal but not guaranteed across all transports) — copying
-      // into a fresh Blob with an explicit type keeps the download
-      // dialog consistent.
+      // Rewrap the response bytes as application/octet-stream rather than
+      // application/pdf. Chrome's built-in PDF Viewer otherwise hijacks
+      // the blob-anchor click — even with the `download` attribute, it
+      // opens the PDF inline and Chrome's download manager just receives
+      // the blob URL as the filename (no extension). The bytes are
+      // unchanged, and macOS still opens the saved file with Preview
+      // because the `.pdf` filename extension wins for the OS file-type
+      // association.
       const rawBlob = await res.blob();
-      const blob = new Blob([await rawBlob.arrayBuffer()], { type: 'application/pdf' });
+      const blob = new Blob([await rawBlob.arrayBuffer()], { type: 'application/octet-stream' });
 
       // Prefer the server-suggested filename from Content-Disposition;
       // fall back to the year-only filename if parsing fails.
