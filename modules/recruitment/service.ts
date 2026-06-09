@@ -19,6 +19,8 @@ import {
   type BlacklistEntry,
 } from './schema';
 import { ALLOWED_TRANSITIONS, requiredDocsFor, type DocType, type DocStatus, type Stage } from './labels';
+import { createPerson } from '@/modules/persons/service';
+import { ID_TYPE_LADDER } from '@/modules/persons/labels';
 
 // ─── createApplicant ───────────────────────────────────────────────────────────
 
@@ -44,6 +46,27 @@ export type CreateApplicantInput = {
 
 export async function createApplicant(input: CreateApplicantInput): Promise<Applicant> {
   const db = getDb();
+
+  // ── T7 transitional dual-write: mint a Person from the applicant's identity ──
+  // Derive anchor from available IDs (applicants may have SSS; no philsys input today).
+  const anchorIdType: typeof ID_TYPE_LADDER[number] | 'none' =
+    input.sssNumber ? 'sss' : 'none';
+  const person = await createPerson({
+    firstName: input.firstName.trim(),
+    lastName: input.lastName.trim(),
+    middleName: input.middleName ?? null,
+    dateOfBirth: input.dateOfBirth ?? null,
+    sssNumber: input.sssNumber ?? null,
+    phone: input.phone ?? null,
+    email: input.email ?? null,
+    addressLine1: input.addressLine1 ?? null,
+    addressLine2: input.addressLine2 ?? null,
+    city: input.city ?? null,
+    province: input.province ?? null,
+    anchorIdType,
+    actorUserId: input.actorUserId ?? null,
+  });
+
   const [created] = await db
     .insert(applicants)
     .values({
@@ -63,6 +86,7 @@ export async function createApplicant(input: CreateApplicantInput): Promise<Appl
       isArmedPost: input.isArmedPost ?? false,
       appliedOn: input.appliedOn,
       notes: input.notes ?? null,
+      personId: person.id,
     })
     .returning();
   if (!created) throw new Error('[recruitment/createApplicant] insert returned no row');
@@ -311,6 +335,8 @@ export async function hireApplicant(applicantId: string, meta: HireMeta) {
   const employeeCode = meta.employeeCode ?? (await hr.generateNextEmployeeCode('CG-'));
 
   // Handoff per ADR 0009: Recruitment.hireApplicant → HR.createEmployee.
+  // T7 dual-write: pass the applicant's existing personId so the SAME Person is
+  // linked to the new employee — no duplicate human is minted at hire time.
   const employee = await hr.createEmployee({
     employeeCode,
     firstName: a.firstName,
@@ -327,6 +353,7 @@ export async function hireApplicant(applicantId: string, meta: HireMeta) {
     city: a.city,
     province: a.province,
     sssNumber: a.sssNumber,
+    personId: a.personId ?? undefined, // pass the applicant's Person so no duplicate is minted
     actorUserId: meta.actorUserId ?? null,
   });
 

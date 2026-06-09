@@ -18,6 +18,7 @@ import { payRuns, payslips } from '@/modules/payroll/schema';
 import { dtrEntries, dtrPeriodCloses } from '@/modules/dtr/schema';
 import { assignments as assignmentsTable } from '@/modules/assignments/schema';
 import { employees } from '@/modules/hr/schema';
+import { persons } from '@/modules/persons/schema';
 import { gte, and } from 'drizzle-orm';
 import { auditLog } from '@/modules/audit/schema';
 import { eventLog } from '@/modules/events/schema';
@@ -60,6 +61,7 @@ describe('compliance-exports.sss-r3', () => {
     await db.delete(dtrPeriodCloses);
     await db.delete(assignmentsTable);
     await db.delete(employees);
+    await db.delete(persons);
     await db.delete(eventLog);
     // auditLog is append-only; tests filter by action + createdAt instead of wiping.
   });

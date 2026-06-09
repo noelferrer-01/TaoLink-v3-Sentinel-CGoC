@@ -5,6 +5,7 @@ import { clients as clientsTable, detachments as detachmentsTable } from './sche
 import { auditLog } from '@/modules/audit/schema';
 import { assignments as assignmentsTable } from '@/modules/assignments/schema';
 import { employees as employeesTable } from '@/modules/hr/schema';
+import { persons } from '@/modules/persons/schema';
 import { payrollCalendars as payrollCalendarsTable } from '@/modules/payroll-calendars/schema';
 import { clients } from './index';
 import { hr } from '@/modules/hr/index';
@@ -21,6 +22,7 @@ describe('clients module', () => {
     await getDb().delete(clientsTable);
     await getDb().delete(payrollCalendarsTable);
     await getDb().delete(employeesTable);
+    await getDb().delete(persons);
   });
   afterAll(async () => { await closeDb(); });
 

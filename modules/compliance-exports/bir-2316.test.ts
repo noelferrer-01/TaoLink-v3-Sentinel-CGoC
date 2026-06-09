@@ -18,6 +18,7 @@ import { payRuns, payslips } from '@/modules/payroll/schema';
 import { dtrEntries, dtrPeriodCloses } from '@/modules/dtr/schema';
 import { assignments as assignmentsTable } from '@/modules/assignments/schema';
 import { employees } from '@/modules/hr/schema';
+import { persons } from '@/modules/persons/schema';
 import { auditLog } from '@/modules/audit/schema';
 import { eventLog } from '@/modules/events/schema';
 import { hr } from '@/modules/hr/index';
@@ -72,6 +73,7 @@ describe('compliance-exports.bir-2316 (Phase 7 — PDF pipeline)', () => {
     await db.delete(dtrPeriodCloses);
     await db.delete(assignmentsTable);
     await db.delete(employees);
+    await db.delete(persons);
     await db.delete(eventLog);
   });
 

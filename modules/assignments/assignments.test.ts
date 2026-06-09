@@ -4,6 +4,7 @@ import { closeDb, getDb } from '@/core/db';
 import { assignments as assignmentsTable } from './schema';
 import { detachments as detachmentsTable, clients as clientsTable } from '@/modules/clients/schema';
 import { employees as employeesTable } from '@/modules/hr/schema';
+import { persons } from '@/modules/persons/schema';
 import { dtrEntries, dtrPeriodCloses } from '@/modules/dtr/schema';
 import { payslips, payRuns } from '@/modules/payroll/schema';
 import { eventLog } from '@/modules/events/schema';
@@ -37,6 +38,7 @@ describe('assignments module', () => {
     await getDb().delete(detachmentsTable);
     await getDb().delete(clientsTable);
     await getDb().delete(employeesTable);
+    await getDb().delete(persons);
   });
 
   afterAll(async () => {

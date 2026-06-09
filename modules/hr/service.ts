@@ -9,6 +9,8 @@ import { auditLog } from '@/modules/audit/schema';
 import { audit } from '@/modules/audit';
 import { events } from '@/modules/events';
 import { ALLOWED_TRANSITIONS, type Status } from './labels';
+import { createPerson } from '@/modules/persons/service';
+import { ID_TYPE_LADDER } from '@/modules/persons/labels';
 
 // Drizzle types `numeric` columns as `string`, but callers reasonably pass numbers.
 // We widen basicSalary to accept both and stringify before insert.
@@ -17,13 +19,63 @@ type CreateEmployeeInput = Omit<NewEmployee, 'id' | 'createdAt' | 'updatedAt' | 
   actorUserId?: string | null;
 };
 
+/**
+ * Derives the best anchorIdType for a new Person from the available ID fields,
+ * following the ID_TYPE_LADDER preference. Employees have no philsys input today,
+ * so philsys is skipped. Returns 'none' if no ID is present.
+ */
+function deriveAnchorIdType(input: {
+  sssNumber?: string | null;
+  tinNumber?: string | null;
+  philhealthNumber?: string | null;
+  pagibigNumber?: string | null;
+}): typeof ID_TYPE_LADDER[number] | 'none' {
+  // Only sss and tin are unique anchor IDs for employees (no philsys input today).
+  if (input.sssNumber) return 'sss';
+  if (input.tinNumber) return 'tin';
+  return 'none';
+}
+
 export async function createEmployee(input: CreateEmployeeInput): Promise<Employee> {
   const db = getDb();
   const { actorUserId, ...row } = input;
+
+  // ── T7 transitional dual-write: create or link a Person ──────────────────
+  // If a personId is passed, link it (no new Person minted — used by hireApplicant
+  // to share the applicant's existing Person). Otherwise, mint one from the
+  // identity fields in the input.
+  let personId: string | null = row.personId ?? null;
+  if (!personId) {
+    const anchorIdType = deriveAnchorIdType({
+      sssNumber: row.sssNumber,
+      tinNumber: row.tinNumber,
+    });
+    const person = await createPerson({
+      firstName: row.firstName,
+      lastName: row.lastName,
+      middleName: row.middleName ?? null,
+      dateOfBirth: row.dateOfBirth ?? null,
+      sssNumber: row.sssNumber ?? null,
+      philhealthNumber: row.philhealthNumber ?? null,
+      pagibigNumber: row.pagibigNumber ?? null,
+      tinNumber: row.tinNumber ?? null,
+      email: row.email ?? null,
+      phone: row.phone ?? null,
+      addressLine1: row.addressLine1 ?? null,
+      addressLine2: row.addressLine2 ?? null,
+      city: row.city ?? null,
+      province: row.province ?? null,
+      postalCode: row.postalCode ?? null,
+      anchorIdType,
+      actorUserId: actorUserId ?? null,
+    });
+    personId = person.id;
+  }
+
   try {
     const [created] = await db
       .insert(employees)
-      .values({ ...row, basicSalary: String(row.basicSalary) })
+      .values({ ...row, personId, basicSalary: String(row.basicSalary) })
       .returning();
     if (!created) throw new Error('[hr/createEmployee] insert returned no row');
     await audit.record({
@@ -585,7 +637,13 @@ export async function bulkImportEmployees(
   );
 
   const seenInBatch = new Set<string>();
-  const toInsert: NewEmployee[] = [];
+  // Collect validated rows for processing. We process row-by-row so that each
+  // Person can be minted individually and SSS dups can be caught as row errors.
+  type ValidatedRow = {
+    csvRow: number;
+    data: z.infer<typeof csvRowSchema>;
+  };
+  const validRows: ValidatedRow[] = [];
 
   parsed.data.forEach((raw, idx) => {
     const row = idx + 1;
@@ -604,41 +662,85 @@ export async function bulkImportEmployees(
       return;
     }
     if (r.email) seenInBatch.add(r.email);
-    toInsert.push({
-      employeeCode: r.employee_code,
-      firstName: r.first_name,
-      lastName: r.last_name,
-      email: r.email || null,
-      basicSalary: String(parseFloat(r.basic_salary)),
-      payFrequency: r.pay_frequency,
-      employmentType: r.employment_type,
-      hiredOn: r.hired_on,
-      sssNumber: blankToNull(r.sss_number),
-      philhealthNumber: blankToNull(r.philhealth_number),
-      pagibigNumber: blankToNull(r.pagibig_number),
-      tinNumber: blankToNull(r.tin_number),
-      rdoCode: blankToNull(r.rdo_code),
-      dateOfBirth: blankToNull(r.date_of_birth),
-      addressLine1: blankToNull(r.address_line1),
-      addressLine2: blankToNull(r.address_line2),
-      city: blankToNull(r.city),
-      province: blankToNull(r.province),
-      postalCode: blankToNull(r.postal_code),
-    });
+    validRows.push({ csvRow: row, data: r });
   });
 
+  // ── T7 transitional dual-write: create a Person per row then the employee ──
+  // Process individually (not batch) so SSS/TIN collisions surface as per-row
+  // errors rather than aborting the whole import.
   let imported = 0;
-  if (toInsert.length > 0) {
-    const created = await db.insert(employees).values(toInsert).returning();
-    imported = created.length;
-    for (const e of created) {
+  for (const { csvRow, data: r } of validRows) {
+    const sssNumber = blankToNull(r.sss_number);
+    const tinNumber = blankToNull(r.tin_number);
+    const anchorIdType = deriveAnchorIdType({ sssNumber, tinNumber });
+
+    let personId: string;
+    try {
+      const person = await createPerson({
+        firstName: r.first_name,
+        lastName: r.last_name,
+        dateOfBirth: blankToNull(r.date_of_birth),
+        sssNumber,
+        philhealthNumber: blankToNull(r.philhealth_number),
+        pagibigNumber: blankToNull(r.pagibig_number),
+        tinNumber,
+        addressLine1: blankToNull(r.address_line1),
+        addressLine2: blankToNull(r.address_line2),
+        city: blankToNull(r.city),
+        province: blankToNull(r.province),
+        postalCode: blankToNull(r.postal_code),
+        anchorIdType,
+        actorUserId: opts.actorUserId ?? null,
+      });
+      personId = person.id;
+    } catch (personErr: any) {
+      // "already on file" from createPerson means duplicate unique ID (SSS/TIN).
+      // Surface as a row error and continue.
+      errors.push({ row: csvRow, reason: personErr.message ?? String(personErr) });
+      continue;
+    }
+
+    try {
+      const [created] = await db
+        .insert(employees)
+        .values({
+          employeeCode: r.employee_code,
+          firstName: r.first_name,
+          lastName: r.last_name,
+          email: r.email || null,
+          basicSalary: String(parseFloat(r.basic_salary)),
+          payFrequency: r.pay_frequency,
+          employmentType: r.employment_type,
+          hiredOn: r.hired_on,
+          sssNumber,
+          philhealthNumber: blankToNull(r.philhealth_number),
+          pagibigNumber: blankToNull(r.pagibig_number),
+          tinNumber,
+          rdoCode: blankToNull(r.rdo_code),
+          dateOfBirth: blankToNull(r.date_of_birth),
+          addressLine1: blankToNull(r.address_line1),
+          addressLine2: blankToNull(r.address_line2),
+          city: blankToNull(r.city),
+          province: blankToNull(r.province),
+          postalCode: blankToNull(r.postal_code),
+          personId,
+        })
+        .returning();
+      if (!created) throw new Error('[hr/bulkImportEmployees] insert returned no row');
+      imported++;
       await audit.record({
         actor: opts.actorUserId ?? null,
         action: 'hr.employee.created',
-        target: { kind: 'hr_employee', id: e.id },
-        payload: { employeeCode: e.employeeCode, viaBulkImport: true },
+        target: { kind: 'hr_employee', id: created.id },
+        payload: { employeeCode: created.employeeCode, viaBulkImport: true },
       });
-      await events.publish('hr.employee.created', { id: e.id, employeeCode: e.employeeCode });
+      await events.publish('hr.employee.created', { id: created.id, employeeCode: created.employeeCode });
+    } catch (e: any) {
+      if (e.code === '23505' && /email/.test(e.detail ?? '')) {
+        errors.push({ row: csvRow, reason: `email ${r.email} already exists in HR — pick a different one or remove this row.` });
+      } else {
+        errors.push({ row: csvRow, reason: e.message ?? String(e) });
+      }
     }
   }
   return { imported, errors };

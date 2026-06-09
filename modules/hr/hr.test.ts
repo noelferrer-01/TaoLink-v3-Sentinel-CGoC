@@ -11,7 +11,9 @@ import { hr } from './index';
 import { createPerson } from '@/modules/persons';
 import { _resetEventsForTests } from '@/modules/events';
 
-// FK-ordered cleanup helper reused across describe blocks
+// FK-ordered cleanup helper reused across describe blocks.
+// T7: createEmployee now mints a Person, so employees cleanup must also clear
+// persons (otherwise SSS/TIN unique constraints fire on the next test run).
 async function cleanupEmployees() {
   await getDb().delete(payslips);
   await getDb().delete(payRuns);
@@ -19,23 +21,24 @@ async function cleanupEmployees() {
   await getDb().delete(dtrPeriodCloses);
   await getDb().delete(assignmentsTable);
   await getDb().delete(employees);
+  await getDb().delete(persons);
 }
 
 async function cleanupPersons() {
+  // cleanupEmployees now handles persons too.
   await cleanupEmployees();
-  // persons has no FKs pointing at it after employees is cleared
-  await getDb().delete(persons);
 }
 
 describe('hr.createEmployee + state machine', () => {
   beforeEach(async () => {
-    // FK order: payslips → pay_runs → dtr_entries → dtr_period_closes → assignments → employees
+    // FK order: payslips → pay_runs → dtr_entries → dtr_period_closes → assignments → employees → persons
     await getDb().delete(payslips);
     await getDb().delete(payRuns);
     await getDb().delete(dtrEntries);
     await getDb().delete(dtrPeriodCloses);
     await getDb().delete(assignmentsTable);
     await getDb().delete(employees);
+    await getDb().delete(persons);
   });
   afterAll(async () => { await closeDb(); });
 
@@ -84,13 +87,14 @@ describe('hr.createEmployee + state machine', () => {
 
 describe('hr.bulkImportEmployees', () => {
   beforeEach(async () => {
-    // FK order: payslips → pay_runs → dtr_entries → dtr_period_closes → assignments → employees
+    // FK order: payslips → pay_runs → dtr_entries → dtr_period_closes → assignments → employees → persons
     await getDb().delete(payslips);
     await getDb().delete(payRuns);
     await getDb().delete(dtrEntries);
     await getDb().delete(dtrPeriodCloses);
     await getDb().delete(assignmentsTable);
     await getDb().delete(employees);
+    await getDb().delete(persons);
   });
   afterAll(async () => { await closeDb(); });
 
@@ -144,6 +148,7 @@ describe('hr.listEmployees', () => {
     await getDb().delete(dtrPeriodCloses);
     await getDb().delete(assignmentsTable);
     await getDb().delete(employees);
+    await getDb().delete(persons);
   });
   afterAll(async () => { await closeDb(); });
 
@@ -587,6 +592,106 @@ describe('hr.getEmployeeWithIdentity', () => {
   it('returns null when the employee does not exist', async () => {
     const result = await hr.getEmployeeWithIdentity('00000000-0000-0000-0000-000000000000');
     expect(result).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Slice 3a Task 7 — createEmployee + bulkImportEmployees create/link a Person
+// ─────────────────────────────────────────────────────────────────────────────
+describe('hr.createEmployee — dual-write (T7)', () => {
+  beforeEach(cleanupPersons);
+  afterAll(async () => { await closeDb(); });
+
+  it('mints a Person and sets personId when no personId is given', async () => {
+    const countBefore = (await getDb().select({ id: persons.id }).from(persons)).length;
+    const e = await hr.createEmployee({
+      employeeCode: 'CG-DW-001',
+      firstName: 'Juan',
+      lastName: 'Dela Cruz',
+      basicSalary: 18000,
+      hiredOn: '2026-01-01',
+      sssNumber: '34-1111111-1',
+      email: 'juan.dw@test.com',
+    });
+    expect(e.personId).not.toBeNull();
+    const countAfter = (await getDb().select({ id: persons.id }).from(persons)).length;
+    expect(countAfter).toBe(countBefore + 1);
+    // legacy columns still populated
+    expect(e.firstName).toBe('Juan');
+    expect(e.lastName).toBe('Dela Cruz');
+    expect(e.sssNumber).toBe('34-1111111-1');
+  });
+
+  it('links the given personId and does NOT mint a new Person', async () => {
+    const p = await createPerson({ firstName: 'Maria', lastName: 'Santos', anchorIdType: 'none' });
+    const countBefore = (await getDb().select({ id: persons.id }).from(persons)).length;
+    const e = await hr.createEmployee({
+      employeeCode: 'CG-DW-002',
+      firstName: 'Maria',
+      lastName: 'Santos',
+      basicSalary: 18000,
+      hiredOn: '2026-01-01',
+      personId: p.id,
+    });
+    expect(e.personId).toBe(p.id);
+    const countAfter = (await getDb().select({ id: persons.id }).from(persons)).length;
+    expect(countAfter).toBe(countBefore); // no new person
+  });
+
+  it('minted Person holds the identity fields from the input', async () => {
+    const e = await hr.createEmployee({
+      employeeCode: 'CG-DW-003',
+      firstName: 'Pedro',
+      lastName: 'Reyes',
+      middleName: 'Cruz',
+      dateOfBirth: '1985-04-20',
+      sssNumber: '34-2222222-2',
+      philhealthNumber: 'PH-DW-003',
+      pagibigNumber: 'PAG-DW-003',
+      tinNumber: '111222333',
+      email: 'pedro.dw@test.com',
+      phone: '09181234567',
+      addressLine1: '1 Rizal St',
+      city: 'Davao',
+      province: 'Davao del Sur',
+      basicSalary: 20000,
+      hiredOn: '2026-01-01',
+    });
+    expect(e.personId).not.toBeNull();
+    const p = await getDb().select().from(persons).where(sql`id = ${e.personId!}`);
+    expect(p[0]).toBeDefined();
+    expect(p[0]!.firstName).toBe('Pedro');
+    expect(p[0]!.lastName).toBe('Reyes');
+    expect(p[0]!.sssNumber).toBe('34-2222222-2');
+    expect(p[0]!.email).toBe('pedro.dw@test.com');
+    expect(p[0]!.city).toBe('Davao');
+  });
+});
+
+describe('hr.bulkImportEmployees — dual-write (T7)', () => {
+  beforeEach(cleanupPersons);
+  afterAll(async () => { await closeDb(); });
+
+  it('creates a Person per imported row', async () => {
+    const csv = `employee_code,first_name,last_name,email,basic_salary,pay_frequency,hired_on,sss_number
+CG-BW-001,Ana,Reyes,ana.bw@test.com,18000,SEMI_MONTHLY,2026-05-01,34-3333333-3
+CG-BW-002,Ben,Torres,ben.bw@test.com,18000,SEMI_MONTHLY,2026-05-01,34-4444444-4`;
+    const result = await hr.bulkImportEmployees(csv);
+    expect(result.imported).toBe(2);
+    expect(result.errors).toEqual([]);
+    const pCount = (await getDb().select({ id: persons.id }).from(persons)).length;
+    expect(pCount).toBe(2);
+  });
+
+  it('reports a duplicate-SSS row as a row error and continues importing the rest', async () => {
+    const csv = `employee_code,first_name,last_name,email,basic_salary,pay_frequency,hired_on,sss_number
+CG-BW-003,First,Row,first.bw@test.com,18000,SEMI_MONTHLY,2026-05-01,34-5555555-5
+CG-BW-004,Dup,Row,dup.bw@test.com,18000,SEMI_MONTHLY,2026-05-01,34-5555555-5
+CG-BW-005,Third,Row,third.bw@test.com,18000,SEMI_MONTHLY,2026-05-01,34-6666666-6`;
+    const result = await hr.bulkImportEmployees(csv);
+    expect(result.imported).toBe(2); // row 1 and row 3 succeed
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toMatchObject({ row: 2, reason: expect.stringMatching(/SSS|already on file/i) });
   });
 });
 

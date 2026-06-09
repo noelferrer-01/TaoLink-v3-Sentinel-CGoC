@@ -8,9 +8,11 @@
  */
 
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { sql } from 'drizzle-orm';
 import { closeDb, getDb } from '@/core/db';
 import { applicants, applicantDocuments, blacklist } from './schema';
 import { employees } from '@/modules/hr/schema';
+import { persons } from '@/modules/persons/schema';
 import { payslips, payRuns } from '@/modules/payroll/schema';
 import { dtrEntries } from '@/modules/dtr/schema';
 import { hr } from '@/modules/hr';
@@ -29,6 +31,7 @@ async function cleanup() {
   await db.delete(applicants);
   await db.delete(blacklist);
   await db.delete(employees);
+  await db.delete(persons);
 }
 
 describe('recruitment service', () => {
@@ -140,5 +143,61 @@ describe('recruitment service', () => {
     const run = await runPayroll('2026-06-01', '2026-06-15', { isFinalCutOfMonth: false });
     const slips = await listPayslips({ payRunId: run.id });
     expect(slips.find((s) => s.employeeId === emp.id)).toBeUndefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Slice 3a Task 7 — createApplicant + hireApplicant create/link a Person
+// ─────────────────────────────────────────────────────────────────────────────
+describe('recruitment.createApplicant — dual-write (T7)', () => {
+  beforeEach(cleanup);
+  afterAll(async () => { await cleanup(); await closeDb(); });
+
+  it('mints a Person and sets personId on the applicant', async () => {
+    const a = await recruitment.createApplicant({
+      firstName: 'Lena',
+      lastName: 'Garcia',
+      source: 'walk_in',
+      appliedOn: '2026-06-01',
+      sssNumber: '34-7777777-7',
+      dateOfBirth: '1995-08-15',
+    });
+    expect(a.personId).not.toBeNull();
+    const ps = await getDb().select().from(persons).where(sql`id = ${a.personId!}`);
+    expect(ps[0]).toBeDefined();
+    expect(ps[0]!.firstName).toBe('Lena');
+    expect(ps[0]!.sssNumber).toBe('34-7777777-7');
+    // legacy columns still populated
+    expect(a.firstName).toBe('Lena');
+    expect(a.sssNumber).toBe('34-7777777-7');
+  });
+});
+
+describe('recruitment.hireApplicant — reuses applicant personId (T7)', () => {
+  beforeEach(cleanup);
+  afterAll(async () => { await cleanup(); await closeDb(); });
+
+  it('the new employee personId equals the applicant personId (same human, no duplicate Person)', async () => {
+    const a = await recruitment.createApplicant({
+      firstName: 'Marco',
+      lastName: 'Villanueva',
+      source: 'referral',
+      appliedOn: '2026-06-01',
+      sssNumber: '34-8888888-8',
+    });
+    const applicantPersonId = a.personId;
+    expect(applicantPersonId).not.toBeNull();
+
+    await recruitment.advanceStage(a.id, 'contacted');
+    await recruitment.advanceStage(a.id, 'documents');
+
+    const countBefore = (await getDb().select({ id: persons.id }).from(persons)).length;
+    const emp = await recruitment.hireApplicant(a.id, { basicSalary: 20000, hiredOn: '2026-06-10' });
+    const countAfter = (await getDb().select({ id: persons.id }).from(persons)).length;
+
+    // No new Person row minted during hire
+    expect(countAfter).toBe(countBefore);
+    // Employee links to the applicant's existing Person
+    expect(emp.personId).toBe(applicantPersonId);
   });
 });

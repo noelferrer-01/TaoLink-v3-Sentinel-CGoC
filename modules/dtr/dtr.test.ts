@@ -5,6 +5,7 @@ import { dtrEntries, dtrPeriodCloses } from './schema';
 import { assignments as assignmentsTable } from '@/modules/assignments/schema';
 import { detachments, clients } from '@/modules/clients/schema';
 import { employees } from '@/modules/hr/schema';
+import { persons } from '@/modules/persons/schema';
 import { payslips, payRuns } from '@/modules/payroll/schema';
 import { eventLog } from '@/modules/events/schema';
 import { auditLog } from '@/modules/audit/schema';
@@ -60,6 +61,7 @@ describe('dtr module', () => {
     await db.delete(detachments);
     await db.delete(clients);
     await db.delete(employees);
+    await db.delete(persons);
   });
 
   // Note: closeDb() is called once at file level below (after all suites).
@@ -220,6 +222,7 @@ describe('dtr module — 6.2 late-DTR-close warning', () => {
     await db.delete(detachments);
     await db.delete(clients);
     await db.delete(employees);
+    await db.delete(persons);
     await db.delete(eventLog);
     await db.delete(payrollCalendarsTable);
   });
