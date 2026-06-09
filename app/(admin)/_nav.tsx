@@ -12,6 +12,13 @@ type NavItem = { href: string; label: string; icon: string };
 
 const sections: { heading: string; items: NavItem[] }[] = [
   {
+    heading: 'Recruitment',
+    items: [
+      { href: '/recruitment',           label: 'Applicants', icon: '🧾' },
+      { href: '/recruitment/blacklist', label: 'Blacklist',  icon: '🚫' },
+    ],
+  },
+  {
     heading: 'Operations',
     items: [
       { href: '/dashboard', label: 'Dashboard',   icon: '⊞' },
