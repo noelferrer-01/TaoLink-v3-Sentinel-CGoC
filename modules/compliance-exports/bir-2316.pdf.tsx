@@ -26,7 +26,7 @@ import {
   StyleSheet,
   renderToBuffer,
 } from '@react-pdf/renderer';
-import type { Employee } from '@/modules/hr/schema';
+import type { EmployeeWithIdentity } from '@/modules/hr/service';
 import type { YtdAggregate } from './ytd';
 
 // ────────────────────────────────────────────────────────────────
@@ -200,7 +200,7 @@ function SummaryLine({ no, label, amount }: { no: string; label: string; amount:
 // ────────────────────────────────────────────────────────────────
 // Part I — Employee Information
 // ────────────────────────────────────────────────────────────────
-function PartI({ emp, year }: { emp: Employee; year: number }) {
+function PartI({ emp, year }: { emp: EmployeeWithIdentity; year: number }) {
   const fullName = `${emp.lastName}, ${emp.firstName}${emp.middleName ? `, ${emp.middleName}` : ''}`;
   const addressFull = [emp.addressLine1, emp.addressLine2, emp.city, emp.province]
     .filter(Boolean).join(', ');
@@ -337,7 +337,7 @@ function PartIVB({ ytd }: { ytd: YtdAggregate }) {
 // Main document component
 // ────────────────────────────────────────────────────────────────
 interface Bir2316Props {
-  employee: Employee;
+  employee: EmployeeWithIdentity;
   ytd: YtdAggregate;
   year: number;
 }
@@ -384,7 +384,7 @@ function Bir2316Document({ employee, ytd, year }: Bir2316Props) {
 // Public API
 // ────────────────────────────────────────────────────────────────
 export async function renderBir2316Pdf(
-  employee: Employee,
+  employee: EmployeeWithIdentity,
   ytd: YtdAggregate,
   year: number,
 ): Promise<Buffer> {

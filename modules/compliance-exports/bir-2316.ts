@@ -12,9 +12,7 @@
  * Audit action: 'compliance.bir2316.exported'
  */
 
-import { eq } from 'drizzle-orm';
-import { getDb } from '@/core/db';
-import { employees } from '@/modules/hr/schema';
+import { getEmployeeWithIdentity } from '@/modules/hr/service';
 import { audit } from '@/modules/audit';
 import { computeYtd } from './ytd';
 import { renderBir2316Pdf } from './bir-2316.pdf';
@@ -37,9 +35,9 @@ export async function previewBir2316Warnings(
   employeeId: string,
   year: number,
 ): Promise<string[]> {
-  const db = getDb();
-  const empRows = await db.select().from(employees).where(eq(employees.id, employeeId));
-  const emp = empRows[0];
+  // Identity fields (tinNumber, dateOfBirth, addressLine1) are sourced from
+  // the persons table via the accessor; rdoCode remains on hr_employees.
+  const emp = await getEmployeeWithIdentity(employeeId);
   if (!emp) {
     throw new Error(`[compliance-exports/bir-2316] Employee not found: ${employeeId}`);
   }
@@ -73,11 +71,10 @@ export async function exportBIR_2316(
   year: number,
   opts: { actorUserId?: string | null } = {},
 ): Promise<Bir2316Result> {
-  const db = getDb();
-
   // ── 1. Resolve employee ──────────────────────────────────────────────────
-  const empRows = await db.select().from(employees).where(eq(employees.id, employeeId));
-  const emp = empRows[0];
+  // Identity fields (tinNumber, dateOfBirth, addressLine1, etc.) are sourced
+  // from the persons table via the accessor; rdoCode remains on hr_employees.
+  const emp = await getEmployeeWithIdentity(employeeId);
   if (!emp) {
     throw new Error(`[compliance-exports/bir-2316] Employee not found: ${employeeId}`);
   }

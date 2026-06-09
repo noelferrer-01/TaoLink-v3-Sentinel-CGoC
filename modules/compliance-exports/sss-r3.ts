@@ -14,6 +14,8 @@ import Papa from 'papaparse';
 import { getDb } from '@/core/db';
 import { payRuns, payslips } from '@/modules/payroll/schema';
 import { employees } from '@/modules/hr/schema';
+import { persons } from '@/modules/persons/schema';
+import { type EmployeeWithIdentity } from '@/modules/hr/service';
 import { sssBracketForMonthly } from '@/modules/compliance/service';
 import { audit } from '@/modules/audit';
 import { events } from '@/modules/events';
@@ -75,11 +77,52 @@ export async function exportSSS_R3(
   const slips = await db.select().from(payslips).where(eq(payslips.payRunId, run.id));
 
   // ── 3. Load employees referenced by those payslips ────────────────────────
-  const empById = new Map<string, typeof employees.$inferSelect>();
+  // Identity fields (name, sssNumber) are read from the persons table via
+  // LEFT JOIN so the output is byte-identical after the T7 dual-write migration.
+  const empById = new Map<string, EmployeeWithIdentity>();
   if (slips.length > 0) {
     const ids = [...new Set(slips.map((s) => s.employeeId))];
-    const empRows = await db.select().from(employees).where(inArray(employees.id, ids));
-    for (const e of empRows) empById.set(e.id, e);
+    const empRows = await db
+      .select({
+        id:             employees.id,
+        employeeCode:   employees.employeeCode,
+        basicSalary:    employees.basicSalary,
+        payFrequency:   employees.payFrequency,
+        employmentType: employees.employmentType,
+        status:         employees.status,
+        hiredOn:        employees.hiredOn,
+        terminatedOn:   employees.terminatedOn,
+        rdoCode:        employees.rdoCode,
+        isArmedPost:    employees.isArmedPost,
+        personId:       employees.personId,
+        createdAt:      employees.createdAt,
+        updatedAt:      employees.updatedAt,
+        firstName:            persons.firstName,
+        lastName:             persons.lastName,
+        middleName:           persons.middleName,
+        suffix:               persons.suffix,
+        dateOfBirth:          persons.dateOfBirth,
+        sex:                  persons.sex,
+        philsysNumber:        persons.philsysNumber,
+        sssNumber:            persons.sssNumber,
+        tinNumber:            persons.tinNumber,
+        philhealthNumber:     persons.philhealthNumber,
+        pagibigNumber:        persons.pagibigNumber,
+        umidNumber:           persons.umidNumber,
+        passportNumber:       persons.passportNumber,
+        driversLicenseNumber: persons.driversLicenseNumber,
+        addressLine1:         persons.addressLine1,
+        addressLine2:         persons.addressLine2,
+        city:                 persons.city,
+        province:             persons.province,
+        postalCode:           persons.postalCode,
+        phone:                persons.phone,
+        email:                persons.email,
+      })
+      .from(employees)
+      .leftJoin(persons, eq(employees.personId, persons.id))
+      .where(inArray(employees.id, ids));
+    for (const e of empRows) empById.set(e.id, e as EmployeeWithIdentity);
   }
 
   // ── 4. Project to R-3 rows ────────────────────────────────────────────────
@@ -128,8 +171,8 @@ export async function exportSSS_R3(
 
     rows.push({
       sss_number: sssNumber ?? 'MISSING',
-      surname: emp.lastName,
-      given_name: emp.firstName,
+      surname: emp.lastName ?? '',
+      given_name: emp.firstName ?? '',
       middle_initial: (emp.middleName ?? '').charAt(0),
       ss_1st_month: month === 1 ? ssStr : blank,
       ss_2nd_month: month === 2 ? ssStr : blank,

@@ -88,18 +88,26 @@ describe('compliance-exports.bir-2316 (Phase 7 — PDF pipeline)', () => {
       tinNumber: '123-456-789-000', sssNumber: '0312345677',
     });
 
-    // Set BIR-specific fields
+    // rdoCode is an employment field — stays on hr_employees.
     await db
       .update(employees)
+      .set({ rdoCode: '044' })
+      .where(eq(employees.id, emp.id));
+
+    // Identity fields (dateOfBirth, address) are authoritative on persons after T7.
+    // The accessor reads from persons, so patch persons directly here.
+    const empRow = await db.select({ personId: employees.personId }).from(employees).where(eq(employees.id, emp.id));
+    const personId = empRow[0]!.personId!;
+    await db
+      .update(persons)
       .set({
-        rdoCode:      '044',
         dateOfBirth:  '1990-03-15',
         addressLine1: '123 Main St',
         city:         'Manila',
         province:     'Metro Manila',
         postalCode:   '1000',
       })
-      .where(eq(employees.id, emp.id));
+      .where(eq(persons.id, personId));
 
     await insertDtr(emp.id, PERIOD_1_DATES);
     const run1 = await runPayroll(PERIOD_1_START, PERIOD_1_END);
@@ -130,11 +138,13 @@ describe('compliance-exports.bir-2316 (Phase 7 — PDF pipeline)', () => {
       basicSalary: 18000, hiredOn: '2026-01-01',
       tinNumber: '999-000-000-000',
     });
-    // DOB + address but NOT rdoCode
+    // DOB + address but NOT rdoCode — identity fields go on persons after T7.
+    const empRow2 = await db.select({ personId: employees.personId }).from(employees).where(eq(employees.id, emp.id));
+    const personId2 = empRow2[0]!.personId!;
     await db
-      .update(employees)
+      .update(persons)
       .set({ dateOfBirth: '1985-07-04', addressLine1: '456 Side St', city: 'Cebu' })
-      .where(eq(employees.id, emp.id));
+      .where(eq(persons.id, personId2));
 
     await insertDtr(emp.id, PERIOD_1_DATES);
     const run = await runPayroll(PERIOD_1_START, PERIOD_1_END);
