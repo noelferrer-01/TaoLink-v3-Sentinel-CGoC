@@ -24,3 +24,16 @@ export {
   type AnchorIdType,
   type AnchorIdTypeNonNone,
 } from './labels';
+
+// ─── Service functions ────────────────────────────────────────────────────────
+
+export {
+  createPerson,
+  assertAnchored,
+  getPerson,
+  findPersonByAnyId,
+  findPossibleDuplicates,
+  updatePerson,
+  redactPerson,
+  type CreatePersonInput,
+} from './service';
