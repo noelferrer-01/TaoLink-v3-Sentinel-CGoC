@@ -19,7 +19,7 @@
  */
 
 import { eq, and, sql } from 'drizzle-orm';
-import { getDb } from '@/core/db';
+import { getDb, type DbOrTx } from '@/core/db';
 import { audit } from '@/modules/audit';
 import { events } from '@/modules/events';
 import { persons, type Person, type NewPerson } from './schema';
@@ -124,8 +124,19 @@ export type CreatePersonInput = {
   actorUserId?: string | null;
 };
 
-export async function createPerson(input: CreatePersonInput): Promise<Person> {
-  const db = getDb();
+/**
+ * Options for `createPerson`.
+ * Pass `{ tx }` to run the Person INSERT inside an existing Drizzle transaction
+ * so Person + role-row creation is atomic (no orphaned Person on role-insert failure).
+ * Audit/events are NOT run inside the transaction — they use their own DB handle.
+ */
+export type CreatePersonOptions = {
+  tx?: DbOrTx;
+};
+
+export async function createPerson(input: CreatePersonInput, opts?: CreatePersonOptions): Promise<Person> {
+  // Use the caller's transaction if provided; otherwise fall back to the global db.
+  const executor: DbOrTx = opts?.tx ?? getDb();
   const anchorIdType = input.anchorIdType ?? 'none';
 
   // When an anchor type is specified (not 'none'), validate that the corresponding
@@ -171,7 +182,7 @@ export async function createPerson(input: CreatePersonInput): Promise<Person> {
 
   let created: Person;
   try {
-    const [row] = await db.insert(persons).values(values).returning();
+    const [row] = await executor.insert(persons).values(values).returning();
     if (!row) throw new Error('[persons/createPerson] insert returned no row');
     created = row;
   } catch (err: unknown) {

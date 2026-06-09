@@ -1,4 +1,6 @@
 import { drizzle } from 'drizzle-orm/postgres-js';
+import type { PgTransaction } from 'drizzle-orm/pg-core';
+import type { PostgresJsQueryResultHKT } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { getActiveDatabaseUrl } from './env';
 
@@ -54,3 +56,14 @@ export async function closeDb(): Promise<void> {
 }
 
 export { schema };
+
+/**
+ * Union of the full DB client and a Drizzle transaction object.
+ * Both expose `.insert()`, `.update()`, `.delete()`, and `.select()`.
+ * Pass this type to service functions that need to participate in a caller's
+ * transaction (e.g. `createPerson(input, { tx })`) so the INSERT is atomic
+ * with the caller's surrounding writes.
+ */
+export type DbOrTx =
+  | ReturnType<typeof getDb>
+  | PgTransaction<PostgresJsQueryResultHKT, typeof schema, any>;

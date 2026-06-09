@@ -566,21 +566,31 @@ describe('hr.getEmployeeWithIdentity', () => {
   });
 
   it('returns employee with identity fields null when personId is NULL (LEFT JOIN)', async () => {
-    const e = await hr.createEmployee({
-      employeeCode: 'CG-WI-002',
-      firstName: 'No',
-      lastName: 'Person',
-      basicSalary: 15000,
-      hiredOn: '2026-01-01',
-      // no personId
-    });
+    // Insert the employee row directly with personId: null to actually exercise
+    // the LEFT JOIN null-path. Using hr.createEmployee() would mint a Person
+    // automatically (T7 dual-write), so person_id would never be null — that
+    // makes the LEFT JOIN branch untestable via the service layer.
+    const [e] = await getDb()
+      .insert(employees)
+      .values({
+        employeeCode: 'CG-WI-002',
+        firstName: 'No',
+        lastName: 'Person',
+        basicSalary: '15000.00',
+        hiredOn: '2026-01-01',
+        personId: null,
+      })
+      .returning();
 
-    const result = await hr.getEmployeeWithIdentity(e.id);
+    const result = await hr.getEmployeeWithIdentity(e!.id);
 
     expect(result).not.toBeNull();
-    expect(result!.id).toBe(e.id);
+    expect(result!.id).toBe(e!.id);
     expect(result!.employeeCode).toBe('CG-WI-002');
+    expect(result!.personId).toBeNull(); // confirms LEFT JOIN null-path is exercised
     // Identity fields should be null when no person is linked
+    expect(result!.firstName).toBeNull();
+    expect(result!.lastName).toBeNull();
     expect(result!.suffix).toBeNull();
     expect(result!.sex).toBeNull();
     expect(result!.philsysNumber).toBeNull();
@@ -665,6 +675,37 @@ describe('hr.createEmployee — dual-write (T7)', () => {
     expect(p[0]!.sssNumber).toBe('34-2222222-2');
     expect(p[0]!.email).toBe('pedro.dw@test.com');
     expect(p[0]!.city).toBe('Davao');
+  });
+
+  it('a failed employee insert leaves NO orphaned Person (atomicity guard)', async () => {
+    // Pre-seed an employee with the code we will reuse to cause a duplicate-code
+    // violation on the second createEmployee call.
+    await hr.createEmployee({
+      employeeCode: 'CG-DW-DUP',
+      firstName: 'Existing',
+      lastName: 'Employee',
+      basicSalary: 18000,
+      hiredOn: '2026-01-01',
+    });
+
+    const countBefore = (await getDb().select({ id: persons.id }).from(persons)).length;
+
+    // This call should fail because 'CG-DW-DUP' already exists, rolling back
+    // the Person that was minted inside the transaction.
+    await expect(
+      hr.createEmployee({
+        employeeCode: 'CG-DW-DUP', // duplicate code — triggers 23505
+        firstName: 'Should',
+        lastName: 'Rollback',
+        basicSalary: 20000,
+        hiredOn: '2026-01-02',
+        sssNumber: '34-9999999-9',
+      }),
+    ).rejects.toThrow();
+
+    const countAfter = (await getDb().select({ id: persons.id }).from(persons)).length;
+    // Person count must be unchanged — the rolled-back Person was NOT persisted.
+    expect(countAfter).toBe(countBefore);
   });
 });
 

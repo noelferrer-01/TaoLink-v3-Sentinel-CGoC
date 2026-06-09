@@ -43,49 +43,53 @@ export async function createEmployee(input: CreateEmployeeInput): Promise<Employ
   // ── T7 transitional dual-write: create or link a Person ──────────────────
   // If a personId is passed, link it (no new Person minted — used by hireApplicant
   // to share the applicant's existing Person). Otherwise, mint one from the
-  // identity fields in the input.
+  // identity fields in the input, atomically with the employee row.
+  //
+  // Atomicity approach: db.transaction() wraps both the Person INSERT and the
+  // employee INSERT so a duplicate-employeeCode (or any other role-insert
+  // failure) rolls back the Person in the same transaction — no orphaned Person.
+  // Audit/events calls run AFTER the transaction commits so they aren't rolled
+  // back on their own failures.
   let personId: string | null = row.personId ?? null;
-  if (!personId) {
-    const anchorIdType = deriveAnchorIdType({
-      sssNumber: row.sssNumber,
-      tinNumber: row.tinNumber,
-    });
-    const person = await createPerson({
-      firstName: row.firstName,
-      lastName: row.lastName,
-      middleName: row.middleName ?? null,
-      dateOfBirth: row.dateOfBirth ?? null,
-      sssNumber: row.sssNumber ?? null,
-      philhealthNumber: row.philhealthNumber ?? null,
-      pagibigNumber: row.pagibigNumber ?? null,
-      tinNumber: row.tinNumber ?? null,
-      email: row.email ?? null,
-      phone: row.phone ?? null,
-      addressLine1: row.addressLine1 ?? null,
-      addressLine2: row.addressLine2 ?? null,
-      city: row.city ?? null,
-      province: row.province ?? null,
-      postalCode: row.postalCode ?? null,
-      anchorIdType,
-      actorUserId: actorUserId ?? null,
-    });
-    personId = person.id;
-  }
+  let created: Employee;
 
   try {
-    const [created] = await db
-      .insert(employees)
-      .values({ ...row, personId, basicSalary: String(row.basicSalary) })
-      .returning();
-    if (!created) throw new Error('[hr/createEmployee] insert returned no row');
-    await audit.record({
-      actor: actorUserId ?? null,
-      action: 'hr.employee.created',
-      target: { kind: 'hr_employee', id: created.id },
-      payload: { employeeCode: created.employeeCode, name: `${created.firstName} ${created.lastName}` },
+    created = await db.transaction(async (tx) => {
+      // Only mint a Person when no personId was supplied.
+      if (!personId) {
+        const anchorIdType = deriveAnchorIdType({
+          sssNumber: row.sssNumber,
+          tinNumber: row.tinNumber,
+        });
+        const person = await createPerson({
+          firstName: row.firstName,
+          lastName: row.lastName,
+          middleName: row.middleName ?? null,
+          dateOfBirth: row.dateOfBirth ?? null,
+          sssNumber: row.sssNumber ?? null,
+          philhealthNumber: row.philhealthNumber ?? null,
+          pagibigNumber: row.pagibigNumber ?? null,
+          tinNumber: row.tinNumber ?? null,
+          email: row.email ?? null,
+          phone: row.phone ?? null,
+          addressLine1: row.addressLine1 ?? null,
+          addressLine2: row.addressLine2 ?? null,
+          city: row.city ?? null,
+          province: row.province ?? null,
+          postalCode: row.postalCode ?? null,
+          anchorIdType,
+          actorUserId: actorUserId ?? null,
+        }, { tx });
+        personId = person.id;
+      }
+
+      const [emp] = await tx
+        .insert(employees)
+        .values({ ...row, personId, basicSalary: String(row.basicSalary) })
+        .returning();
+      if (!emp) throw new Error('[hr/createEmployee] insert returned no row');
+      return emp;
     });
-    await events.publish('hr.employee.created', { id: created.id, employeeCode: created.employeeCode });
-    return created;
   } catch (e: any) {
     if (e.code === '23505' && /email/.test(e.detail ?? '')) {
       throw new Error(`Email already in use: ${row.email}`);
@@ -94,6 +98,16 @@ export async function createEmployee(input: CreateEmployeeInput): Promise<Employ
     if (e.message?.startsWith('[hr/')) throw e;
     throw new Error(`[hr/createEmployee] ${e.message ?? e}`);
   }
+
+  // Audit + events run after commit — not inside the transaction.
+  await audit.record({
+    actor: actorUserId ?? null,
+    action: 'hr.employee.created',
+    target: { kind: 'hr_employee', id: created.id },
+    payload: { employeeCode: created.employeeCode, name: `${created.firstName} ${created.lastName}` },
+  });
+  await events.publish('hr.employee.created', { id: created.id, employeeCode: created.employeeCode });
+  return created;
 }
 
 export async function getEmployee(id: string): Promise<Employee | null> {
@@ -631,6 +645,9 @@ export async function bulkImportEmployees(
   const errors: BulkImportResult['errors'] = [];
 
   const db = getDb();
+  // Email-dedup block: intentionally retained until T9/T11 while the legacy
+  // hr_employees.email column is still in use. Removed at T12 when email
+  // uniqueness enforcement moves entirely to persons.email.
   const existingEmailRows = await db.select({ email: employees.email }).from(employees);
   const existingEmails = new Set<string>(
     existingEmailRows.map((r) => r.email).filter((e): e is string => typeof e === 'string'),
@@ -666,82 +683,84 @@ export async function bulkImportEmployees(
   });
 
   // ── T7 transitional dual-write: create a Person per row then the employee ──
-  // Process individually (not batch) so SSS/TIN collisions surface as per-row
-  // errors rather than aborting the whole import.
+  // Each row is wrapped in its own transaction so a failed employee insert
+  // (e.g. duplicate employeeCode) rolls back the Person that was just minted —
+  // no orphaned Person rows. SSS/TIN collisions from createPerson still surface
+  // as per-row errors so the rest of the import can continue.
   let imported = 0;
   for (const { csvRow, data: r } of validRows) {
     const sssNumber = blankToNull(r.sss_number);
     const tinNumber = blankToNull(r.tin_number);
     const anchorIdType = deriveAnchorIdType({ sssNumber, tinNumber });
 
-    let personId: string;
+    let created: Employee | undefined;
     try {
-      const person = await createPerson({
-        firstName: r.first_name,
-        lastName: r.last_name,
-        dateOfBirth: blankToNull(r.date_of_birth),
-        sssNumber,
-        philhealthNumber: blankToNull(r.philhealth_number),
-        pagibigNumber: blankToNull(r.pagibig_number),
-        tinNumber,
-        addressLine1: blankToNull(r.address_line1),
-        addressLine2: blankToNull(r.address_line2),
-        city: blankToNull(r.city),
-        province: blankToNull(r.province),
-        postalCode: blankToNull(r.postal_code),
-        anchorIdType,
-        actorUserId: opts.actorUserId ?? null,
-      });
-      personId = person.id;
-    } catch (personErr: any) {
-      // "already on file" from createPerson means duplicate unique ID (SSS/TIN).
-      // Surface as a row error and continue.
-      errors.push({ row: csvRow, reason: personErr.message ?? String(personErr) });
-      continue;
-    }
-
-    try {
-      const [created] = await db
-        .insert(employees)
-        .values({
-          employeeCode: r.employee_code,
+      created = await db.transaction(async (tx) => {
+        const person = await createPerson({
           firstName: r.first_name,
           lastName: r.last_name,
-          email: r.email || null,
-          basicSalary: String(parseFloat(r.basic_salary)),
-          payFrequency: r.pay_frequency,
-          employmentType: r.employment_type,
-          hiredOn: r.hired_on,
+          dateOfBirth: blankToNull(r.date_of_birth),
           sssNumber,
           philhealthNumber: blankToNull(r.philhealth_number),
           pagibigNumber: blankToNull(r.pagibig_number),
           tinNumber,
-          rdoCode: blankToNull(r.rdo_code),
-          dateOfBirth: blankToNull(r.date_of_birth),
           addressLine1: blankToNull(r.address_line1),
           addressLine2: blankToNull(r.address_line2),
           city: blankToNull(r.city),
           province: blankToNull(r.province),
           postalCode: blankToNull(r.postal_code),
-          personId,
-        })
-        .returning();
-      if (!created) throw new Error('[hr/bulkImportEmployees] insert returned no row');
-      imported++;
-      await audit.record({
-        actor: opts.actorUserId ?? null,
-        action: 'hr.employee.created',
-        target: { kind: 'hr_employee', id: created.id },
-        payload: { employeeCode: created.employeeCode, viaBulkImport: true },
+          anchorIdType,
+          actorUserId: opts.actorUserId ?? null,
+        }, { tx });
+
+        const [emp] = await tx
+          .insert(employees)
+          .values({
+            employeeCode: r.employee_code,
+            firstName: r.first_name,
+            lastName: r.last_name,
+            email: r.email || null,
+            basicSalary: String(parseFloat(r.basic_salary)),
+            payFrequency: r.pay_frequency,
+            employmentType: r.employment_type,
+            hiredOn: r.hired_on,
+            sssNumber,
+            philhealthNumber: blankToNull(r.philhealth_number),
+            pagibigNumber: blankToNull(r.pagibig_number),
+            tinNumber,
+            rdoCode: blankToNull(r.rdo_code),
+            dateOfBirth: blankToNull(r.date_of_birth),
+            addressLine1: blankToNull(r.address_line1),
+            addressLine2: blankToNull(r.address_line2),
+            city: blankToNull(r.city),
+            province: blankToNull(r.province),
+            postalCode: blankToNull(r.postal_code),
+            personId: person.id,
+          })
+          .returning();
+        if (!emp) throw new Error('[hr/bulkImportEmployees] insert returned no row');
+        return emp;
       });
-      await events.publish('hr.employee.created', { id: created.id, employeeCode: created.employeeCode });
     } catch (e: any) {
+      // "already on file" from createPerson means duplicate SSS/TIN — the
+      // transaction rolled back so no orphaned Person was left behind.
       if (e.code === '23505' && /email/.test(e.detail ?? '')) {
         errors.push({ row: csvRow, reason: `email ${r.email} already exists in HR — pick a different one or remove this row.` });
       } else {
         errors.push({ row: csvRow, reason: e.message ?? String(e) });
       }
+      continue;
     }
+
+    // Audit + events run after commit — not inside the transaction.
+    imported++;
+    await audit.record({
+      actor: opts.actorUserId ?? null,
+      action: 'hr.employee.created',
+      target: { kind: 'hr_employee', id: created.id },
+      payload: { employeeCode: created.employeeCode, viaBulkImport: true },
+    });
+    await events.publish('hr.employee.created', { id: created.id, employeeCode: created.employeeCode });
   }
   return { imported, errors };
 }

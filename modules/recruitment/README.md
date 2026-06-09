@@ -51,3 +51,12 @@ Labels/constants also exported: `STAGE_LABELS`, `SOURCE_LABELS`, `DOC_TYPE_LABEL
   is exact; capture `sssNumber` to reduce noise. See spec §5.
 - **No document file storage** — `setDocument` tracks status only; scanned PDFs
   are a deferred fast-follow (no blob storage configured).
+- **Duplicate Person minted for legacy applicant hired before T4 backfill** — A
+  pre-T7 applicant whose `person_id` is `NULL` (i.e., created before the T7
+  dual-write landed) will have a fresh Person minted at hire time via
+  `createEmployee`, because `hireApplicant` passes `personId: a.personId ?? undefined`
+  and `undefined` is treated as "no personId supplied — mint one." The
+  `db:backfill:persons` script (Task 4) should be run **before** hiring any
+  legacy applicants so their `person_id` is populated and the hire path skips
+  minting. Mitigation: run `pnpm db:backfill:persons` before the first hire
+  wave after deploying T7.

@@ -36,4 +36,5 @@ export {
   updatePerson,
   redactPerson,
   type CreatePersonInput,
+  type CreatePersonOptions,
 } from './service';

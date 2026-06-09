@@ -48,53 +48,70 @@ export async function createApplicant(input: CreateApplicantInput): Promise<Appl
   const db = getDb();
 
   // ── T7 transitional dual-write: mint a Person from the applicant's identity ──
-  // Derive anchor from available IDs (applicants may have SSS; no philsys input today).
+  // Person INSERT + applicant INSERT are wrapped in a single transaction so a
+  // failed applicant insert (e.g. any constraint violation) rolls back the newly
+  // minted Person — no orphaned Person rows. Audit/events run after commit.
   const anchorIdType: typeof ID_TYPE_LADDER[number] | 'none' =
     input.sssNumber ? 'sss' : 'none';
-  const person = await createPerson({
-    firstName: input.firstName.trim(),
-    lastName: input.lastName.trim(),
-    middleName: input.middleName ?? null,
-    dateOfBirth: input.dateOfBirth ?? null,
-    sssNumber: input.sssNumber ?? null,
-    phone: input.phone ?? null,
-    email: input.email ?? null,
-    addressLine1: input.addressLine1 ?? null,
-    addressLine2: input.addressLine2 ?? null,
-    city: input.city ?? null,
-    province: input.province ?? null,
-    anchorIdType,
-    actorUserId: input.actorUserId ?? null,
-  });
 
-  const [created] = await db
-    .insert(applicants)
-    .values({
-      firstName: input.firstName.trim(),
-      lastName: input.lastName.trim(),
-      middleName: input.middleName ?? null,
-      dateOfBirth: input.dateOfBirth ?? null,
-      sssNumber: input.sssNumber ?? null,
-      phone: input.phone ?? null,
-      email: input.email ?? null,
-      addressLine1: input.addressLine1 ?? null,
-      addressLine2: input.addressLine2 ?? null,
-      city: input.city ?? null,
-      province: input.province ?? null,
-      source: input.source,
-      positionAppliedFor: input.positionAppliedFor ?? 'GUARD',
-      isArmedPost: input.isArmedPost ?? false,
-      appliedOn: input.appliedOn,
-      notes: input.notes ?? null,
-      personId: person.id,
-    })
-    .returning();
-  if (!created) throw new Error('[recruitment/createApplicant] insert returned no row');
+  let created: Applicant;
+  try {
+    created = await db.transaction(async (tx) => {
+      const person = await createPerson({
+        firstName: input.firstName.trim(),
+        lastName: input.lastName.trim(),
+        middleName: input.middleName ?? null,
+        dateOfBirth: input.dateOfBirth ?? null,
+        sssNumber: input.sssNumber ?? null,
+        phone: input.phone ?? null,
+        email: input.email ?? null,
+        addressLine1: input.addressLine1 ?? null,
+        addressLine2: input.addressLine2 ?? null,
+        city: input.city ?? null,
+        province: input.province ?? null,
+        anchorIdType,
+        actorUserId: input.actorUserId ?? null,
+      }, { tx });
 
-  // Seed the required-doc checklist (all pending).
-  const docs = requiredDocsFor(created.isArmedPost).map((docType) => ({ applicantId: created.id, docType }));
-  await db.insert(applicantDocuments).values(docs);
+      const [applicant] = await tx
+        .insert(applicants)
+        .values({
+          firstName: input.firstName.trim(),
+          lastName: input.lastName.trim(),
+          middleName: input.middleName ?? null,
+          dateOfBirth: input.dateOfBirth ?? null,
+          sssNumber: input.sssNumber ?? null,
+          phone: input.phone ?? null,
+          email: input.email ?? null,
+          addressLine1: input.addressLine1 ?? null,
+          addressLine2: input.addressLine2 ?? null,
+          city: input.city ?? null,
+          province: input.province ?? null,
+          source: input.source,
+          positionAppliedFor: input.positionAppliedFor ?? 'GUARD',
+          isArmedPost: input.isArmedPost ?? false,
+          appliedOn: input.appliedOn,
+          notes: input.notes ?? null,
+          personId: person.id,
+        })
+        .returning();
+      if (!applicant) throw new Error('[recruitment/createApplicant] insert returned no row');
 
+      // Seed the required-doc checklist (all pending) — inside the transaction so
+      // docs are created atomically with the applicant.
+      const docs = requiredDocsFor(applicant.isArmedPost).map((docType) => ({ applicantId: applicant.id, docType }));
+      await tx.insert(applicantDocuments).values(docs);
+
+      return applicant;
+    });
+  } catch (err: any) {
+    // Re-surface clean errors from createPerson (e.g. "SSS already on file")
+    // and from the applicant insert without wrapping twice.
+    if (err.message?.startsWith('[recruitment/') || err.message?.startsWith('[persons/')) throw err;
+    throw err;
+  }
+
+  // Audit + events run after commit — not inside the transaction.
   await audit.record({
     actor: input.actorUserId ?? null,
     action: 'recruitment.applicant.created',
