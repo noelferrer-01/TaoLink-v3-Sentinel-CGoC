@@ -1,6 +1,8 @@
 # Slice 3 — Recruitment ATS (the HRIS front door)
 
-> **Status:** DESIGN — awaiting Noel's review (do not implement until approved).
+> **⚠ Foundation extension pending (2026-06-10):** Built but **not yet tagged**. A review with Noel locked two foundation changes that land **before** `slice-3-done`: person-centric identity + first-class credentials. They resolve the §5 data-quality flag and the §7 "stable national ID" deferral below. See **[3-identity-and-credentials](3-identity-and-credentials.md)** ([ADR 0017](../decisions/0017-person-centric-identity.md) / [0018](../decisions/0018-credentials-first-class.md)).
+>
+> **Status:** BUILT (implementation-complete) — held for the foundation extension above before tag.
 > **Author:** Claude (drafted 2026-06-09, autonomously per Noel's "use the transcript + flowchart, do what you need to do").
 > **Scope cut chosen by Noel:** Recruitment ATS only (hiring pipeline + applicant database + blacklist flag + hire→employee). Marketing/Deployment/approvals deferred.
 > **Binding decisions this slice implements:** [ADR 0009](../decisions/0009-hr-starter-and-recruitment-as-entry-point.md) (Recruitment = entry point, HR = foundation), [ADR 0004](../decisions/0004-applicant-pool-legal-classification.md) (applicant ≠ employee, unpaid pool), [ADR 0001](../decisions/0001-recruitment-vs-operations-ownership.md) (Recruitment owns assignments).
