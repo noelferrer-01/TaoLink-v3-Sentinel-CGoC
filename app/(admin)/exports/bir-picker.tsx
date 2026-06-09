@@ -17,6 +17,50 @@ export function BirPicker({
   const [warnings, setWarnings] = useState<string[] | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const [downloadState, setDownloadState] = useState<
+    { kind: 'idle' } | { kind: 'fetching' } | { kind: 'error'; message: string }
+  >({ kind: 'idle' });
+
+  // Programmatic Blob download. Anchor-with-Content-Disposition was failing
+  // for some Chrome configurations — the browser would intercept the PDF
+  // response and render it inline despite `download` + attachment header.
+  // Fetching the PDF as a Blob + creating an object URL bypasses Chrome's
+  // PDF viewer entirely: the browser only ever sees a blob: URL with
+  // `download`, which it reliably saves to ~/Downloads.
+  async function handleDownload() {
+    if (!employeeId || !Number.isInteger(year)) return;
+    setDownloadState({ kind: 'fetching' });
+    try {
+      const res = await fetch(`/api/exports/bir-2316/${employeeId}/${year}`, {
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        const message = await res.text();
+        throw new Error(message || `Server returned ${res.status}`);
+      }
+      const blob = await res.blob();
+      // Prefer the server-suggested filename from Content-Disposition;
+      // fall back to the year-only filename if parsing fails.
+      const cd = res.headers.get('content-disposition') ?? '';
+      const match = cd.match(/filename="([^"]+)"/);
+      const filename = match?.[1] ?? `2316-${year}.pdf`;
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      // Release the object URL on the next tick — release-before-click can
+      // cancel the download in some browsers.
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setDownloadState({ kind: 'idle' });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setDownloadState({ kind: 'error', message });
+    }
+  }
 
   // Refresh the warnings preview whenever the (employee, year) pair changes.
   // Debounced via React's transition queue so quick scrubs through the year
@@ -124,16 +168,24 @@ export function BirPicker({
         </p>
       )}
 
-      <a
+      <button
+        type="button"
         className="btn"
-        href={`/api/exports/bir-2316/${employeeId}/${year}`}
-        download={`2316-${year}.pdf`}
+        onClick={handleDownload}
+        disabled={!employeeId || downloadState.kind === 'fetching'}
         style={{ justifySelf: 'start' }}
       >
-        Download BIR 2316 (PDF) →
-      </a>
+        {downloadState.kind === 'fetching'
+          ? 'Generating PDF…'
+          : 'Download BIR 2316 (PDF) →'}
+      </button>
+      {downloadState.kind === 'error' && (
+        <p className="form-error" role="alert" style={{ marginTop: '0.25rem' }}>
+          Couldn&rsquo;t download: {downloadState.message}
+        </p>
+      )}
       <p className="field-hint" style={{ marginTop: '0.25rem' }}>
-        Downloads the BIR Form 2316 as a filled PDF. The download succeeds
+        Saves to your computer&rsquo;s Downloads folder. The download succeeds
         even when the warnings above list missing fields — fix them on the
         employee record before filing if any apply.
       </p>
