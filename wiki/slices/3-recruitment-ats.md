@@ -54,11 +54,13 @@ applicant.pipelineStage = 'hired'  (terminal; exits the active board)
 emits recruitment.applicant.hired   (future: Deployment/Billing subscribe)
 ```
 
-> **Why creating the employee at "Hire" is payroll-safe** (this is the subtle part): Sentinel's payroll is 100% **assignment + DTR driven** (Slices 1–2). A `hired` employee with no detachment assignment and no DTR generates **zero** payslips. So putting them on the HR books at hire does not, by itself, pay or underpay anyone — pay only ever follows *deployment*. The audit log records the exact hire moment (and later, the exact deploy moment), which is itself the DOLE-inquiry defense artifact ADR 0004 calls for.
+> ⚠ **Payroll interaction — REQUIRED dependency of this slice (corrected 2026-06-09 after code review).** An earlier draft claimed a hired-but-undeployed employee "generates zero payslips." **That is false.** `payroll.runPayroll` loads every employee whose status is not `applicant`/`terminated` ([service.ts:33,84](../../modules/payroll/service.ts#L33)) and inserts a payslip for each **with no zero-attendance skip** ([service.ts:89-159](../../modules/payroll/service.ts#L89)). For 0 worked days, `grossPay = 0` but statutory deductions are computed off **monthly salary, not days** ([compute.ts:62-69](../../modules/payroll/compute.ts#L62)) — so a hired-undeployed guard gets a payslip showing **phantom SSS/PhilHealth/Pag-IBIG**, which would then leak into the SSS R-3 and BIR government exports.
+>
+> **Therefore this slice MUST include a small payroll guard:** skip any employee with zero worked days (no DTR) in the period — `if (daysWorked === 0 && otHours === 0) continue;` before the payslip insert. This is independently correct ("no attendance → no payslip"), it fixes a latent bug, and it is what makes hire-creates-employee genuinely safe: a hired-undeployed guard never produces a payslip or a government-export line until they actually work. **Must re-run the existing payroll tests** to confirm no current test relies on a 0-day employee producing a 0 payslip.
 
 **The cleared-but-waiting "callback pool"** = applicants sitting at the **Documents complete** stage who haven't been hired yet. They have no HR record (truly not employees, truly unpaid), which keeps them safely outside payroll. This is where ADR 0004's "unpaid applicant pool" population lives.
 
-⚠ **OPEN — needs labor-lawyer sign-off (ADR 0004, questionnaire D9).** The exact legal instant of employment (hire decision vs. first deployment vs. contract signing) is still open. **Default for this slice:** hire-decision creates the employee record (per ADR 0009's handoff). The whole boundary is isolated to the single `hireApplicant → createEmployee` call, so if the lawyer says "no, only at deployment," we move it with a one-line change (fire `createEmployee` from the assign flow instead). No schema rework needed either way.
+⚠ **OPEN — a genuine ADR conflict + needs labor-lawyer sign-off (ADR 0004 vs 0009, questionnaire D9).** The two ADRs disagree on the moment of employment: **ADR 0009** says `hireApplicant → createEmployee` (employee created at hire); **ADR 0004**'s later refinement says employment *and* first pay happen at **deployment**, with cleared applicants staying in Recruitment unpaid until posted. **This slice's default:** hire-decision creates the employee record (ADR 0009), made safe by the payroll guard above (created ≠ paid; pay still follows attendance). This is demo-able and isolates the boundary to the single `hireApplicant → createEmployee` call — if the lawyer/client says "no employee until deployed" (ADR 0004-strict), we move that call into the assign flow with no schema rework. The audit log records the exact hire moment (and later the deploy moment) either way — the DOLE-inquiry defense artifact ADR 0004 calls for.
 
 ---
 
@@ -92,6 +94,7 @@ All UUID PKs (`defaultRandom()`), `createdAt`/`updatedAt` timestamps, matching e
 | `firstName`, `lastName` | text not null | |
 | `middleName` | text | |
 | `dateOfBirth` | date | used for blacklist/terminated matching |
+| `sssNumber` | text | **stable ID for reliable blacklist/rehire matching** (collected at hire anyway). Nullable at `applied` (walk-ins may not have it yet), strongly encouraged before `documents`. See §5. |
 | `phone`, `email` | text | email nullable, not unique (an applicant may re-apply) |
 | `addressLine1/2`, `city`, `province` | text | feeds `hr.createEmployee` on hire |
 | `source` | enum `recruitment_source` | walk_in / referral / agency / job_board / social_media / provincial / training_school / other (questionnaire D1) |
@@ -138,9 +141,11 @@ Explicit, recruiter-curated do-not-hire list (separate from terminated employees
 
 ## 5. Blacklist / terminated auto-flag (meeting §1E: "prevents re-hiring without visibility")
 
-On **applicant create** and on **the Hire form**, run `recruitment.checkMatches({firstName, lastName, dateOfBirth})` which returns matches from **two** sources:
-1. **Terminated employees** — `hr_employees` where `status = 'terminated'`, matched by `lastName` + `dateOfBirth` (and fuzzy first-name).
-2. **Active blacklist entries** — `recruitment_blacklist` where `active = true`, same match keys.
+On **applicant create** and on **the Hire form**, run `recruitment.checkMatches({firstName, lastName, dateOfBirth, sssNumber})` which returns matches from **two** sources:
+1. **Terminated employees** — `hr_employees` where `status = 'terminated'`.
+2. **Active blacklist entries** — `recruitment_blacklist` where `active = true`.
+
+**Match priority:** exact `sssNumber` match first (high-confidence, when present), then `lastName` + `dateOfBirth` (medium-confidence fallback). The UI labels the confidence ("exact SSS match" vs "possible name match") so the recruiter knows whether it's a hard hit or a prompt to check. This is why §4a captures `sssNumber` — without a stable ID, name+DOB alone produces false positives (two Juan Dela Cruzes born the same day), which would erode trust in the blacklist feature the client explicitly asked for. *(Note: `hr_employees` has an `sssNumber` column already, so terminated-employee matching by SSS works today.)*
 
 The result drives a **visibility flag, not a hard block** (matches the meeting: *"prevents re-hiring without visibility"* — surface it, let the recruiter decide). UI:
 - Applicant card: small red `⚠` chip.
@@ -164,8 +169,8 @@ The result drives a **visibility flag, not a hard block** (matches the meeting: 
 - `hr.generateNextEmployeeCode(prefix = 'CG-')` — finds the max numeric suffix among existing `employeeCode`s and returns the next (e.g., `CG-10101`). Today the code is hand-typed in the New-Employee form; the recruiter shouldn't have to. Recruiter can still override in the Hire form. *(This is the only change to an existing module.)*
 
 ### 6c. Screens (`app/(admin)/recruitment/`), all via `PageShell`
-- **Applicants — board view** (default): kanban columns Applied / Contacted / Documents / Hired. Cards show name, position, days-in-stage, doc progress (e.g., `4/9`), and the `⚠` match chip. Best for the live pipeline (manageable counts).
-- **Applicants — list view**: searchable, **paginated** (reuse `Pagination` + page-size selector from Slice 2) across **all** applicants incl. rejected/withdrawn — this is the "database of all past applicants retained" (meeting §1E). Filter by stage/source.
+- **Applicants — list view (v1 default):** searchable, **paginated** (reuse `Pagination` + page-size selector from Slice 2) across **all** applicants incl. rejected/withdrawn — this is the "database of all past applicants retained" (meeting §1E). Columns: name, position, **stage** (as a chip), days-in-stage, doc progress (`4/9`), `⚠` match flag. Filter by stage/source. A "stage" column + per-row "advance" beats a kanban for the first cut: it scales to 10k rows, needs no drag-drop library, and ships faster.
+- **Applicants — board (kanban) view:** *deferred to a fast-follow* (see §7). Nice for eyeballing a small live pipeline, but it doesn't scale to thousands and adds drag-drop complexity — not worth blocking the slice on.
 - **Applicant detail**: profile + editable document checklist + stage timeline (from audit) + actions (Advance, Hire, Reject, Withdraw) + match banner.
 - **Hire form** (modal via `ModalShell`): employee code (pre-filled from `generateNextEmployeeCode`, editable), base salary, hire date, employment type → `hireApplicant`. On success: link to the new `/employees/[id]` and an **"Assign to a detachment now →"** shortcut into the *existing* Slice-2 assign flow.
 - **Blacklist**: paginated list + "Add to blacklist" form.
@@ -173,21 +178,21 @@ The result drives a **visibility flag, not a hard block** (matches the meeting: 
 
 ### 6d. ASCII mockups
 
-**Applicants board:**
+**Applicants list (v1 default):**
 ```
- Recruitment · Applicants                         [ + New applicant ]  [ List view ]
+ Recruitment · Applicants                                        [ + New applicant ]
+ Search [ dela________ ]   Stage [ All ▾ ]   Source [ All ▾ ]
  ───────────────────────────────────────────────────────────────────────────────
-  APPLIED (12)        CONTACTED (7)       DOCUMENTS (5)        HIRED (this wk: 3)
- ┌───────────────┐   ┌───────────────┐   ┌───────────────┐   ┌───────────────┐
- │ Dela Cruz, J. │   │ Santos, M.    │   │ Reyes, A.  4/9│   │ Cruz, P.      │
- │ Guard · 2d    │   │ Guard · 5d    │   │ Guard · 11d   │   │ → CG-10101    │
- │ ⚠ match       │   │               │   │ ✓ docs done   │   │               │
- └───────────────┘   └───────────────┘   └───────────────┘   └───────────────┘
- ┌───────────────┐   ┌───────────────┐
- │ Tan, R.       │   │ Lopez, C.     │      [Rejected · Withdrawn shown in List view]
- │ Driver · 1d   │   │ Guard · 3d    │
- └───────────────┘   └───────────────┘
- Footer: Drag a card or open it to advance a stage. Hire moves the applicant into Employees.
+  NAME              POSITION   STAGE         IN STAGE   DOCS   FLAG
+  Dela Cruz, Juan   Guard      ● Applied      2d        0/9    ⚠ name match
+  Santos, Maria     Guard      ● Contacted    5d        2/9
+  Reyes, Ana        Guard      ● Documents    11d       9/9    ⚠ SSS match
+  Tan, Rico         Driver     ● Applied      1d        0/6
+  Cruz, Pedro       Guard      ✓ Hired        —         → CG-10101
+  Lim, Carla        Guard      ✗ Rejected     —                (failed neuro-psych)
+ ───────────────────────────────────────────────────────────────────────────────
+  Showing 1–50 of 312 · page 1 of 7        Rows: [50 ▾]      ◀ Prev   Next ▶
+ Footer: Click a row to open, tick documents, and advance the stage. Hire moves them into Employees.
 ```
 
 **Applicant detail (top):**
@@ -215,6 +220,7 @@ The result drives a **visibility flag, not a hard block** (matches the meeting: 
 
 | Deferred | Why / where it lands |
 |---|---|
+| **Kanban board view** of the pipeline | Fast-follow after v1 list ships; doesn't scale to 10k, adds drag-drop complexity |
 | Marketing "need N guards" request + demand chain | Slice 4+ (Marketing/Contracts module); ADR 0009 Phase order |
 | Deployment / reshuffle **ownership** rebuild | Assignments already exist (Slice 2). ADR 0001 gives Recruitment ownership, but that's an **RBAC** concern — and there's no RBAC engine yet (every login = admin). On hire, recruiter uses the existing assign flow. Enforcement lands when RBAC ships. |
 | Approval sign-offs (hiring requisition) | `modules/approvals` exists but stays unused here (YAGNI); Slice 4+ |
@@ -255,12 +261,13 @@ Plus a Playwright browser-walk of the §1 demo script before handing to Noel (pe
 
 ## 10. Build order (for the implementation plan, once approved)
 
-1. `modules/recruitment` schema + migration + `labels.ts`.
-2. `hr.generateNextEmployeeCode` + tests.
-3. `recruitment` service + tests (createApplicant, advanceStage, setDocument, checkMatches, reject/withdraw) — TDD.
-4. `recruitment.hireApplicant` handoff + tests (the ADR 0009 contract) — TDD.
-5. Blacklist service + tests.
-6. UI: Applicants list (paginated) → board → detail → Hire modal → Blacklist screen; nav entry.
-7. Playwright walk of the demo script; README; done-sweep; UX-walk with Noel.
+1. **Payroll guard first (de-risk the integration):** add the zero-attendance skip to `payroll.runPayroll` + a regression test (`hired` employee with no DTR → no payslip); re-run the existing payroll suite. Do this before recruitment can create employees, so the unsafe path never exists.
+2. `modules/recruitment` schema + migration + `labels.ts`.
+3. `hr.generateNextEmployeeCode` + tests.
+4. `recruitment` service + tests (createApplicant, advanceStage, setDocument, checkMatches incl. SSS-priority, reject/withdraw) — TDD.
+5. `recruitment.hireApplicant` handoff + tests (the ADR 0009 contract; assert no payslip for the new hire) — TDD.
+6. Blacklist service + tests.
+7. UI: Applicants **list** (paginated, the v1 default) → detail → Hire modal → Blacklist screen; nav entry. *(Kanban board is a fast-follow, not in this slice.)*
+8. Playwright walk of the demo script; README; done-sweep; UX-walk with Noel.
 
 — end of design —
