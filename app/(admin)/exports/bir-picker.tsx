@@ -17,84 +17,21 @@ export function BirPicker({
   const [warnings, setWarnings] = useState<string[] | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
-  const [downloadState, setDownloadState] = useState<
-    { kind: 'idle' } | { kind: 'fetching' } | { kind: 'error'; message: string }
-  >({ kind: 'idle' });
 
-  // Programmatic Blob download. Anchor-with-Content-Disposition was failing
-  // for some Chrome configurations — the browser would intercept the PDF
-  // response and render it inline despite `download` + attachment header.
-  // Fetching the PDF as a Blob + creating an object URL bypasses Chrome's
-  // PDF viewer entirely: the browser only ever sees a blob: URL with
-  // `download`, which it reliably saves to ~/Downloads.
-  async function handleDownload() {
-    if (!employeeId || !Number.isInteger(year)) return;
-    setDownloadState({ kind: 'fetching' });
-    try {
-      const res = await fetch(`/api/exports/bir-2316/${employeeId}/${year}`, {
-        credentials: 'include',
-      });
-      if (!res.ok) {
-        const message = await res.text();
-        throw new Error(message || `Server returned ${res.status}`);
-      }
-      // Rewrap the response bytes as application/octet-stream rather than
-      // application/pdf. Chrome's built-in PDF Viewer otherwise hijacks
-      // the blob-anchor click — even with the `download` attribute, it
-      // opens the PDF inline and Chrome's download manager just receives
-      // the blob URL as the filename (no extension). The bytes are
-      // unchanged, and macOS still opens the saved file with Preview
-      // because the `.pdf` filename extension wins for the OS file-type
-      // association.
-      const rawBlob = await res.blob();
-      const blob = new Blob([await rawBlob.arrayBuffer()], { type: 'application/octet-stream' });
-
-      // Prefer the server-suggested filename from Content-Disposition;
-      // fall back to the year-only filename if parsing fails.
-      const cd = res.headers.get('content-disposition') ?? '';
-      const match = cd.match(/filename="([^"]+)"/);
-      const filename = match?.[1] ?? `2316-${year}.pdf`;
-
-      const url = URL.createObjectURL(blob);
-
-      // Build a hidden anchor with both `download` property AND attribute
-      // — some Chrome builds respect one but not the other when the href
-      // is a blob: URL. setAttribute is the more reliable signal.
-      const a = document.createElement('a');
-      a.style.position = 'fixed';
-      a.style.opacity = '0';
-      a.style.pointerEvents = 'none';
-      a.href = url;
-      a.download = filename;
-      a.setAttribute('download', filename);
-      a.rel = 'noopener';
-      document.body.appendChild(a);
-
-      // Dispatch a real MouseEvent rather than .click() — synthesised
-      // events with bubbles:true are processed identically to user
-      // clicks for download purposes, which matters for some Chromium
-      // download-blocking heuristics.
-      a.dispatchEvent(new MouseEvent('click', {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-      }));
-
-      // Cleanup well after the click so the download dispatcher has time
-      // to start the save. Premature removal/revocation can race the
-      // download in Chrome and result in either a UUID-named save (when
-      // `download` is dropped) or a cancelled download.
-      setTimeout(() => {
-        try { document.body.removeChild(a); } catch {}
-        URL.revokeObjectURL(url);
-      }, 4000);
-
-      setDownloadState({ kind: 'idle' });
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      setDownloadState({ kind: 'error', message });
-    }
-  }
+  // Native top-level download. We deliberately do NOT fetch the PDF into a
+  // Blob and click a blob: anchor — three prior attempts at that pattern all
+  // failed the same way on the client's Chrome (download UI showed a
+  // UUID-named "Done" entry but no file ever landed in ~/Downloads). The
+  // blob: delivery path is exactly what download-manager / PDF-viewer /
+  // security extensions mishandle, and it's where the client-set `download`
+  // filename gets dropped. Instead we point a real <a> at the
+  // cookie-authenticated API route below; the browser's native download path
+  // handles the save and takes the filename straight from the route's
+  // `Content-Disposition: attachment; filename="2316-..."` header.
+  const canDownload = !!employeeId && Number.isInteger(year);
+  const downloadHref = canDownload
+    ? `/api/exports/bir-2316/${employeeId}/${year}`
+    : undefined;
 
   // Refresh the warnings preview whenever the (employee, year) pair changes.
   // Debounced via React's transition queue so quick scrubs through the year
@@ -202,21 +139,24 @@ export function BirPicker({
         </p>
       )}
 
-      <button
-        type="button"
-        className="btn"
-        onClick={handleDownload}
-        disabled={!employeeId || downloadState.kind === 'fetching'}
-        style={{ justifySelf: 'start' }}
-      >
-        {downloadState.kind === 'fetching'
-          ? 'Generating PDF…'
-          : 'Download BIR 2316 (PDF) →'}
-      </button>
-      {downloadState.kind === 'error' && (
-        <p className="form-error" role="alert" style={{ marginTop: '0.25rem' }}>
-          Couldn&rsquo;t download: {downloadState.message}
-        </p>
+      {canDownload ? (
+        <a
+          className="btn"
+          href={downloadHref}
+          download
+          style={{ justifySelf: 'start', display: 'inline-flex', alignItems: 'center', textDecoration: 'none' }}
+        >
+          Download BIR 2316 (PDF) →
+        </a>
+      ) : (
+        <button
+          type="button"
+          className="btn"
+          disabled
+          style={{ justifySelf: 'start' }}
+        >
+          Download BIR 2316 (PDF) →
+        </button>
       )}
       <p className="field-hint" style={{ marginTop: '0.25rem' }}>
         Saves to your computer&rsquo;s Downloads folder. The download succeeds
