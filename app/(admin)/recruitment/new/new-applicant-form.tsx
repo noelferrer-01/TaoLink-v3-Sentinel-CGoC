@@ -2,8 +2,10 @@
 
 import { useActionState } from 'react';
 import Link from 'next/link';
-import { SOURCE_LABELS } from '@/modules/recruitment';
-import { EMPLOYMENT_TYPE_LABELS } from '@/modules/hr';
+// Import labels from the /labels subpath (pure constants) — NOT the module
+// index, which pulls server-only DB code into the client bundle.
+import { SOURCE_LABELS } from '@/modules/recruitment/labels';
+import { EMPLOYMENT_TYPE_LABELS } from '@/modules/hr/labels';
 import { TwoCol } from '@/components/form';
 import { createApplicantAction, type FormState } from '../actions';
 
