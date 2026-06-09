@@ -54,7 +54,10 @@ export const applicants = pgTable('recruitment_applicants', {
   isArmedPost: boolean('is_armed_post').notNull().default(false),
   pipelineStage: recruitmentStage('pipeline_stage').notNull().default('applied'),
   appliedOn: date('applied_on').notNull(),
-  hiredEmployeeId: uuid('hired_employee_id').references(() => employees.id),  // set on hire (ADR 0009 back-link)
+  // ON DELETE SET NULL: employees are never hard-deleted in production (status-
+  // based), so this only matters for test isolation — it stops a deleted
+  // employee from being blocked by an applicant's historical back-link.
+  hiredEmployeeId: uuid('hired_employee_id').references(() => employees.id, { onDelete: 'set null' }),
   outcomeReason: text('outcome_reason'),       // reject / withdraw reason
   notes: text('notes'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
@@ -67,7 +70,7 @@ export const applicantDocuments = pgTable('recruitment_applicant_documents', {
   docType: recruitmentDocType('doc_type').notNull(),
   status: recruitmentDocStatus('status').notNull().default('pending'),
   expiresOn: date('expires_on'),
-  verifiedByUserId: uuid('verified_by_user_id').references(() => users.id),
+  verifiedByUserId: uuid('verified_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   verifiedOn: date('verified_on'),
   notes: text('notes'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
@@ -81,8 +84,8 @@ export const blacklist = pgTable('recruitment_blacklist', {
   dateOfBirth: date('date_of_birth'),
   sssNumber: text('sss_number'),
   reason: text('reason').notNull(),
-  sourceEmployeeId: uuid('source_employee_id').references(() => employees.id),  // if blacklisting flowed from a termination
-  addedByUserId: uuid('added_by_user_id').references(() => users.id),
+  sourceEmployeeId: uuid('source_employee_id').references(() => employees.id, { onDelete: 'set null' }),  // if blacklisting flowed from a termination
+  addedByUserId: uuid('added_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   active: boolean('active').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
