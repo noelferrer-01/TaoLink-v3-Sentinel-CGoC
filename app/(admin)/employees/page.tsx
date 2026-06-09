@@ -1,8 +1,13 @@
 import Link from 'next/link';
 import { hr } from '@/modules/hr';
+import { clients } from '@/modules/clients';
 import { PageShell } from '@/components/page-shell';
 import { Pagination, clampPageSize } from '@/components/pagination';
 import { EmployeesListBody, type EmployeeRow } from './employees-list-body';
+
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
 
 const EMPLOYMENT_TYPES = ['GUARD', 'OFFICE_STAFF', 'SUPERVISOR', 'DRIVER', 'JANITOR', 'OTHER'] as const;
 type EmploymentType = (typeof EMPLOYMENT_TYPES)[number];
@@ -27,12 +32,15 @@ export default async function EmployeesPage({
   const page = parsePage(params.page);
   const pageSize = clampPageSize(params.size);
 
-  const { rows: results, total } = await hr.listEmployeesPage({
-    query: q,
-    employmentType: type,
-    limit: pageSize,
-    offset: (page - 1) * pageSize,
-  });
+  const [{ rows: results, total }, clientsWithDetachments] = await Promise.all([
+    hr.listEmployeesPage({
+      query: q,
+      employmentType: type,
+      limit: pageSize,
+      offset: (page - 1) * pageSize,
+    }),
+    clients.listClientsWithDetachments(),
+  ]);
 
   const employees: EmployeeRow[] = results.map((e) => ({
     id: e.id,
@@ -59,13 +67,15 @@ export default async function EmployeesPage({
       title="Employees"
       description="Everyone on the CGoC payroll — guards, office staff, supervisors, drivers. Import a CSV to add many at once, or add them one at a time."
       toolbar={toolbar}
-      footerHint="Click a row to view details. Select rows to bulk-assign or change status."
+      footerHint="Click a row to view details. Select rows to bulk-assign to a detachment."
     >
       <EmployeesListBody
         initialQuery={q}
         initialType={type}
         employees={employees}
         hasAnyFilter={q.length > 0 || type != null}
+        clientsWithDetachments={clientsWithDetachments}
+        today={todayIso()}
       />
       <Pagination
         total={total}

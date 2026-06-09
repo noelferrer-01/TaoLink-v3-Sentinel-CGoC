@@ -62,6 +62,14 @@ If you need the slow path (manual setup, no seed) for a presentation that includ
 - Type "Lucky" → pick `Lucky Chinatown`. Set transfer date `2026-02-01`. Confirm.
 - **Expected:** modal closes; result panel briefly shows "5 transferred, 0 errors." Original 5 assignments now have end dates; 5 new assignments exist on Lucky Chinatown. Active count is still 90.
 
+### 7b. Bulk-assign from Employees — partial-failure surface
+- Sidebar → **Employees**. Filter Type=Guard. Check 2–3 rows that **already** have an active assignment (e.g. Aquino, Faith + Aquino, Rosa from the seed).
+- Sticky bar shows "N selected · Assign to detachment…". Click it.
+- Modal opens: title "Assign to detachment", typeahead detachment field, start date defaulted to today.
+- Type "Megamall" → pick `SM Megamall`. Confirm.
+- **Expected (the deliberate "partial failure" demo):** result panel reads `0 employees assigned. 2 rows failed.` with per-row plain-language reasons (`Aquino, Rosa: this guard already has an active assignment — end the previous one first`). Done dismisses, the table refreshes, selection clears. This is the contract Step 6 walk-through (multi-select + bulk-assign + named errors) — the per-row error pattern lets the clerk fix exactly what failed without re-doing the rest.
+- For the happy path: pick a floating employee (one with no current active assignment — the seed leaves 10 floating) and bulk-assign them; result reads `1 employee assigned. 0 rows failed.` and the new row shows up on /assignments.
+
 ### 8. Visit DTR — countdown badge sourced from payroll calendar
 - Sidebar → **DTR**. Choose a period — for the demo, use the **current** semi-monthly period (the system defaults to it). If you pick a past period like **2026-05-16 → 2026-05-31**, the badges will turn red and read "Cutoff 7 days ago" / "Payday 4 days ago" — **that's not a bug**, it's the late-DTR warning surface (Done criterion #9) telling the clerk the period is past due.
 - **Expected (current period):** page header shows two amber badges: `Cutoff: <date> in N days` and `Payday: <date> in N days`. Both come from the seeded payroll calendar (Done criterion #8).

@@ -11,6 +11,8 @@ import {
   type EmploymentType,
   type Status,
 } from '@/modules/hr/labels';
+import type { ClientWithDetachments } from '@/modules/clients';
+import { BulkAssignModal } from './bulk-assign-modal';
 
 export interface EmployeeRow {
   id: string;
@@ -26,9 +28,18 @@ interface Props {
   initialType: string | undefined;
   employees: EmployeeRow[];
   hasAnyFilter: boolean;
+  clientsWithDetachments: ClientWithDetachments[];
+  today: string;
 }
 
-export function EmployeesListBody({ initialQuery, initialType, employees, hasAnyFilter }: Props) {
+export function EmployeesListBody({
+  initialQuery,
+  initialType,
+  employees,
+  hasAnyFilter,
+  clientsWithDetachments,
+  today,
+}: Props) {
   const router = useRouter();
   const [, startTransition] = useTransition();
 
@@ -36,6 +47,15 @@ export function EmployeesListBody({ initialQuery, initialType, employees, hasAny
   const [type, setType] = useState<string>(initialType ?? '');
   const [sort, setSort] = useState<SortState>({ key: 'lastName', dir: 'asc' });
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const [bulkAssignOpen, setBulkAssignOpen] = useState(false);
+
+  // Friendly-name lookup so the bulk-assign result panel can say
+  // "Cruz, Juan: already assigned" instead of echoing UUIDs.
+  const employeeNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const e of employees) m.set(e.id, `${e.lastName}, ${e.firstName}`);
+    return m;
+  }, [employees]);
 
   const pushUrl = (nextQuery: string, nextType: string) => {
     const params = new URLSearchParams();
@@ -106,20 +126,14 @@ export function EmployeesListBody({ initialQuery, initialType, employees, hasAny
     },
   ];
 
+  // Change-status as a bulk action is intentionally out-of-scope for Slice 2:
+  // status transitions vary by target (terminate needs a reason, undo has a
+  // 5-min window, etc), so it ships per-individual via the employee detail
+  // page and lands as a bulk action in Slice 3+.
   const bulkActions = [
     {
       label: 'Assign to detachment…',
-      onClick: () => {
-        // TODO Phase 9.5 — open bulk-assign modal (typeahead + date picker)
-        alert(`Bulk-assign ${selectedKeys.size} selected — wire in Phase 9.5`);
-      },
-    },
-    {
-      label: 'Change status…',
-      variant: 'ghost' as const,
-      onClick: () => {
-        alert(`Change status for ${selectedKeys.size} selected — wire in later phase`);
-      },
+      onClick: () => setBulkAssignOpen(true),
     },
   ];
 
@@ -206,6 +220,22 @@ export function EmployeesListBody({ initialQuery, initialType, employees, hasAny
         onRowClick={(row) => router.push(`/employees/${row.id}`)}
         emptyState={emptyState}
       />
+
+      {bulkAssignOpen && (
+        <BulkAssignModal
+          selectedEmployeeIds={Array.from(selectedKeys)}
+          selectedEmployeeCount={selectedKeys.size}
+          employeeNameById={employeeNameById}
+          clientsWithDetachments={clientsWithDetachments}
+          today={today}
+          onClose={() => setBulkAssignOpen(false)}
+          onSuccess={() => {
+            setBulkAssignOpen(false);
+            setSelectedKeys(new Set());
+            router.refresh();
+          }}
+        />
+      )}
     </>
   );
 }
