@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [react()],
   test: {
     environment: 'node',
-    include: ['modules/**/*.{test,spec}.ts', 'core/**/*.{test,spec}.ts'],
+    include: ['modules/**/*.{test,spec}.ts', 'core/**/*.{test,spec}.ts', 'db/**/*.{test,spec}.ts'],
     exclude: ['node_modules', '.next', 'dist', 'build', 'ref', 'wiki', 'memory'],
     testTimeout: 15_000,
     hookTimeout: 15_000,

@@ -18,7 +18,8 @@
     "db:test:setup": "tsx --env-file-if-exists=.env scripts/db-test-setup.ts",
     "db:seed-compliance": "tsx --env-file-if-exists=.env scripts/seed-compliance.ts",
     "db:seed:slice2-demo": "tsx --env-file-if-exists=.env db/seeds/slice2-demo.ts",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "db:backfill:persons": "tsx --env-file-if-exists=.env db/backfills/0021-persons.ts"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.0.2",
