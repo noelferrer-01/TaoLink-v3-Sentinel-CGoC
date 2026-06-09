@@ -53,10 +53,17 @@ export type SuspectedDuplicatePair = {
   suspectedDuplicateOf: string;
 };
 
+export type AmbiguousBlacklistRow = {
+  blacklistId: string;
+  nameKey: string;         // the normalizeNameKey that matched multiple persons
+  reason: 'ambiguous_name_dob'; // more variants possible in the future
+};
+
 export type BackfillReport = {
   personsCreated: number;
   quarantinedRows: QuarantinedRow[];
   suspectedDuplicatePairs: SuspectedDuplicatePair[];
+  ambiguousBlacklist: AmbiguousBlacklistRow[]; // blacklist rows that could not be safely linked
 };
 
 // ─── DB connection factory ────────────────────────────────────────────────────
@@ -118,6 +125,7 @@ async function _runBackfillWithRawSql(
     personsCreated: 0,
     quarantinedRows: [],
     suspectedDuplicatePairs: [],
+    ambiguousBlacklist: [],
   };
 
   // ── (a) NORMALIZE ──────────────────────────────────────────────────────────
@@ -153,6 +161,9 @@ async function _runBackfillWithRawSql(
   const claimedSss = new Map<string, string>(); // sssValue → personId
   const claimedTin = new Map<string, string>(); // tinValue → personId
 
+  // Sentinel value used to mark name+DOB keys that collide across multiple persons.
+  const AMBIGUOUS = Symbol('AMBIGUOUS');
+
   const existingPersons = await db
     .select({ id: persons.id, sssNumber: persons.sssNumber, tinNumber: persons.tinNumber })
     .from(persons);
@@ -173,58 +184,7 @@ async function _runBackfillWithRawSql(
   // Load once; it fits in memory (≤ 10k rows, one boolean per row).
   const armedByEmployeeId = new Map<string, boolean>(); // employeeId → isArmedPost
 
-  {
-    let lastAppId = '00000000-0000-0000-0000-000000000000';
-    let moreApps = true;
-    while (moreApps) {
-      const batch = await db
-        .select({
-          hiredEmployeeId: applicants.hiredEmployeeId,
-          isArmedPost: applicants.isArmedPost,
-        })
-        .from(applicants)
-        .where(and(
-          gt(applicants.id, lastAppId),
-          sql`${applicants.hiredEmployeeId} IS NOT NULL`,
-        ))
-        .orderBy(applicants.id)
-        .limit(BATCH_SIZE);
-
-      for (const a of batch) {
-        if (a.hiredEmployeeId) {
-          // Last-write wins: if multiple applicants link to same employee,
-          // prefer true (armed) over false.
-          const existing = armedByEmployeeId.get(a.hiredEmployeeId);
-          if (existing === undefined || a.isArmedPost) {
-            armedByEmployeeId.set(a.hiredEmployeeId, a.isArmedPost);
-          }
-        }
-        lastAppId = batch[batch.length - 1]!.hiredEmployeeId ?? lastAppId;
-      }
-
-      // Use a separate tracker for app id cursor
-      if (batch.length < BATCH_SIZE) {
-        moreApps = false;
-      } else {
-        // Need to track by applicant.id, not hiredEmployeeId. Re-query with id.
-        const batchWithId = await db
-          .select({ id: applicants.id, hiredEmployeeId: applicants.hiredEmployeeId, isArmedPost: applicants.isArmedPost })
-          .from(applicants)
-          .where(and(
-            gt(applicants.id, lastAppId),
-            sql`${applicants.hiredEmployeeId} IS NOT NULL`,
-          ))
-          .orderBy(applicants.id)
-          .limit(BATCH_SIZE);
-        if (batchWithId.length === 0) moreApps = false;
-      }
-
-      moreApps = false; // Simplification: load all in one pass since we already filter
-    }
-  }
-
-  // Actually load the armed map properly (simpler: no batching, just one query)
-  armedByEmployeeId.clear();
+  // Load all applicants with hiredEmployeeId in batches, cursoring on applicants.id.
   {
     // Load all applicants with hiredEmployeeId in batches
     let cursor = '00000000-0000-0000-0000-000000000000';
@@ -334,7 +294,11 @@ async function _runBackfillWithRawSql(
   // Also pre-load name+DOB→personId for name-match fallback.
 
   const personsBySss = new Map<string, string>();    // sssValue → personId
-  const personsByNameDob = new Map<string, string>(); // normalizeNameKey → personId
+  // personsByNameDob maps normalizeNameKey → personId OR AMBIGUOUS sentinel.
+  // AMBIGUOUS means 2+ different persons share the same name+DOB key — linking
+  // a blacklist row to either would risk flagging an innocent employee.
+  const AMBIGUOUS_NAME_DOB = Symbol('AMBIGUOUS_NAME_DOB');
+  const personsByNameDob = new Map<string, string | typeof AMBIGUOUS_NAME_DOB>(); // normalizeNameKey → personId | AMBIGUOUS
 
   {
     let cursor = '00000000-0000-0000-0000-000000000000';
@@ -365,12 +329,19 @@ async function _runBackfillWithRawSql(
             if (m) personsBySss.set(m[1]!, p.id);
           }
         }
-        // Name+DOB index (only if DOB is set)
+        // Name+DOB index (only if DOB is set).
+        // If a key is already taken by a DIFFERENT person, mark it AMBIGUOUS so we
+        // do not false-link a blacklist row to whichever was indexed first.
         if (p.dateOfBirth) {
           const key = normalizeNameKey(p.firstName, p.lastName, p.dateOfBirth);
-          if (!personsByNameDob.has(key)) {
+          const existing = personsByNameDob.get(key);
+          if (existing === undefined) {
             personsByNameDob.set(key, p.id);
+          } else if (existing !== AMBIGUOUS_NAME_DOB && existing !== p.id) {
+            // Two different persons share this name+DOB key → ambiguous
+            personsByNameDob.set(key, AMBIGUOUS_NAME_DOB);
           }
+          // If existing === p.id (idempotent re-run) or already AMBIGUOUS, leave as-is
         }
       }
 
@@ -406,10 +377,22 @@ async function _runBackfillWithRawSql(
             matchedPersonId = personsBySss.get(bl.sssNumber) ?? null;
           }
 
-          // 2. Name + DOB match (fallback)
+          // 2. Name + DOB match (fallback — only when unambiguous).
+          // If two persons share the same name+DOB key (AMBIGUOUS), do NOT link:
+          // we'd risk flagging an innocent employee as do-not-hire.  Add to
+          // ambiguousBlacklist for human review instead.
           if (!matchedPersonId && bl.dateOfBirth) {
             const key = normalizeNameKey(bl.firstName, bl.lastName, bl.dateOfBirth);
-            matchedPersonId = personsByNameDob.get(key) ?? null;
+            const resolved = personsByNameDob.get(key);
+            if (resolved === AMBIGUOUS_NAME_DOB) {
+              report.ambiguousBlacklist.push({
+                blacklistId: bl.id,
+                nameKey: key,
+                reason: 'ambiguous_name_dob',
+              });
+            } else if (typeof resolved === 'string') {
+              matchedPersonId = resolved;
+            }
           }
 
           if (matchedPersonId) {
@@ -539,17 +522,18 @@ async function _processEmployee(
     const e = err as Record<string, unknown>;
     // 23505: unique violation (backstop — should not happen if in-memory dedup works)
     if (e.code === '23505') {
-      // Quarantine: insert as anchorIdType='none', no unique ID
+      // Quarantine: insert as anchorIdType='none', no unique ID.
+      // IMPORTANT: use the ORIGINAL sss/tin locals (captured before personValues was
+      // built), NOT personValues.sssNumber/tinNumber — those are already null here
+      // because the fallback path sets them to null above.  Without this, quarantinedIds
+      // comes out null and findPersonByAnyId cannot surface this person.
       console.warn(`[backfill] 23505 on employee ${emp.id} — quarantining to none`);
       const safeValues: typeof persons.$inferInsert = {
         ...personValues,
         anchorIdType: 'none',
         sssNumber: null,
         tinNumber: null,
-        quarantinedIds: [
-          personValues.sssNumber ? `sss:${personValues.sssNumber}` : null,
-          personValues.tinNumber ? `tin:${personValues.tinNumber}` : null,
-        ].filter(Boolean).join('\n') || null,
+        quarantinedIds: [sss ? `sss:${sss}` : null, tin ? `tin:${tin}` : null].filter(Boolean).join('\n') || null,
       };
       const [fallback] = await db
         .insert(persons)
@@ -566,7 +550,13 @@ async function _processEmployee(
   if (anchorIdType === 'sss' && sss) claimedSss.set(sss, personId);
   if (anchorIdType === 'tin' && tin) claimedTin.set(tin, personId);
 
-  // Two-sided suspectedDuplicateOf: if this person is a dup, flag the anchor too
+  // Two-sided suspectedDuplicateOf: if this person is a dup, flag the anchor too.
+  // NOTE (three-way+ duplicates): when 3+ rows share the same SSS, the anchor's
+  // single `suspectedDuplicateOf` column ends up pointing only to the LAST
+  // duplicate processed (last-writer-wins on the DB column).  This is acceptable
+  // because the quarantine report's `suspectedDuplicatePairs` array is the
+  // authoritative review artifact — it records ALL pairs, not just the last one.
+  // The DB field is a convenience hint; the report is the full record.
   if (anchorPersonId) {
     try {
       await db
@@ -690,12 +680,15 @@ async function _processApplicant(
   } catch (err: unknown) {
     const e = err as Record<string, unknown>;
     if (e.code === '23505') {
+      // Quarantine: use the ORIGINAL sss local (captured before personValues was built),
+      // NOT personValues.sssNumber — that is already null here.  Without this,
+      // quarantinedIds comes out null and findPersonByAnyId cannot surface this person.
       console.warn(`[backfill] 23505 on applicant ${app.id} — quarantining to none`);
       const safeValues: typeof persons.$inferInsert = {
         ...personValues,
         anchorIdType: 'none',
         sssNumber: null,
-        quarantinedIds: personValues.sssNumber ? `sss:${personValues.sssNumber}` : null,
+        quarantinedIds: sss ? `sss:${sss}` : null,
       };
       const [fallback] = await db
         .insert(persons)
@@ -771,7 +764,18 @@ async function main() {
     }
   }
 
-  if (report.quarantinedRows.length === 0 && report.suspectedDuplicatePairs.length === 0) {
+  if (report.ambiguousBlacklist.length > 0) {
+    console.log('\n  ⚠  AMBIGUOUS BLACKLIST ROWS (name+DOB matched 2+ persons — human review required):');
+    for (const row of report.ambiguousBlacklist) {
+      console.log(`    blacklistId=${row.blacklistId.slice(0, 8)} key="${row.nameKey}" — not linked`);
+    }
+  }
+
+  if (
+    report.quarantinedRows.length === 0 &&
+    report.suspectedDuplicatePairs.length === 0 &&
+    report.ambiguousBlacklist.length === 0
+  ) {
     console.log('  ✓ No duplicates detected.');
   }
 
