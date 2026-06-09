@@ -377,6 +377,24 @@ describe('persons service (integration)', () => {
       const found = await findPersonByAnyId('philsys', '123456789012');
       expect(found?.id).toBe(p.id);
     });
+
+    it('quarantinedIds LIKE match does not prefix-collide (sss:34-5678901-20 does NOT match query for sss:34-5678901-2)', async () => {
+      // Create a person with a quarantined SSS ending in "-20" (longer value)
+      const p = await createPerson({
+        firstName: 'Prefix',
+        lastName: 'Collision',
+        anchorIdType: 'none',
+      });
+      const db = getDb();
+      await db
+        .update(persons)
+        .set({ quarantinedIds: 'sss:34-5678901-20' })
+        .where((await import('drizzle-orm').then(m => m.eq))(persons.id, p.id));
+
+      // Querying for the shorter value "34-5678901-2" must NOT return the "-20" row.
+      const found = await findPersonByAnyId('sss', '34-5678901-2');
+      expect(found).toBeNull();
+    });
   });
 
   // ─── findPossibleDuplicates ───────────────────────────────────────────────────
@@ -497,8 +515,10 @@ describe('persons service (integration)', () => {
       expect(redacted.sssNumber).toBeNull();
       expect(redacted.phone).toBeNull();
       expect(redacted.email).toBeNull();
-      // anchorIdType reset to none (unique slot tombstoned)
+      // anchorIdType reset to none
       expect(redacted.anchorIdType).toBe('none');
+      // quarantinedIds must be null — PII is not parked there
+      expect(redacted.quarantinedIds).toBeNull();
     });
 
     it('keeps the person row — getPerson still returns the row', async () => {
@@ -509,7 +529,7 @@ describe('persons service (integration)', () => {
       expect(fetched?.redactedAt).not.toBeNull();
     });
 
-    it('tombstones the old SSS so it cannot be re-minted (unique slot NOT freed)', async () => {
+    it('PII genuinely removed after redaction — findPersonByAnyId returns null for old SSS', async () => {
       const p = await createPerson({
         firstName: 'Juan',
         lastName: 'Cruz',
@@ -518,20 +538,13 @@ describe('persons service (integration)', () => {
       });
       await redactPerson(p.id);
 
-      // The old SSS is in quarantinedIds as a tombstone — another person with the
-      // same SSS must be rejected (findPersonByAnyId still hits it).
+      // After genuine redaction, the SSS is gone — not parked in quarantinedIds.
+      // findPersonByAnyId must return null (the ID is truly removed).
       const found = await findPersonByAnyId('sss', '34-5678901-2');
-      expect(found?.id).toBe(p.id);  // The tombstoned row is still found
-
-      // Creating a new person with the same SSS — the unique column is now NULL
-      // (the old value was moved to quarantinedIds), so the DB will allow a NEW
-      // person with that SSS. This is the designed behavior: the value was moved
-      // to quarantine, but findPersonByAnyId surfaces the tombstone first so
-      // operators see the prior record before creating a duplicate.
-      // (See service.ts redactPerson for the full tombstone rationale.)
+      expect(found).toBeNull();
     });
 
-    it('the old anchor SSS value is findable via quarantinedIds after redaction', async () => {
+    it('quarantinedIds is null after redaction (PII not parked there)', async () => {
       const p = await createPerson({
         firstName: 'Pedro',
         lastName: 'Reyes',
@@ -540,15 +553,14 @@ describe('persons service (integration)', () => {
       });
       await redactPerson(p.id);
 
-      // After redaction, sssNumber column is NULL.
-      // The quarantinedIds should contain the old value so findPersonByAnyId works.
+      // quarantinedIds must be null — it is for the dedup backfill case, not a privacy bucket.
       const tombstone = await getPerson(p.id);
       expect(tombstone?.sssNumber).toBeNull();
-      expect(tombstone?.quarantinedIds).toMatch(/sss:55-9876543-1/);
+      expect(tombstone?.quarantinedIds).toBeNull();
 
-      // findPersonByAnyId should still surface it via quarantinedIds.
+      // findPersonByAnyId also returns null — PII is truly gone.
       const found = await findPersonByAnyId('sss', '55-9876543-1');
-      expect(found?.id).toBe(p.id);
+      expect(found).toBeNull();
     });
   });
 });

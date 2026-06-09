@@ -137,12 +137,6 @@ export async function createPerson(input: CreatePersonInput): Promise<Person> {
       const label = ANCHOR_ID_LABELS[anchorIdType];
       throw new Error(`${label} number is required when anchorIdType is '${anchorIdType}'.`);
     }
-    // Advisory format check — attach warning to audit payload but do NOT reject.
-    const warning = checkIdFormat(anchorIdType, idValue);
-    if (warning) {
-      // Logged to audit payload below — not a gate.
-      void warning; // acknowledged; used in audit payload
-    }
   }
 
   const values: NewPerson = {
@@ -269,31 +263,33 @@ export async function findPersonByAnyId(
   // Build the column-match condition for non-none types.
   if (idType !== 'none') {
     const { columnRef } = getIdColumn(idType);
-    // Also check quarantinedIds for "type:value" lines.
-    const quarantinePattern = `${idType}:${idValue}`;
+    // Check quarantinedIds with line-anchored LIKE so "sss:34-5678901-2" does NOT
+    // match "sss:34-5678901-20".  We wrap the field as '\n'||col||'\n' and search
+    // for '\n<type>:<value>\n' so only a full line matches.
+    const quarantinePattern = `\n${idType}:${idValue}\n`;
 
     const rows = await db
       .select()
       .from(persons)
       .where(
         sql`${columnRef} = ${idValue}
-          OR ${persons.quarantinedIds} LIKE ${'%' + quarantinePattern + '%'}`,
+          OR '\n' || ${persons.quarantinedIds} || '\n' LIKE ${'%' + quarantinePattern + '%'}`,
       )
       .limit(1);
     return rows[0] ?? null;
   }
 
-  // idType='none' — only check quarantinedIds
+  // idType='none' — search for a "none:<value>" line in quarantinedIds.
+  // Use a SQL LIKE filter so we don't pull every quarantined row into JS.
+  const nonePattern = `\nnone:${idValue}\n`;
   const rows = await db
     .select()
     .from(persons)
-    .where(sql`${persons.quarantinedIds} IS NOT NULL`)
-    .limit(100);
-  // Filter client-side for quarantine matches — pattern is simple
-  const hit = rows.find((r) =>
-    r.quarantinedIds?.split('\n').some((line) => line.trim() === `none:${idValue}`),
-  );
-  return hit ?? null;
+    .where(
+      sql`'\n' || ${persons.quarantinedIds} || '\n' LIKE ${'%' + nonePattern + '%'}`,
+    )
+    .limit(1);
+  return rows[0] ?? null;
 }
 
 // ─── findPossibleDuplicates ───────────────────────────────────────────────────
@@ -363,7 +359,9 @@ export async function updatePerson(
   }
 
   // Strip immutable fields the caller should not touch.
-  const IMMUTABLE = ['id', 'createdAt', 'redactedAt'] as const;
+  // quarantinedIds and suspectedDuplicateOf are dedup-system fields — they must
+  // not be silently wiped or overwritten via the identity-edit path.
+  const IMMUTABLE = ['id', 'createdAt', 'redactedAt', 'quarantinedIds', 'suspectedDuplicateOf'] as const;
   const safePatch = { ...patch } as Record<string, unknown>;
   for (const field of IMMUTABLE) {
     delete safePatch[field];
@@ -398,26 +396,22 @@ export async function updatePerson(
 // ─── redactPerson ─────────────────────────────────────────────────────────────
 
 /**
- * Tombstone mechanism for soft redaction (ADR 0017 — Retention section).
+ * Genuine PII removal (ADR 0017 — Retention section).
  *
- * Sets `redactedAt = now()`, clears all identity fields (nulls IDs, DOB,
+ * Sets `redactedAt = now()`, clears ALL identity fields (nulls IDs, DOB,
  * address, contact; sets firstName/lastName to '[redacted]' since they are
- * NOT NULL), and resets `anchorIdType` to 'none'.
+ * NOT NULL), resets `anchorIdType` to 'none', and sets `quarantinedIds` to
+ * null.
  *
- * **Unique-slot tombstoning:**
- * The anchor ID value is moved into `quarantinedIds` (format:
- * "<type>:<value>") before the column is nulled. This ensures the value
- * remains findable via `findPersonByAnyId` and is NOT silently freed — the
- * intent is that operators see the tombstone record when they enter the same
- * ID at intake, rather than creating a phantom duplicate. The physical unique
- * constraint is vacated (NULL is allowed), but the tombstone in quarantinedIds
- * acts as the lookup anchor.
+ * **Privacy correctness:** `quarantinedIds` is for the dedup backfill case
+ * only (a legitimate person whose unique-ID slot was taken by a colliding
+ * record). It is NOT a privacy bucket. Parking a redacted person's IDs there
+ * would re-expose PII in a different column. Redaction means the IDs are gone —
+ * `findPersonByAnyId` will NOT resurface this person by their old ID after
+ * redaction (that is the point).
  *
- * NOTE: because the unique column is NULLed, a new person CAN technically be
- * created with the same ID value after redaction. The tombstone + lookup via
- * findPersonByAnyId is the safety net. If we need a hard "never re-use this
- * ID" guarantee, the correct mechanism is a separate blacklist table — which is
- * out of scope for this task (ADR 0017 defers the purge policy).
+ * The audit payload records only the *types* that were cleared, not the
+ * actual ID values (which would re-leak PII into the audit log).
  *
  * The row, personId FKs, and all audit history are preserved.
  * Government exports snapshot identity at generation time, so redacting later
@@ -432,41 +426,17 @@ export async function redactPerson(
   const before = await getPerson(id);
   if (!before) throw new Error(`Person not found — no person with id ${id}.`);
 
-  // Build the tombstone entry for quarantinedIds.
-  // Move any existing anchor ID into quarantinedIds so it remains findable.
-  const tombstoneLines: string[] = [];
-  if (before.quarantinedIds) {
-    tombstoneLines.push(...before.quarantinedIds.split('\n').filter(Boolean));
-  }
-
-  // If the person had a real anchor ID, record it as a tombstone marker.
-  if (before.anchorIdType !== 'none') {
-    const { fieldName } = getIdColumn(before.anchorIdType as Exclude<AnchorIdType, 'none'>);
-    const idValue = (before as Record<string, unknown>)[fieldName] as string | null;
-    if (idValue) {
-      const tombstoneLine = `${before.anchorIdType}:${idValue}`;
-      if (!tombstoneLines.includes(tombstoneLine)) {
-        tombstoneLines.push(tombstoneLine);
-      }
-    }
-  }
-
-  // Also tombstone all other unique IDs (philsys/sss/tin) that are set.
-  const uniqueFields: Array<[Exclude<AnchorIdType, 'none'>, string | null]> = [
-    ['philsys', before.philsysNumber],
-    ['sss',     before.sssNumber],
-    ['tin',     before.tinNumber],
-  ];
-  for (const [idType, idValue] of uniqueFields) {
-    if (idValue) {
-      const tombstoneLine = `${idType}:${idValue}`;
-      if (!tombstoneLines.includes(tombstoneLine)) {
-        tombstoneLines.push(tombstoneLine);
-      }
-    }
-  }
-
-  const quarantinedIds = tombstoneLines.length > 0 ? tombstoneLines.join('\n') : null;
+  // Collect the *types* of IDs that were set — for the audit payload only.
+  // We do NOT record the actual values (that would re-leak PII).
+  const clearedIdTypes: string[] = [];
+  if (before.philsysNumber)        clearedIdTypes.push('philsys');
+  if (before.sssNumber)            clearedIdTypes.push('sss');
+  if (before.tinNumber)            clearedIdTypes.push('tin');
+  if (before.philhealthNumber)     clearedIdTypes.push('philhealth');
+  if (before.pagibigNumber)        clearedIdTypes.push('pagibig');
+  if (before.umidNumber)           clearedIdTypes.push('umid');
+  if (before.passportNumber)       clearedIdTypes.push('passport');
+  if (before.driversLicenseNumber) clearedIdTypes.push('drivers_license');
 
   const [updated] = await db
     .update(persons)
@@ -482,7 +452,7 @@ export async function redactPerson(
       dateOfBirth: null,
       sex:         null,
 
-      // Clear all IDs (unique slot vacated; tombstone value moved to quarantinedIds)
+      // Clear all IDs — unique slots vacated; PII is truly removed (not parked)
       philsysNumber:        null,
       sssNumber:            null,
       tinNumber:            null,
@@ -504,8 +474,9 @@ export async function redactPerson(
       phone:        null,
       email:        null,
 
-      // Store the tombstone
-      quarantinedIds,
+      // quarantinedIds is for the dedup backfill case only — null it so we
+      // don't accidentally surface PII through findPersonByAnyId after redaction.
+      quarantinedIds: null,
 
       updatedAt: new Date(),
     })
@@ -519,7 +490,8 @@ export async function redactPerson(
     target:  { kind: 'person', id },
     payload: {
       previousAnchorIdType: before.anchorIdType,
-      tombstonedIds: tombstoneLines,
+      // Types only — actual values are NOT logged (would re-leak PII).
+      clearedIdTypes,
     },
   });
   await events.publish('person.redacted', { id });
