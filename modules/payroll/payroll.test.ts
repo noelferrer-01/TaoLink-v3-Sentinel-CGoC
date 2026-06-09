@@ -198,8 +198,13 @@ describe('payroll module — runPayroll', () => {
     expect(Number(slips2[0]!.daysWorked)).toBe(12);
   });
 
-  // ─── Test 3: Employee with zero DTR rows completes without aborting run ───
-  it('employee with zero DTR rows in period gets grossPay=0 and run still completes', async () => {
+  // ─── Test 3: Employee with zero attendance gets NO payslip (run still completes) ───
+  // Behavior changed in Slice 3: previously a zero-DTR active employee produced a
+  // ₱0 payslip (with phantom statutory on the final cut). That leaked phantom
+  // SSS/PhilHealth/Pag-IBIG into the government exports and would create spurious
+  // payslips for hired-but-undeployed recruits. Payroll now skips zero-attendance
+  // employees entirely. See wiki/slices/3-recruitment-ats.md §2.
+  it('employee with zero attendance gets no payslip and the run still completes', async () => {
     const empA = await makeEmployee('CG-P003A');
     const empB = await makeEmployee('CG-P003B');
 
@@ -209,22 +214,16 @@ describe('payroll module — runPayroll', () => {
     const run = await runPayroll('2026-05-16', '2026-05-31');
     expect(run.status).toBe('calculated');
 
-    // Both employees should have payslips.
+    // Only the employee who actually worked gets a payslip.
     const allSlips = await db.select().from(payslips).where(eq(payslips.payRunId, run.id));
-    expect(allSlips).toHaveLength(2);
+    expect(allSlips).toHaveLength(1);
 
     const slipA = allSlips.find((s) => s.employeeId === empA.id)!;
-    const slipB = allSlips.find((s) => s.employeeId === empB.id)!;
-
     expect(slipA).toBeDefined();
     expect(Number(slipA.daysWorked)).toBe(3);
 
-    // empB: zero days → grossPay = 0.
-    // For SEMI_MONTHLY final cut: statutory is still computed but netPay clamped to 0.
-    expect(slipB).toBeDefined();
-    expect(Number(slipB.daysWorked)).toBe(0);
-    expect(Number(slipB.grossPay)).toBe(0);
-    expect(Number(slipB.netPay)).toBe(0);
+    // empB worked nothing → no payslip at all (no phantom statutory in gov filings).
+    expect(allSlips.find((s) => s.employeeId === empB.id)).toBeUndefined();
   });
 
   // ─── Test 4: Status filter — applicant and terminated excluded ────────────

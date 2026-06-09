@@ -107,6 +107,14 @@ export async function runPayroll(
       // Slice-1: OT hours not yet captured via UI.
       const otHours = 0;
 
+      // No attendance in this period → no payslip. Prevents hired-but-undeployed
+      // employees (e.g. fresh hires from Recruitment) from generating a phantom
+      // payslip that carries statutory deductions into the SSS R-3 / BIR exports.
+      // See wiki/slices/3-recruitment-ats.md §2.
+      if (daysWorked === 0 && otHours === 0) {
+        continue;
+      }
+
       const basicSalaryMonthly = Number(emp.basicSalary);
       const workDaysPerMonth = run.workDaysPerMonth;
 
