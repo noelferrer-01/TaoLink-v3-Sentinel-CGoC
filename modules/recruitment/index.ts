@@ -13,7 +13,7 @@ import {
   hireApplicant,
 } from './service';
 
-export type { CreateApplicantInput, HireMeta, Match, MatchKind } from './service';
+export type { CreateApplicantInput, HireMeta, Match, MatchKind, ApplicantIdentity } from './service';
 export {
   STAGE_LABELS,
   SOURCE_LABELS,

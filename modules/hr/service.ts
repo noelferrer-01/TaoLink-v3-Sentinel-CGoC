@@ -304,35 +304,41 @@ export async function getEmployeesWithIdentityPage(
   return { rows: rows as EmployeeWithIdentity[], total: countResult[0]?.total ?? 0 };
 }
 
-export type EmployeeListItem = Pick<
-  Employee,
-  | 'id'
-  | 'employeeCode'
-  | 'firstName'
-  | 'lastName'
-  | 'email'
-  | 'status'
-  | 'payFrequency'
-  | 'basicSalary'
-  | 'hiredOn'
->;
+export type EmployeeListItem = {
+  id:             Employee['id'];
+  employeeCode:   Employee['employeeCode'];
+  // T9: firstName/lastName come from the linked Person, not the legacy columns.
+  // Nullable because a missing Person (pre-backfill) yields null via LEFT JOIN.
+  firstName:      Person['firstName']  | null;
+  lastName:       Person['lastName']   | null;
+  email:          Person['email']      | null;
+  status:         Employee['status'];
+  payFrequency:   Employee['payFrequency'];
+  basicSalary:    Employee['basicSalary'];
+  hiredOn:        Employee['hiredOn'];
+};
 
 export async function listEmployees(): Promise<EmployeeListItem[]> {
   const db = getDb();
-  return db
+  // T9: name is sourced from persons via LEFT JOIN so employees without a linked
+  // Person (pre-backfill rows) are still returned (firstName/lastName will be null).
+  const rows = await db
     .select({
       id: employees.id,
       employeeCode: employees.employeeCode,
-      firstName: employees.firstName,
-      lastName: employees.lastName,
-      email: employees.email,
+      firstName: persons.firstName,
+      lastName: persons.lastName,
+      email: persons.email,
       status: employees.status,
       payFrequency: employees.payFrequency,
       basicSalary: employees.basicSalary,
       hiredOn: employees.hiredOn,
     })
     .from(employees)
-    .orderBy(employees.lastName, employees.firstName);
+    .leftJoin(persons, eq(employees.personId, persons.id))
+    .orderBy(persons.lastName, persons.firstName);
+
+  return rows as EmployeeListItem[];
 }
 
 export async function changeStatus(

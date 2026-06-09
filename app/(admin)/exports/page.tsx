@@ -16,9 +16,10 @@ export default async function ExportsPage() {
     status: r.status,
   }));
 
+  // T9: firstName/lastName now come from the linked Person via listEmployees.
   const guardOptions = guards.map((g) => ({
     id: g.id,
-    label: `${g.lastName}, ${g.firstName} (${g.employeeCode})`,
+    label: `${g.lastName ?? g.employeeCode}, ${g.firstName ?? ''} (${g.employeeCode})`,
   }));
 
   const currentYear = new Date().getFullYear();

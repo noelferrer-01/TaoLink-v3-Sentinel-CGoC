@@ -2,6 +2,7 @@ import { and, eq, lte, gte, or, isNull, desc, notInArray, ne, count, sql } from 
 import { getDb } from '@/core/db';
 import { assignments, type Assignment } from './schema';
 import { employees } from '@/modules/hr/schema';
+import { persons } from '@/modules/persons/schema';
 import { detachments, clients } from '@/modules/clients/schema';
 import { audit } from '@/modules/audit';
 import { events } from '@/modules/events';
@@ -132,8 +133,9 @@ export async function listActiveAssignments(
         startDate: assignments.startDate,
         employeeId: employees.id,
         employeeCode: employees.employeeCode,
-        firstName: employees.firstName,
-        lastName: employees.lastName,
+        // T9: name sourced from persons (LEFT JOIN so rows survive a missing personId).
+        firstName: persons.firstName,
+        lastName: persons.lastName,
         detachmentId: detachments.id,
         detachmentName: detachments.name,
         clientId: clients.id,
@@ -141,10 +143,11 @@ export async function listActiveAssignments(
       })
       .from(assignments)
       .innerJoin(employees, eq(employees.id, assignments.employeeId))
+      .leftJoin(persons, eq(persons.id, employees.personId))
       .innerJoin(detachments, eq(detachments.id, assignments.detachmentId))
       .innerJoin(clients, eq(clients.id, detachments.clientId))
       .where(activeWhere)
-      .orderBy(employees.lastName, employees.firstName)
+      .orderBy(persons.lastName, persons.firstName)
       .limit(limit)
       .offset(offset),
     db.select({ total: count() }).from(assignments).where(activeWhere),
@@ -157,8 +160,8 @@ export async function listActiveAssignments(
       employee: {
         id: r.employeeId,
         employeeCode: r.employeeCode,
-        firstName: r.firstName,
-        lastName: r.lastName,
+        firstName: r.firstName ?? '',
+        lastName: r.lastName ?? '',
       },
       detachment: { id: r.detachmentId, name: r.detachmentName },
       client: { id: r.clientId, name: r.clientName },
@@ -184,8 +187,9 @@ export async function listAssignmentsOverlappingPeriod(
       startDate: assignments.startDate,
       employeeId: employees.id,
       employeeCode: employees.employeeCode,
-      firstName: employees.firstName,
-      lastName: employees.lastName,
+      // T9: name sourced from persons (LEFT JOIN so rows survive a missing personId).
+      firstName: persons.firstName,
+      lastName: persons.lastName,
       detachmentId: detachments.id,
       detachmentName: detachments.name,
       clientId: clients.id,
@@ -193,6 +197,7 @@ export async function listAssignmentsOverlappingPeriod(
     })
     .from(assignments)
     .innerJoin(employees, eq(employees.id, assignments.employeeId))
+    .leftJoin(persons, eq(persons.id, employees.personId))
     .innerJoin(detachments, eq(detachments.id, assignments.detachmentId))
     .innerJoin(clients, eq(clients.id, detachments.clientId))
     .where(
@@ -201,7 +206,7 @@ export async function listAssignmentsOverlappingPeriod(
         or(isNull(assignments.endDate), gte(assignments.endDate, periodStart)),
       ),
     )
-    .orderBy(employees.lastName, employees.firstName);
+    .orderBy(persons.lastName, persons.firstName);
 
   return rows.map((r) => ({
     id: r.id,
@@ -209,8 +214,8 @@ export async function listAssignmentsOverlappingPeriod(
     employee: {
       id: r.employeeId,
       employeeCode: r.employeeCode,
-      firstName: r.firstName,
-      lastName: r.lastName,
+      firstName: r.firstName ?? '',
+      lastName: r.lastName ?? '',
     },
     detachment: { id: r.detachmentId, name: r.detachmentName },
     client: { id: r.clientId, name: r.clientName },
@@ -247,6 +252,11 @@ export async function listOverlappingEmployeesPage(
   // sorts the deduped result for display. Drizzle's typed query builder
   // can't express both orderings in one query, so we use raw SQL — values
   // are bound via the `sql` template, no string concatenation.
+  //
+  // T9: name is sourced from persons via LEFT JOIN (p.first_name, p.last_name).
+  // The legacy e.first_name / e.last_name columns are NOT read here — this is
+  // the reader typecheck cannot guard; covered by the raw-SQL integration test
+  // in assignments.test.ts ("listOverlappingEmployeesPage returns guard name from Person").
   const rowsResult = await db.execute<{
     id: string;
     start_date: string;
@@ -262,11 +272,13 @@ export async function listOverlappingEmployeesPage(
     SELECT * FROM (
       SELECT DISTINCT ON (e.id)
         a.id, a.start_date,
-        e.id AS employee_id, e.employee_code, e.first_name, e.last_name,
+        e.id AS employee_id, e.employee_code,
+        p.first_name, p.last_name,
         d.id AS detachment_id, d.name AS detachment_name,
         c.id AS client_id, c.name AS client_name
       FROM assignments a
       INNER JOIN hr_employees e ON e.id = a.employee_id
+      LEFT JOIN persons p ON p.id = e.person_id
       INNER JOIN detachments d ON d.id = a.detachment_id
       INNER JOIN clients c ON c.id = d.client_id
       WHERE a.start_date <= ${periodEnd}
@@ -355,16 +367,25 @@ export async function listAssignableEmployees(asOf: string): Promise<AssignableE
       ),
     );
 
-  return db
+  // T9: name sourced from persons (LEFT JOIN so rows survive a missing personId).
+  const rows = await db
     .select({
       id: employees.id,
       employeeCode: employees.employeeCode,
-      firstName: employees.firstName,
-      lastName: employees.lastName,
+      firstName: persons.firstName,
+      lastName: persons.lastName,
     })
     .from(employees)
+    .leftJoin(persons, eq(persons.id, employees.personId))
     .where(and(ne(employees.status, 'terminated'), notInArray(employees.id, assignedIds)))
-    .orderBy(employees.lastName, employees.firstName);
+    .orderBy(persons.lastName, persons.firstName);
+
+  return rows.map((r) => ({
+    id: r.id,
+    employeeCode: r.employeeCode,
+    firstName: r.firstName ?? '',
+    lastName: r.lastName ?? '',
+  }));
 }
 
 // ─── endAssignment ───────────────────────────────────────────────────────────

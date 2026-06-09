@@ -21,6 +21,28 @@ import {
 import { ALLOWED_TRANSITIONS, requiredDocsFor, type DocType, type DocStatus, type Stage } from './labels';
 import { createPerson } from '@/modules/persons/service';
 import { ID_TYPE_LADDER } from '@/modules/persons/labels';
+import { persons, type Person } from '@/modules/persons/schema';
+
+// ─── ApplicantWithPerson ──────────────────────────────────────────────────────
+// getApplicant returns this shape: the applicant row plus the linked Person's
+// identity fields (same property names as the legacy applicant columns so the
+// detail page switches its data source without renaming anything).
+// T9: reads identity from Person; dual-write ensures values are identical.
+// T12 will drop the legacy identity columns from the applicant row.
+
+export type ApplicantIdentity = {
+  firstName:   Person['firstName']   | null;
+  lastName:    Person['lastName']    | null;
+  middleName:  Person['middleName']  | null;
+  dateOfBirth: Person['dateOfBirth'] | null;
+  sssNumber:   Person['sssNumber']   | null;
+  phone:       Person['phone']       | null;
+  email:       Person['email']       | null;
+  addressLine1: Person['addressLine1'] | null;
+  addressLine2: Person['addressLine2'] | null;
+  city:        Person['city']        | null;
+  province:    Person['province']    | null;
+};
 
 // ─── createApplicant ───────────────────────────────────────────────────────────
 
@@ -126,12 +148,34 @@ export async function createApplicant(input: CreateApplicantInput): Promise<Appl
 
 export async function getApplicant(
   id: string,
-): Promise<{ applicant: Applicant; documents: ApplicantDocument[] } | null> {
+): Promise<{ applicant: Applicant; identity: ApplicantIdentity; documents: ApplicantDocument[] } | null> {
   const db = getDb();
   const [a] = await db.select().from(applicants).where(eq(applicants.id, id));
   if (!a) return null;
+
+  // T9: fetch identity from the linked Person (LEFT JOIN semantics: if personId
+  // is null during the migration window, all identity fields come back as null).
+  const personRows = a.personId
+    ? await db.select().from(persons).where(eq(persons.id, a.personId))
+    : [];
+  const p = personRows[0] ?? null;
+
+  const identity: ApplicantIdentity = {
+    firstName:    p?.firstName   ?? null,
+    lastName:     p?.lastName    ?? null,
+    middleName:   p?.middleName  ?? null,
+    dateOfBirth:  p?.dateOfBirth ?? null,
+    sssNumber:    p?.sssNumber   ?? null,
+    phone:        p?.phone       ?? null,
+    email:        p?.email       ?? null,
+    addressLine1: p?.addressLine1 ?? null,
+    addressLine2: p?.addressLine2 ?? null,
+    city:         p?.city        ?? null,
+    province:     p?.province    ?? null,
+  };
+
   const documents = await db.select().from(applicantDocuments).where(eq(applicantDocuments.applicantId, id));
-  return { applicant: a, documents };
+  return { applicant: a, identity, documents };
 }
 
 // ─── listApplicantsPage ───────────────────────────────────────────────────────

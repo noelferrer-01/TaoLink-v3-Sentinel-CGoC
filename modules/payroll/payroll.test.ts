@@ -29,7 +29,7 @@ import { auditLog } from '@/modules/audit/schema';
 import { eventLog } from '@/modules/events/schema';
 import { hr } from '@/modules/hr/index';
 import { seedComplianceRates } from '@/modules/compliance/seed';
-import { runPayroll, lockPayRun, getPayslip, listPayslips, listPayRunsPage, listPayslipsWithEmployeePage, getPayRunTotals, initPayrollSubscriptions, _resetPayrollSubscriptionsForTests } from './index';
+import { runPayroll, lockPayRun, getPayslip, listPayslips, listPayRunsPage, listPayslipsWithEmployee, listPayslipsWithEmployeePage, getPayRunTotals, initPayrollSubscriptions, _resetPayrollSubscriptionsForTests } from './index';
 import { dtr } from '@/modules/dtr/index';
 import { events, _resetEventsForTests } from '@/modules/events/index';
 
@@ -748,6 +748,24 @@ describe('payroll module — getPayslip / listPayslips', () => {
     expect(totals.count).toBe(0);
     expect(totals.gross).toBe(0);
     expect(totals.net).toBe(0);
+  });
+
+  // ── T9 payslip-list name guard: name must come from persons ────────────────
+  it('listPayslipsWithEmployee returns guard name from Person (not legacy column)', async () => {
+    // makeEmployee seeds firstName='Juan', lastName='Dela Cruz' via hr.createEmployee,
+    // which dual-writes to both hr_employees and persons (T7). The display join
+    // must read from persons — this test asserts the correct source is used.
+    const emp = await makeEmployee('CG-R010');
+    await makeDtrEntries(emp.id, ['2026-05-16', '2026-05-17']);
+    const run = await runPayroll('2026-05-16', '2026-05-31');
+
+    const rows = await listPayslipsWithEmployee(run.id);
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    // Name sourced from persons via LEFT JOIN — must match what was written.
+    expect(row.employee.firstName).toBe('Juan');
+    expect(row.employee.lastName).toBe('Dela Cruz');
+    expect(row.employee.employeeCode).toBe('CG-R010');
   });
 });
 

@@ -12,6 +12,7 @@ import { getDb } from '@/core/db';
 import { payRuns, payslips, type PayRun, type Payslip } from './schema';
 import { computePayrollLine, type PayrollRates } from './compute';
 import { employees } from '@/modules/hr/schema';
+import { persons } from '@/modules/persons/schema';
 import { dtrEntries, type DtrEntry } from '@/modules/dtr/schema';
 import {
   sssBracketForMonthly,
@@ -372,21 +373,23 @@ export async function listPayslipsWithEmployee(payRunId: string): Promise<Paysli
       payslip: payslips,
       employeeId: employees.id,
       employeeCode: employees.employeeCode,
-      firstName: employees.firstName,
-      lastName: employees.lastName,
+      // T9: name sourced from persons (LEFT JOIN so rows survive a missing personId).
+      firstName: persons.firstName,
+      lastName: persons.lastName,
     })
     .from(payslips)
     .innerJoin(employees, eq(employees.id, payslips.employeeId))
+    .leftJoin(persons, eq(persons.id, employees.personId))
     .where(eq(payslips.payRunId, payRunId))
-    .orderBy(employees.lastName, employees.firstName);
+    .orderBy(persons.lastName, persons.firstName);
 
   return rows.map((r) => ({
     ...r.payslip,
     employee: {
       id: r.employeeId,
       employeeCode: r.employeeCode,
-      firstName: r.firstName,
-      lastName: r.lastName,
+      firstName: r.firstName ?? '',
+      lastName: r.lastName ?? '',
     },
   }));
 }
@@ -416,13 +419,15 @@ export async function listPayslipsWithEmployeePage(
         payslip: payslips,
         employeeId: employees.id,
         employeeCode: employees.employeeCode,
-        firstName: employees.firstName,
-        lastName: employees.lastName,
+        // T9: name sourced from persons (LEFT JOIN so rows survive a missing personId).
+        firstName: persons.firstName,
+        lastName: persons.lastName,
       })
       .from(payslips)
       .innerJoin(employees, eq(employees.id, payslips.employeeId))
+      .leftJoin(persons, eq(persons.id, employees.personId))
       .where(eq(payslips.payRunId, payRunId))
-      .orderBy(employees.lastName, employees.firstName)
+      .orderBy(persons.lastName, persons.firstName)
       .limit(limit)
       .offset(offset),
     db.select({ total: count() }).from(payslips).where(eq(payslips.payRunId, payRunId)),
@@ -434,8 +439,8 @@ export async function listPayslipsWithEmployeePage(
       employee: {
         id: r.employeeId,
         employeeCode: r.employeeCode,
-        firstName: r.firstName,
-        lastName: r.lastName,
+        firstName: r.firstName ?? '',
+        lastName: r.lastName ?? '',
       },
     })),
     total: countResult[0]?.total ?? 0,

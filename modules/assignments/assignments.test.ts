@@ -451,6 +451,36 @@ describe('assignments module', () => {
       const ids = await assignments.listOverlappingEmployeeIds(PERIOD_START, PERIOD_END);
       expect(ids).toEqual([]);
     });
+
+    // ── T9 raw-SQL guard: name must come from persons, not hr_employees ────────
+    // The raw SQL in listOverlappingEmployeesPage is NOT checked by TypeScript —
+    // a missed edit would compile clean and only blow up at T12 when the legacy
+    // columns are dropped. This test is the only runtime guard for that path.
+    it('listOverlappingEmployeesPage returns guard name from Person (raw-SQL identity guard)', async () => {
+      const { detachment } = await makeFixtures();
+      const emp = await hr.createEmployee({
+        employeeCode: 'CG-RS001',
+        firstName: 'Dante',
+        lastName: 'Villanueva',
+        basicSalary: 18000,
+        hiredOn: '2026-05-01',
+      });
+      await assignments.assign({
+        employeeId: emp.id,
+        detachmentId: detachment.id,
+        startDate: '2026-05-16',
+      });
+
+      const result = await assignments.listOverlappingEmployeesPage(PERIOD_START, PERIOD_END);
+      expect(result.rows).toHaveLength(1);
+      const row = result.rows[0]!;
+      // The name must come from the persons table (via the LEFT JOIN in the raw SQL).
+      // At T12 the legacy hr_employees.first_name/last_name columns are dropped —
+      // if this test passes without them, the repoint is correct.
+      expect(row.employee.firstName).toBe('Dante');
+      expect(row.employee.lastName).toBe('Villanueva');
+      expect(row.employee.employeeCode).toBe('CG-RS001');
+    });
   });
 
   // ─── bulkTransfer ─────────────────────────────────────────────────────────
