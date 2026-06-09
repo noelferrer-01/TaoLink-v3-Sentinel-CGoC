@@ -1,4 +1,5 @@
-import { pgTable, uuid, text, varchar, numeric, date, pgEnum, timestamp, unique, index } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, varchar, numeric, date, boolean, pgEnum, timestamp, unique, index } from 'drizzle-orm/pg-core';
+import { persons } from '@/modules/persons/schema';
 
 export const employeeStatus = pgEnum('hr_employee_status', [
   'applicant', 'hired', 'deployed', 'reliever', 'floating', 'on_leave', 'terminated',
@@ -46,6 +47,13 @@ export const employees = pgTable('hr_employees', {
   city: text('city'),
   province: text('province'),
   postalCode: varchar('postal_code', { length: 4 }),
+  // Person-centric identity spine (Slice 3a, Task 3).
+  // Nullable now; backfill (Task 4) populates, Task 12 enforces NOT NULL.
+  personId: uuid('person_id').references(() => persons.id, { onDelete: 'set null' }),
+  // Armed-post profile: used by Slice 3b readiness radar to determine which
+  // credentials are required. Nullable now; backfilled from detachment post type
+  // in Task 4 and usable once populated.
+  isArmedPost: boolean('is_armed_post'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({

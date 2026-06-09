@@ -12,6 +12,7 @@
 import { pgTable, pgEnum, uuid, text, date, boolean, timestamp } from 'drizzle-orm/pg-core';
 import { employees, employmentType } from '@/modules/hr/schema';
 import { users } from '@/modules/auth/schema';
+import { persons } from '@/modules/persons/schema';
 
 // ─── Enums ─────────────────────────────────────────────────────────────────────
 
@@ -60,6 +61,12 @@ export const applicants = pgTable('recruitment_applicants', {
   hiredEmployeeId: uuid('hired_employee_id').references(() => employees.id, { onDelete: 'set null' }),
   outcomeReason: text('outcome_reason'),       // reject / withdraw reason
   notes: text('notes'),
+  // Person-centric identity spine (Slice 3a, Task 3).
+  // Nullable now; backfill (Task 4) populates, Task 12 enforces NOT NULL.
+  personId: uuid('person_id').references(() => persons.id, { onDelete: 'set null' }),
+  // "ID still needed" nudge flag — set/cleared by advanceStage (Task 11).
+  // NOT NULL DEFAULT false so the nudge is safe to read at any point.
+  idPending: boolean('id_pending').notNull().default(false),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
@@ -87,6 +94,10 @@ export const blacklist = pgTable('recruitment_blacklist', {
   sourceEmployeeId: uuid('source_employee_id').references(() => employees.id, { onDelete: 'set null' }),  // if blacklisting flowed from a termination
   addedByUserId: uuid('added_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   active: boolean('active').notNull().default(true),
+  // Person-centric identity spine (Slice 3a, Task 3).
+  // Nullable permanently — blacklist retains its own name/DOB/SSS snapshot for
+  // retention; personId is set on confident matches by the backfill/matcher.
+  personId: uuid('person_id').references(() => persons.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
