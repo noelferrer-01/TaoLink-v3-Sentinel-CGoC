@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { getDb } from '@/core/db';
 import { isWithinUndoWindow } from '@/core/time';
 import { employees, type Employee, type NewEmployee } from './schema';
+import { persons, type Person } from '@/modules/persons/schema';
 import { auditLog } from '@/modules/audit/schema';
 import { audit } from '@/modules/audit';
 import { events } from '@/modules/events';
@@ -53,6 +54,188 @@ export async function getEmployeeByCode(code: string): Promise<Employee | null> 
   const db = getDb();
   const rows = await db.select().from(employees).where(eq(employees.employeeCode, code));
   return rows[0] ?? null;
+}
+
+// ─── Employee + Person identity accessor ─────────────────────────────────────
+//
+// These accessors merge employment fields (from hr_employees) with identity
+// fields (from persons) into one flat shape. The property names for identity
+// match the historic Employee column names exactly — callers switch their data
+// SOURCE (from employees table to persons table), not their field names.
+//
+// LEFT JOIN: if personId is NULL (during the T3→T12 transition), the employee
+// row is still returned; all identity fields come back as null. This avoids
+// breaking any reader during the gradual migration.
+
+/**
+ * The merged shape: all employment-specific fields from hr_employees, plus all
+ * identity fields from persons (using the same property names as the legacy
+ * hr_employees columns so callers need zero rename changes).
+ *
+ * Identity fields are nullable even where Person has NOT NULL — they become
+ * null when personId is NULL (no linked Person yet).
+ */
+export type EmployeeWithIdentity = {
+  // ── Employment fields (hr_employees) ────────────────────────────────────────
+  id:             Employee['id'];
+  employeeCode:   Employee['employeeCode'];
+  basicSalary:    Employee['basicSalary'];
+  payFrequency:   Employee['payFrequency'];
+  employmentType: Employee['employmentType'];
+  status:         Employee['status'];
+  hiredOn:        Employee['hiredOn'];
+  terminatedOn:   Employee['terminatedOn'];
+  rdoCode:        Employee['rdoCode'];
+  isArmedPost:    Employee['isArmedPost'];
+  personId:       Employee['personId'];
+  createdAt:      Employee['createdAt'];
+  updatedAt:      Employee['updatedAt'];
+
+  // ── Identity fields (persons) — same names as the legacy hr_employees cols ──
+  firstName:            Person['firstName']            | null;
+  lastName:             Person['lastName']             | null;
+  middleName:           Person['middleName']           | null;
+  suffix:               Person['suffix']               | null;
+  dateOfBirth:          Person['dateOfBirth']          | null;
+  sex:                  Person['sex']                  | null;
+  philsysNumber:        Person['philsysNumber']        | null;
+  sssNumber:            Person['sssNumber']            | null;
+  tinNumber:            Person['tinNumber']            | null;
+  philhealthNumber:     Person['philhealthNumber']     | null;
+  pagibigNumber:        Person['pagibigNumber']        | null;
+  umidNumber:           Person['umidNumber']           | null;
+  passportNumber:       Person['passportNumber']       | null;
+  driversLicenseNumber: Person['driversLicenseNumber'] | null;
+  addressLine1:         Person['addressLine1']         | null;
+  addressLine2:         Person['addressLine2']         | null;
+  city:                 Person['city']                 | null;
+  province:             Person['province']             | null;
+  postalCode:           Person['postalCode']           | null;
+  phone:                Person['phone']                | null;
+  email:                Person['email']                | null;
+};
+
+/** Reusable Drizzle column selection object for the merged shape. */
+const employeeWithIdentityColumns = {
+  // employment
+  id:             employees.id,
+  employeeCode:   employees.employeeCode,
+  basicSalary:    employees.basicSalary,
+  payFrequency:   employees.payFrequency,
+  employmentType: employees.employmentType,
+  status:         employees.status,
+  hiredOn:        employees.hiredOn,
+  terminatedOn:   employees.terminatedOn,
+  rdoCode:        employees.rdoCode,
+  isArmedPost:    employees.isArmedPost,
+  personId:       employees.personId,
+  createdAt:      employees.createdAt,
+  updatedAt:      employees.updatedAt,
+  // identity — sourced from persons
+  firstName:            persons.firstName,
+  lastName:             persons.lastName,
+  middleName:           persons.middleName,
+  suffix:               persons.suffix,
+  dateOfBirth:          persons.dateOfBirth,
+  sex:                  persons.sex,
+  philsysNumber:        persons.philsysNumber,
+  sssNumber:            persons.sssNumber,
+  tinNumber:            persons.tinNumber,
+  philhealthNumber:     persons.philhealthNumber,
+  pagibigNumber:        persons.pagibigNumber,
+  umidNumber:           persons.umidNumber,
+  passportNumber:       persons.passportNumber,
+  driversLicenseNumber: persons.driversLicenseNumber,
+  addressLine1:         persons.addressLine1,
+  addressLine2:         persons.addressLine2,
+  city:                 persons.city,
+  province:             persons.province,
+  postalCode:           persons.postalCode,
+  phone:                persons.phone,
+  email:                persons.email,
+} as const;
+
+/**
+ * Returns the employee's employment fields merged with the linked Person's
+ * identity. Uses LEFT JOIN so employees without a linked Person are still
+ * returned (identity fields will be null during the T3→T12 migration window).
+ *
+ * Returns null when no employee row exists for the given id.
+ */
+export async function getEmployeeWithIdentity(id: string): Promise<EmployeeWithIdentity | null> {
+  const db = getDb();
+  const rows = await db
+    .select(employeeWithIdentityColumns)
+    .from(employees)
+    .leftJoin(persons, eq(employees.personId, persons.id))
+    .where(eq(employees.id, id));
+  return (rows[0] as EmployeeWithIdentity) ?? null;
+}
+
+export type GetEmployeesWithIdentityPageOptions = {
+  query?: string;
+  employmentType?: Employee['employmentType'];
+  status?: Employee['status'];
+  limit?: number;
+  offset?: number;
+};
+
+export type GetEmployeesWithIdentityPageResult = {
+  rows: EmployeeWithIdentity[];
+  total: number;
+};
+
+/**
+ * Paginated variant of getEmployeeWithIdentity. Options mirror listEmployeesPage
+ * (query/employmentType/status/limit/offset). Name search still operates on the
+ * legacy hr_employees columns during the transition; T10 will move it to persons.
+ *
+ * Returns { rows, total } where total is the count of the full filtered set.
+ */
+export async function getEmployeesWithIdentityPage(
+  opts: GetEmployeesWithIdentityPageOptions = {},
+): Promise<GetEmployeesWithIdentityPageResult> {
+  const db = getDb();
+  const limit = Math.min(opts.limit ?? 50, 200);
+  const offset = Math.max(opts.offset ?? 0, 0);
+  const trimmedQuery = (opts.query ?? '').trim();
+
+  const conditions: ReturnType<typeof eq>[] = [];
+
+  if (trimmedQuery.length > 0) {
+    conditions.push(
+      sql`(
+        similarity(${employees.firstName} || ' ' || ${employees.lastName}, ${trimmedQuery}) > 0.2
+        OR ${employees.employeeCode} ILIKE ${'%' + trimmedQuery + '%'}
+      )` as unknown as ReturnType<typeof eq>,
+    );
+  }
+  if (opts.employmentType) {
+    conditions.push(eq(employees.employmentType, opts.employmentType));
+  }
+  if (opts.status) {
+    conditions.push(eq(employees.status, opts.status));
+  }
+
+  const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+  const orderBy = trimmedQuery.length > 0
+    ? (sql`similarity(${employees.firstName} || ' ' || ${employees.lastName}, ${trimmedQuery}) DESC NULLS LAST` as unknown as ReturnType<typeof eq>)
+    : employees.lastName;
+
+  const [rows, countResult] = await Promise.all([
+    db
+      .select(employeeWithIdentityColumns)
+      .from(employees)
+      .leftJoin(persons, eq(employees.personId, persons.id))
+      .where(where)
+      .orderBy(orderBy)
+      .limit(limit)
+      .offset(offset),
+    db.select({ total: count() }).from(employees).where(where),
+  ]);
+
+  return { rows: rows as EmployeeWithIdentity[], total: countResult[0]?.total ?? 0 };
 }
 
 export type EmployeeListItem = Pick<

@@ -2,11 +2,13 @@ import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { closeDb, getDb } from '@/core/db';
 import { employees } from './schema';
+import { persons } from '@/modules/persons/schema';
 import { auditLog } from '@/modules/audit/schema';
 import { assignments as assignmentsTable } from '@/modules/assignments/schema';
 import { dtrEntries, dtrPeriodCloses } from '@/modules/dtr/schema';
 import { payslips, payRuns } from '@/modules/payroll/schema';
 import { hr } from './index';
+import { createPerson } from '@/modules/persons';
 import { _resetEventsForTests } from '@/modules/events';
 
 // FK-ordered cleanup helper reused across describe blocks
@@ -17,6 +19,12 @@ async function cleanupEmployees() {
   await getDb().delete(dtrPeriodCloses);
   await getDb().delete(assignmentsTable);
   await getDb().delete(employees);
+}
+
+async function cleanupPersons() {
+  await cleanupEmployees();
+  // persons has no FKs pointing at it after employees is cleared
+  await getDb().delete(persons);
 }
 
 describe('hr.createEmployee + state machine', () => {
@@ -486,5 +494,157 @@ describe('hr.generateNextEmployeeCode', () => {
   it('starts at 10001 when no codes exist for the prefix', async () => {
     const next = await hr.generateNextEmployeeCode('CG-');
     expect(next).toBe('CG-10001');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Slice 3a Task 6 — getEmployeeWithIdentity (employee ⋈ persons)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('hr.getEmployeeWithIdentity', () => {
+  beforeEach(cleanupPersons);
+  afterAll(async () => { await closeDb(); });
+
+  it('returns employment fields + linked person identity merged into one object', async () => {
+    const p = await createPerson({
+      firstName: 'Maria',
+      lastName: 'Santos',
+      middleName: 'Cruz',
+      suffix: null,
+      dateOfBirth: '1990-06-15',
+      sex: 'female',
+      sssNumber: '34-5678901-2',
+      tinNumber: '123-456-789',
+      philhealthNumber: 'PH-111',
+      pagibigNumber: 'PAG-222',
+      addressLine1: '123 Rizal St',
+      addressLine2: null,
+      city: 'Manila',
+      province: 'Metro Manila',
+      postalCode: '1000',
+      phone: '09171234567',
+      email: 'maria@test.com',
+      anchorIdType: 'sss',
+    });
+
+    const e = await hr.createEmployee({
+      employeeCode: 'CG-WI-001',
+      firstName: 'Maria', // legacy columns still written
+      lastName: 'Santos',
+      basicSalary: 20000,
+      hiredOn: '2026-01-01',
+      personId: p.id,
+    });
+
+    const result = await hr.getEmployeeWithIdentity(e.id);
+
+    expect(result).not.toBeNull();
+    // Employment fields
+    expect(result!.id).toBe(e.id);
+    expect(result!.employeeCode).toBe('CG-WI-001');
+    expect(Number(result!.basicSalary)).toBe(20000);
+    expect(result!.hiredOn).toBe('2026-01-01');
+    expect(result!.status).toBe('hired');
+    expect(result!.personId).toBe(p.id);
+    // Identity fields sourced from Person
+    expect(result!.firstName).toBe('Maria');
+    expect(result!.lastName).toBe('Santos');
+    expect(result!.middleName).toBe('Cruz');
+    expect(result!.dateOfBirth).toBe('1990-06-15');
+    expect(result!.sssNumber).toBe('34-5678901-2');
+    expect(result!.tinNumber).toBe('123-456-789');
+    expect(result!.philhealthNumber).toBe('PH-111');
+    expect(result!.pagibigNumber).toBe('PAG-222');
+    expect(result!.city).toBe('Manila');
+    expect(result!.addressLine1).toBe('123 Rizal St');
+    expect(result!.phone).toBe('09171234567');
+    expect(result!.email).toBe('maria@test.com');
+  });
+
+  it('returns employee with identity fields null when personId is NULL (LEFT JOIN)', async () => {
+    const e = await hr.createEmployee({
+      employeeCode: 'CG-WI-002',
+      firstName: 'No',
+      lastName: 'Person',
+      basicSalary: 15000,
+      hiredOn: '2026-01-01',
+      // no personId
+    });
+
+    const result = await hr.getEmployeeWithIdentity(e.id);
+
+    expect(result).not.toBeNull();
+    expect(result!.id).toBe(e.id);
+    expect(result!.employeeCode).toBe('CG-WI-002');
+    // Identity fields should be null when no person is linked
+    expect(result!.suffix).toBeNull();
+    expect(result!.sex).toBeNull();
+    expect(result!.philsysNumber).toBeNull();
+    expect(result!.sssNumber).toBeNull();
+    expect(result!.tinNumber).toBeNull();
+    expect(result!.passportNumber).toBeNull();
+  });
+
+  it('returns null when the employee does not exist', async () => {
+    const result = await hr.getEmployeeWithIdentity('00000000-0000-0000-0000-000000000000');
+    expect(result).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Slice 3a Task 6 — getEmployeesWithIdentityPage (paginated employee ⋈ persons)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('hr.getEmployeesWithIdentityPage', () => {
+  beforeEach(cleanupPersons);
+  afterAll(async () => { await closeDb(); });
+
+  it('returns {rows, total} with the merged shape', async () => {
+    const p1 = await createPerson({ firstName: 'Ana', lastName: 'Reyes', anchorIdType: 'none' });
+    const p2 = await createPerson({ firstName: 'Ben', lastName: 'Torres', anchorIdType: 'none' });
+
+    await hr.createEmployee({ employeeCode: 'CG-PG-001', firstName: 'Ana', lastName: 'Reyes', basicSalary: 10000, hiredOn: '2026-01-01', personId: p1.id });
+    await hr.createEmployee({ employeeCode: 'CG-PG-002', firstName: 'Ben', lastName: 'Torres', basicSalary: 10000, hiredOn: '2026-01-01', personId: p2.id });
+    await hr.createEmployee({ employeeCode: 'CG-PG-003', firstName: 'No', lastName: 'Link',   basicSalary: 10000, hiredOn: '2026-01-01' });
+
+    const result = await hr.getEmployeesWithIdentityPage({ limit: 10, offset: 0 });
+
+    expect(result.total).toBe(3);
+    expect(result.rows).toHaveLength(3);
+    // Every row has the merged shape: pick one with a linked person
+    const ana = result.rows.find((r) => r.employeeCode === 'CG-PG-001');
+    expect(ana).toBeDefined();
+    expect(ana!.firstName).toBe('Ana');
+    expect(ana!.lastName).toBe('Reyes');
+    // The one with no person link returns null identity fields (LEFT JOIN)
+    const noLink = result.rows.find((r) => r.employeeCode === 'CG-PG-003');
+    expect(noLink).toBeDefined();
+    expect(noLink!.sssNumber).toBeNull();
+  });
+
+  it('paginates correctly — offset/limit respected', async () => {
+    for (let i = 1; i <= 5; i++) {
+      await hr.createEmployee({
+        employeeCode: `CG-PG-P${String(i).padStart(2, '0')}`,
+        firstName: 'X', lastName: `Page${String(i).padStart(2, '0')}`,
+        basicSalary: 10000, hiredOn: '2026-01-01',
+      });
+    }
+    const page1 = await hr.getEmployeesWithIdentityPage({ limit: 2, offset: 0 });
+    const page2 = await hr.getEmployeesWithIdentityPage({ limit: 2, offset: 2 });
+    expect(page1.total).toBe(5);
+    expect(page1.rows).toHaveLength(2);
+    expect(page2.rows).toHaveLength(2);
+    // No overlap
+    const codes1 = page1.rows.map((r) => r.employeeCode);
+    const codes2 = page2.rows.map((r) => r.employeeCode);
+    expect(codes1.some((c) => codes2.includes(c))).toBe(false);
+  });
+
+  it('employmentType filter narrows both rows and total', async () => {
+    await hr.createEmployee({ employeeCode: 'CG-PG-F1', firstName: 'A', lastName: 'B', basicSalary: 1, hiredOn: '2026-01-01', employmentType: 'OFFICE_STAFF' });
+    await hr.createEmployee({ employeeCode: 'CG-PG-F2', firstName: 'C', lastName: 'D', basicSalary: 1, hiredOn: '2026-01-01', employmentType: 'GUARD' });
+
+    const r = await hr.getEmployeesWithIdentityPage({ employmentType: 'OFFICE_STAFF' });
+    expect(r.total).toBe(1);
+    expect(r.rows[0]!.employmentType).toBe('OFFICE_STAFF');
   });
 });
