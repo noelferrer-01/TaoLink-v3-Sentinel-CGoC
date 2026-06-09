@@ -38,7 +38,15 @@ export function BirPicker({
         const message = await res.text();
         throw new Error(message || `Server returned ${res.status}`);
       }
-      const blob = await res.blob();
+      // Force application/pdf on the Blob so Chrome respects the .pdf
+      // extension in the download filename. If we use the raw response
+      // blob, its `type` is whatever the server sent ("application/pdf"
+      // is normal but not guaranteed across all transports) — copying
+      // into a fresh Blob with an explicit type keeps the download
+      // dialog consistent.
+      const rawBlob = await res.blob();
+      const blob = new Blob([await rawBlob.arrayBuffer()], { type: 'application/pdf' });
+
       // Prefer the server-suggested filename from Content-Disposition;
       // fall back to the year-only filename if parsing fails.
       const cd = res.headers.get('content-disposition') ?? '';
@@ -46,15 +54,39 @@ export function BirPicker({
       const filename = match?.[1] ?? `2316-${year}.pdf`;
 
       const url = URL.createObjectURL(blob);
+
+      // Build a hidden anchor with both `download` property AND attribute
+      // — some Chrome builds respect one but not the other when the href
+      // is a blob: URL. setAttribute is the more reliable signal.
       const a = document.createElement('a');
+      a.style.position = 'fixed';
+      a.style.opacity = '0';
+      a.style.pointerEvents = 'none';
       a.href = url;
       a.download = filename;
+      a.setAttribute('download', filename);
+      a.rel = 'noopener';
       document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      // Release the object URL on the next tick — release-before-click can
-      // cancel the download in some browsers.
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+      // Dispatch a real MouseEvent rather than .click() — synthesised
+      // events with bubbles:true are processed identically to user
+      // clicks for download purposes, which matters for some Chromium
+      // download-blocking heuristics.
+      a.dispatchEvent(new MouseEvent('click', {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+      }));
+
+      // Cleanup well after the click so the download dispatcher has time
+      // to start the save. Premature removal/revocation can race the
+      // download in Chrome and result in either a UUID-named save (when
+      // `download` is dropped) or a cancelled download.
+      setTimeout(() => {
+        try { document.body.removeChild(a); } catch {}
+        URL.revokeObjectURL(url);
+      }, 4000);
+
       setDownloadState({ kind: 'idle' });
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
