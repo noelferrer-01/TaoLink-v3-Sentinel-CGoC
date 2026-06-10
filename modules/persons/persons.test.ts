@@ -484,6 +484,18 @@ describe('persons service (integration)', () => {
       expect(updated.sssNumber).toBe('11-1111111-1');
     });
 
+    it('rethrows a duplicate unique ID as plain language (23505 wrap)', async () => {
+      await createPerson({
+        firstName: 'Already', lastName: 'OnFile',
+        anchorIdType: 'sss', sssNumber: '34-UPD-23505',
+      });
+      const p = await createPerson({ firstName: 'New', lastName: 'Hire' }); // provisional
+
+      await expect(
+        updatePerson(p.id, { anchorIdType: 'sss', sssNumber: '34-UPD-23505' }),
+      ).rejects.toThrow(/SSS number is already on file/i);
+    });
+
     it('throws when trying to update a redacted person', async () => {
       const p = await createPerson({ firstName: 'Juan', lastName: 'Cruz' });
       await redactPerson(p.id);

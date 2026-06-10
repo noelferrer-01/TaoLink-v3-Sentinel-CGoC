@@ -391,11 +391,18 @@ export async function updatePerson(
     }
   }
 
-  const [updated] = await db
-    .update(persons)
-    .set({ ...safePatch, updatedAt: new Date() })
-    .where(eq(persons.id, id))
-    .returning();
+  let updated: Person | undefined;
+  try {
+    [updated] = await db
+      .update(persons)
+      .set({ ...safePatch, updatedAt: new Date() })
+      .where(eq(persons.id, id))
+      .returning();
+  } catch (err: unknown) {
+    const plain = uniqueViolationMessage(err);
+    if (plain) throw new Error(plain);
+    throw err;
+  }
   if (!updated) throw new Error(`[persons/updatePerson] update returned no row for ${id}`);
 
   const changedFields = Object.keys(safePatch).filter(
