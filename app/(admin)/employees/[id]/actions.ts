@@ -37,10 +37,18 @@ export interface EmployeePatchInput {
  * Identity keys that belong on the Person (not on the employee row).
  *
  * This list is the intersection of hr's IDENTITY_FIELDS and the fields exposed
- * by EmployeePatchInput. The `satisfies` annotation ensures every entry is a
- * valid key of EmployeePatchInput — if a field is added to EmployeePatchInput
- * and is also an identity field, the compiler will flag it as unhandled here,
- * preventing silent strips in hr.updateEmployee.
+ * by EmployeePatchInput — i.e. every EmployeePatchInput key that is also an
+ * identity field must appear here.
+ *
+ * Two compile-time guards:
+ *   (1) `satisfies ReadonlyArray<keyof EmployeePatchInput & ...>` — every listed
+ *       entry must be a valid key of both EmployeePatchInput and IDENTITY_FIELDS,
+ *       preventing typos from silently routing an identity field to hr.updateEmployee.
+ *   (2) _AssertIdentityKeysComplete — Exclude<IdentityInPatch, listed> must be
+ *       `never`. If a new field is added to EmployeePatchInput that is also in
+ *       IDENTITY_FIELDS, this assertion turns into a type error, so the omission
+ *       can't silently strip the edit (it would go to hr.updateEmployee and be
+ *       swallowed by the identity safety-belt there).
  *
  * Note: IDENTITY_FIELDS may contain more fields (e.g. phone, sssNumber) that
  * are not yet in EmployeePatchInput. Those are handled by the hr.updateEmployee
@@ -52,6 +60,13 @@ const IDENTITY_KEYS = [
   'dateOfBirth',
   'addressLine1', 'addressLine2', 'city', 'province', 'postalCode',
 ] as const satisfies ReadonlyArray<keyof EmployeePatchInput & typeof IDENTITY_FIELDS[number]>;
+
+// Completeness guard: every EmployeePatchInput key that is also in IDENTITY_FIELDS
+// must appear in IDENTITY_KEYS. A type error here means a field was added to
+// EmployeePatchInput + IDENTITY_FIELDS but forgotten in IDENTITY_KEYS.
+type _IdentityInPatch = Extract<keyof EmployeePatchInput, (typeof IDENTITY_FIELDS)[number]>;
+type _AssertIdentityKeysComplete = [Exclude<_IdentityInPatch, (typeof IDENTITY_KEYS)[number]>] extends [never] ? true : never;
+const _identityKeysComplete: _AssertIdentityKeysComplete = true;
 
 export type UpdateResult =
   | { kind: 'ok' }
@@ -85,14 +100,18 @@ export async function updateEmployeeAction(
     // before routing to persons.updatePerson.
     //
     // Why diff first:
-    //   (a) pre-backfill employees (personId=null) can still save employment-only
-    //       edits — if no identity field actually changed, we skip updatePerson
-    //       entirely and never hit the "not migrated" error.
+    //   (a) person-less rows (personId=null): the form now loads from
+    //       getEmployeeWithIdentity (persons-sourced, null for all identity
+    //       fields), so toFormState coerces null → '' at the boundary. A
+    //       salary-only save submits '' for firstName etc., which normalizes
+    //       to null — same as the persons baseline — so reallyChanged is empty
+    //       and updatePerson is skipped entirely. The "not migrated" error is
+    //       only reached when the clerk actually edits an identity field.
     //   (b) avoids writing a person.updated audit row with empty changedFields
     //       every time the form is saved (audit noise).
     //
-    // Normalization: toPatch() in the form converts empty strings → null, so we
-    // treat null and '' as equivalent when comparing.
+    // Normalization: toFormState coerces null → ''; toPatch converts '' → null;
+    // normalize() treats null, '', and undefined as equivalent when comparing.
     if (Object.keys(identityPatch).length > 0) {
       // Load current merged identity to compute actual diff.
       const current = await hr.getEmployeeWithIdentity(id);

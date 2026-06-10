@@ -225,6 +225,43 @@ describe('hr.updateEmployee', () => {
       hr.updateEmployee('00000000-0000-0000-0000-000000000000', { rdoCode: '044' }),
     ).rejects.toThrow(/not found/);
   });
+
+  // Guards against bug (a): person-less rows must be updatable for employment
+  // fields without tripping the "identity record hasn't been migrated" error.
+  // The action diffs submitted values against getEmployeeWithIdentity (persons-
+  // sourced baseline). For a person-less row that baseline returns null for all
+  // identity fields. toFormState coerces null → '', toPatch converts '' → null,
+  // normalize() treats both as null — so a salary-only save sees no identity
+  // change and skips updatePerson entirely. This test verifies the service side
+  // of that path: getEmployeeWithIdentity returns null identity fields (correct
+  // baseline), and updateEmployee accepts the employment-only patch.
+  it('person-less row: getEmployeeWithIdentity returns null identity baseline; employment-only update succeeds', async () => {
+    // Insert directly to get a row with personId = null (createEmployee always mints a Person).
+    const [e] = await getDb()
+      .insert(employees)
+      .values({
+        employeeCode: 'CG-U-NOPERSON',
+        firstName: 'Legacy',
+        lastName: 'Name',
+        basicSalary: '18000.00',
+        hiredOn: '2026-01-01',
+        personId: null,
+      })
+      .returning();
+
+    // The persons-sourced baseline should return null for all identity fields.
+    const baseline = await hr.getEmployeeWithIdentity(e!.id);
+    expect(baseline).not.toBeNull();
+    expect(baseline!.personId).toBeNull();
+    expect(baseline!.firstName).toBeNull(); // persons source, not legacy column
+    expect(baseline!.lastName).toBeNull();
+    expect(baseline!.email).toBeNull();
+
+    // Employment-only update must succeed for person-less rows.
+    const updated = await hr.updateEmployee(e!.id, { basicSalary: '22000', employmentType: 'OFFICE_STAFF' });
+    expect(Number(updated.basicSalary)).toBe(22000);
+    expect(updated.employmentType).toBe('OFFICE_STAFF');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

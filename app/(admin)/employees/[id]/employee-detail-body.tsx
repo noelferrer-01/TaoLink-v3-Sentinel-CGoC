@@ -3,6 +3,7 @@
 import { useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import type { Employee } from '@/modules/hr/schema';
+import type { EmployeeWithIdentity } from '@/modules/hr';
 import {
   STATUS_LABELS,
   EMPLOYMENT_TYPE_LABELS,
@@ -46,10 +47,15 @@ type FormState = {
   postalCode: string;
 };
 
-function toFormState(e: Employee): FormState {
+// EmployeeWithIdentity is the merged shape from page.tsx (persons-sourced
+// identity + hr_employees employment fields). Identity fields are nullable for
+// pre-backfill rows (personId null, no linked Person yet); we coerce null → ''
+// at this boundary so FormState stays all-string. toPatch's blankToNull
+// round-trips '' back to null when submitted, matching the action's normalize().
+function toFormState(e: EmployeeWithIdentity): FormState {
   return {
-    firstName: e.firstName,
-    lastName: e.lastName,
+    firstName: e.firstName ?? '',
+    lastName: e.lastName ?? '',
     email: e.email ?? '',
     employmentType: e.employmentType,
     basicSalary: e.basicSalary,
@@ -87,7 +93,11 @@ function toPatch(form: FormState): EmployeePatchInput {
 }
 
 interface Props {
-  employee: Employee;
+  // EmployeeWithIdentity: employment fields from hr_employees + identity fields
+  // from the linked Person (nullable for pre-backfill rows — personId null).
+  // Page loads this shape via hr.getEmployeeWithIdentity so the form's initial
+  // values and the action's diff baseline come from the same source.
+  employee: EmployeeWithIdentity;
   isBirReady: boolean;
   /**
    * Precise termination timestamp from the audit log. Null when the employee
@@ -248,14 +258,12 @@ export function EmployeeDetailBody({ employee, isBirReady, terminatedAt }: Props
           label="First name"
           value={form.firstName}
           onChange={(v) => updateField('firstName', v)}
-          required
           disabled={pending}
         />
         <TextField
           label="Last name"
           value={form.lastName}
           onChange={(v) => updateField('lastName', v)}
-          required
           disabled={pending}
         />
       </TwoCol>

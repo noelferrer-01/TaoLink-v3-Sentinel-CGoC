@@ -10,7 +10,14 @@ export default async function EmployeeDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const employee = await hr.getEmployee(id);
+  // Load the merged shape so the form and the action diff against the SAME
+  // source of truth. Using getEmployee (legacy columns) here while the action
+  // diffs against getEmployeeWithIdentity (persons-sourced) caused two bugs:
+  // (a) person-less rows: legacy names non-empty vs. persons baseline null →
+  //     every save looked like an identity change → "not migrated" error.
+  // (b) linked rows: page re-rendered stale legacy values; next save diffed
+  //     those stale values as "changed" and silently reverted the prior edit.
+  const employee = await hr.getEmployeeWithIdentity(id);
   if (!employee) notFound();
 
   // For terminated employees, look up the precise termination timestamp from
@@ -26,7 +33,11 @@ export default async function EmployeeDetailPage({
     employee.rdoCode && employee.dateOfBirth && employee.addressLine1,
   );
 
-  const fullName = `${employee.firstName} ${employee.lastName}`;
+  // Identity fields are nullable for pre-backfill rows (personId null); fall
+  // back to the employee code so the breadcrumb and title are never blank.
+  const fullName = (employee.firstName && employee.lastName)
+    ? `${employee.firstName} ${employee.lastName}`
+    : employee.employeeCode;
 
   return (
     <PageShell
