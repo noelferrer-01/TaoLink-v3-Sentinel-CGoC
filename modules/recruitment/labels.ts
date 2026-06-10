@@ -106,3 +106,23 @@ const BASE_REQUIRED_DOCS: readonly DocType[] = [
 export function requiredDocsFor(isArmedPost: boolean): readonly DocType[] {
   return isArmedPost ? [...BASE_REQUIRED_DOCS, 'ltopf_license'] : BASE_REQUIRED_DOCS;
 }
+
+// ─── Licence readiness radar (Slice 3b) ───────────────────────────────────────
+
+/**
+ * The kinds of issue the readiness radar reports for a required credential.
+ * `unverified` is the LTOPF-specific "valid — but firearm linkage unverified"
+ * row (ADR 0018 — the radar never gives a clean all-clear on firearms). The
+ * others map 1:1 to a derived credential state; `missing` means no credential
+ * row of that required type exists at all.
+ */
+export type ReadinessKind = 'missing' | 'expiring' | 'expired' | 'revoked' | 'pending' | 'unverified';
+
+export const READINESS_KIND_LABELS: Record<ReadinessKind, string> = {
+  missing:    'Missing (required)',
+  expiring:   'Expiring',
+  expired:    'Expired',
+  revoked:    'Revoked',
+  pending:    'Pending verification',
+  unverified: 'Valid — firearm link unverified',
+};

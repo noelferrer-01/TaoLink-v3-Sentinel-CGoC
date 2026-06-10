@@ -17,7 +17,14 @@ import { payslips, payRuns } from '@/modules/payroll/schema';
 import { dtrEntries, dtrPeriodCloses } from '@/modules/dtr/schema';
 import { assignments as assignmentsTable } from '@/modules/assignments/schema';
 import { hr } from '@/modules/hr';
-import { createPerson, updatePerson } from '@/modules/persons';
+import {
+  createPerson,
+  updatePerson,
+  addCredential,
+  updateCredential,
+  listCredentials,
+  READINESS_CRED_SET,
+} from '@/modules/persons';
 import { runPayroll, listPayslips } from '@/modules/payroll';
 import { recruitment } from './index';
 
@@ -631,5 +638,96 @@ describe('recruitment.checkMatches — T11: all-Person matcher', () => {
       sssNumber: '34-RH-T11-001',
     });
     expect(matches.some((m) => m.kind === 'terminated_employee')).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Slice 3b Task 3 — listReadinessIssues (licence readiness radar)
+// Lives in recruitment (not persons): readiness joins hr employees + person
+// credentials, and persons is a strict foundation that imports neither.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('recruitment.listReadinessIssues (Slice 3b)', () => {
+  beforeEach(cleanup);
+  afterAll(async () => { await cleanup(); await closeDb(); });
+
+  // Fixed "today" so expiry math is deterministic regardless of the real clock.
+  const today = '2026-06-11';
+
+  async function makeGuard(code: string, armed: boolean, status: 'deployed' | 'terminated' = 'deployed') {
+    const p = await createPerson({ firstName: 'Guard', lastName: code, dateOfBirth: '1990-01-01' });
+    const employee = await hr.createEmployee({
+      employeeCode: code,
+      firstName: 'Guard', lastName: code,   // ignored — personId wins
+      personId: p.id,
+      basicSalary: 18000,
+      hiredOn: '2026-01-01',
+      isArmedPost: armed,
+      status,
+    });
+    return { person: p, employee };
+  }
+
+  // Give a person the full 8-credential base set, far-future valid, so the only
+  // issues a test sees are the ones it deliberately creates.
+  async function addValidBaseSet(personId: string) {
+    for (const credType of READINESS_CRED_SET(false)) {
+      await addCredential({ personId, credType, status: 'valid', expiresOn: '2030-01-01' });
+    }
+  }
+
+  it('flags an armed guard with no LTOPF row as missing', async () => {
+    const { person } = await makeGuard('CG-ARM-1', true);
+    await addValidBaseSet(person.id);   // everything valid except LTOPF
+    const { rows } = await recruitment.listReadinessIssues({ today, armedOnly: true });
+    const mine = rows.filter((r) => r.employeeCode === 'CG-ARM-1');
+    expect(mine).toHaveLength(1);
+    expect(mine[0]!.credType).toBe('ltopf_license');
+    expect(mine[0]!.kind).toBe('missing');
+  });
+
+  it('does not phantom-flag a missing résumé (resume_biodata excluded)', async () => {
+    const { person } = await makeGuard('CG-UNA-1', false);
+    await addValidBaseSet(person.id);
+    const { rows } = await recruitment.listReadinessIssues({ today });
+    expect(rows.filter((r) => r.employeeCode === 'CG-UNA-1')).toHaveLength(0);
+    expect(rows.map((r) => r.credType as string)).not.toContain('resume_biodata');
+  });
+
+  it('flags a SOSIA expiring within its (90-day) window', async () => {
+    const { person } = await makeGuard('CG-EXP-1', false);
+    await addValidBaseSet(person.id);
+    const sosia = (await listCredentials(person.id)).find((c) => c.credType === 'sosia_license')!;
+    await updateCredential(sosia.id, { expiresOn: '2026-07-15' });   // ~34d out
+    const { rows } = await recruitment.listReadinessIssues({ today });
+    const mine = rows.filter((r) => r.employeeCode === 'CG-EXP-1');
+    expect(mine).toHaveLength(1);
+    expect(mine[0]!.credType).toBe('sosia_license');
+    expect(mine[0]!.kind).toBe('expiring');
+  });
+
+  it('reports a present valid LTOPF as unverified — never a clean all-clear', async () => {
+    const { person } = await makeGuard('CG-ARM-2', true);
+    await addValidBaseSet(person.id);
+    await addCredential({ personId: person.id, credType: 'ltopf_license', status: 'valid', expiresOn: '2030-01-01' });
+    const { rows } = await recruitment.listReadinessIssues({ today, armedOnly: true });
+    const mine = rows.filter((r) => r.employeeCode === 'CG-ARM-2');
+    expect(mine).toHaveLength(1);
+    expect(mine[0]!.credType).toBe('ltopf_license');
+    expect(mine[0]!.kind).toBe('unverified');
+    expect(mine[0]!.firearmLinkUnverified).toBe(true);
+  });
+
+  it('returns no issues for a fully-valid unarmed guard', async () => {
+    const { person } = await makeGuard('CG-OK-1', false);
+    await addValidBaseSet(person.id);
+    const { rows } = await recruitment.listReadinessIssues({ today });
+    expect(rows.filter((r) => r.employeeCode === 'CG-OK-1')).toEqual([]);
+  });
+
+  it('excludes terminated guards from the radar', async () => {
+    await makeGuard('CG-TERM-1', true, 'terminated');   // no creds → all-missing IF included
+    const { rows } = await recruitment.listReadinessIssues({ today });
+    expect(rows.filter((r) => r.employeeCode === 'CG-TERM-1')).toEqual([]);
   });
 });

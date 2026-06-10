@@ -18,11 +18,14 @@ import {
   type ApplicantDocument,
   type BlacklistEntry,
 } from './schema';
-import { ALLOWED_TRANSITIONS, requiredDocsFor, type DocType, type DocStatus, type Stage, type MatchKind } from './labels';
+import { todayIso } from '@/core/dates';
+import { ALLOWED_TRANSITIONS, requiredDocsFor, type DocType, type DocStatus, type Stage, type MatchKind, type ReadinessKind } from './labels';
 import {
   createPerson, assertAnchored, getPerson, findPersonByAnyId, findPossibleDuplicates,
   persons, type Person, ID_TYPE_LADDER,
   escapeLike, personFullNameMatches, personFullNameSimilarityDesc, withNameSearchThreshold,
+  listCredentialsForPersons, READINESS_CRED_SET, CRED_WINDOW_DAYS, deriveCredState,
+  type CredType, type CredState, type PersonCredential,
 } from '@/modules/persons';
 
 // ─── ApplicantIdentity ────────────────────────────────────────────────────────
@@ -722,4 +725,140 @@ export async function hireApplicant(applicantId: string, meta: HireMeta) {
   });
   await events.publish('recruitment.applicant.hired', { id: applicantId, employeeId: employee.id });
   return employee;
+}
+
+// ─── listReadinessIssues (Slice 3b — licence readiness radar) ────────────────────
+//
+// Readiness joins hr employees (the guard's armed profile + code + status) with
+// person credentials. It lives here, NOT in persons: persons is a strict identity
+// foundation that imports neither hr nor recruitment (only the reverse). The
+// 3b contract named `persons.listReadinessIssues`, but that would invert the
+// layering — recruitment already depends on both hr and persons, so it composes.
+
+/**
+ * One readiness issue: a required credential a guard is missing/expiring/etc.
+ * `unverified` is the LTOPF "valid but firearm-link-unverified" caveat row
+ * (ADR 0018 — the radar never gives a clean all-clear on firearms).
+ */
+export type ReadinessIssue = {
+  kind:         ReadinessKind;
+  credType:     CredType;
+  expiresOn:    string | null;
+  personId:     string;
+  employeeId:   string;
+  employeeCode: string;
+  firearmLinkUnverified?: true;
+};
+
+export type ReadinessQuery = {
+  windowDays?: number;   // fallback renewal window (per-credential overrides in CRED_WINDOW_DAYS)
+  armedOnly?:  boolean;  // restrict to armed-post guards
+  limit?:      number;
+  offset?:     number;
+  today?:      string;   // injectable for deterministic tests; defaults to Manila today
+};
+
+// Best-state ranking (lower = more ready) — used to pick the strongest credential
+// a guard holds for a required type (a renewed licence beats its expired predecessor).
+const STATE_RANK: Record<CredState, number> = { valid: 0, expiring: 1, pending: 2, expired: 3, revoked: 4 };
+
+// Severity ordering for the radar — missing first, then worst-to-mildest, then
+// the informational LTOPF caveat last.
+const KIND_SEVERITY: Record<ReadinessKind, number> = {
+  missing: 0, revoked: 1, expired: 2, expiring: 3, pending: 4, unverified: 5,
+};
+
+/**
+ * Lists guards who are missing or expiring a *required* credential, against the
+ * credential required-set derived from each guard's `isArmedPost` (so it works
+ * for legacy bulk-imported guards with no applicant row). Terminated guards are
+ * excluded. Per-credential renewal windows come from CRED_WINDOW_DAYS.
+ *
+ * NOTE (perf): computes issues in-app across all active guards, then paginates
+ * the issue list. Fine for an admin radar at current scale; if it becomes a hot
+ * path at 10k+ guards, push the missing/expiring diff into SQL (see backlog).
+ */
+export async function listReadinessIssues(query: ReadinessQuery = {}): Promise<{ rows: ReadinessIssue[]; total: number }> {
+  const windowDays = query.windowDays ?? 60;
+  const today = query.today ?? todayIso();
+  const db = getDb();
+
+  // 1. Candidate guards: active (non-terminated) employees, optionally armed only.
+  const conds = [ne(employees.status, 'terminated')];
+  if (query.armedOnly) conds.push(eq(employees.isArmedPost, true));
+  const guards = await db
+    .select({
+      employeeId:   employees.id,
+      employeeCode: employees.employeeCode,
+      personId:     employees.personId,
+      isArmedPost:  employees.isArmedPost,
+    })
+    .from(employees)
+    .where(and(...conds));
+
+  if (guards.length === 0) return { rows: [], total: 0 };
+
+  // 2. Batch-load credentials for those persons; group by personId.
+  const creds = await listCredentialsForPersons(guards.map((g) => g.personId));
+  const byPerson = new Map<string, PersonCredential[]>();
+  for (const c of creds) {
+    const arr = byPerson.get(c.personId);
+    if (arr) arr.push(c); else byPerson.set(c.personId, [c]);
+  }
+
+  // 3. Diff each guard's required set against the credentials they hold.
+  const issues: ReadinessIssue[] = [];
+  for (const g of guards) {
+    const required = READINESS_CRED_SET(g.isArmedPost ?? false);   // null isArmedPost → unarmed
+    const held = byPerson.get(g.personId) ?? [];
+
+    for (const credType of required) {
+      const isLtopf = credType === 'ltopf_license';
+      const base = { credType, personId: g.personId, employeeId: g.employeeId, employeeCode: g.employeeCode };
+      const matching = held.filter((c) => c.credType === credType);
+
+      if (matching.length === 0) {
+        issues.push({ ...base, kind: 'missing', expiresOn: null });
+        continue;
+      }
+
+      // Pick the strongest credential of this type the guard holds.
+      const window = CRED_WINDOW_DAYS[credType] ?? windowDays;
+      const best = matching
+        .map((c) => ({ c, state: deriveCredState(c.expiresOn, c.status, today, window) }))
+        .reduce((a, b) => (STATE_RANK[a.state] <= STATE_RANK[b.state] ? a : b));
+
+      if (best.state === 'valid') {
+        // A valid credential clears the requirement — EXCEPT LTOPF, which never
+        // gives a clean all-clear (firearm linkage deferred — ADR 0018).
+        if (isLtopf) {
+          issues.push({ ...base, kind: 'unverified', expiresOn: best.c.expiresOn, firearmLinkUnverified: true });
+        }
+        continue;
+      }
+
+      // expiring / pending / expired / revoked — surface that state.
+      issues.push({
+        ...base,
+        kind: best.state as ReadinessKind,   // 'valid' already handled above
+        expiresOn: best.c.expiresOn,
+        ...(isLtopf ? { firearmLinkUnverified: true as const } : {}),
+      });
+    }
+  }
+
+  // 4. Order: severity (missing first), then soonest expiry (nulls last), then code.
+  issues.sort((a, b) => {
+    if (KIND_SEVERITY[a.kind] !== KIND_SEVERITY[b.kind]) return KIND_SEVERITY[a.kind] - KIND_SEVERITY[b.kind];
+    const ax = a.expiresOn ?? '9999-12-31';
+    const bx = b.expiresOn ?? '9999-12-31';
+    if (ax !== bx) return ax < bx ? -1 : 1;
+    return a.employeeCode.localeCompare(b.employeeCode);
+  });
+
+  // 5. Paginate the issue list.
+  const total = issues.length;
+  const start = query.offset ?? 0;
+  const rows = query.limit != null ? issues.slice(start, start + query.limit) : issues.slice(start);
+  return { rows, total };
 }

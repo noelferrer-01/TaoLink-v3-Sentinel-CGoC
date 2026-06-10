@@ -18,7 +18,7 @@
  * Build plan: wiki/slices/3a-person-identity-plan.md Task 2
  */
 
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and, inArray, sql } from 'drizzle-orm';
 import { getDb, type DbOrTx } from '@/core/db';
 import { isPgError } from '@/core/errors';
 import { audit } from '@/modules/audit';
@@ -670,4 +670,19 @@ export async function listCredentials(personId: string): Promise<PersonCredentia
     .from(personCredentials)
     .where(eq(personCredentials.personId, personId))
     .orderBy(personCredentials.credType, sql`${personCredentials.expiresOn} ASC NULLS LAST`);
+}
+
+/**
+ * Batch read: every credential for the given persons, in ONE query. Used by the
+ * readiness radar (recruitment/service) to avoid an N+1 over thousands of guards.
+ * Returns `[]` for an empty input rather than issuing a degenerate `IN ()` query.
+ * The caller groups by `personId`.
+ */
+export async function listCredentialsForPersons(personIds: string[]): Promise<PersonCredential[]> {
+  if (personIds.length === 0) return [];
+  const db = getDb();
+  return db
+    .select()
+    .from(personCredentials)
+    .where(inArray(personCredentials.personId, personIds));
 }

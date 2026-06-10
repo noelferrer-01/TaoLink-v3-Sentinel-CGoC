@@ -35,6 +35,7 @@ import {
   addCredential,
   updateCredential,
   listCredentials,
+  listCredentialsForPersons,
 } from './service';
 import { auditLog } from '@/modules/audit/schema';
 
@@ -787,6 +788,25 @@ describe('credentials service (integration)', () => {
       await expect(
         updateCredential('00000000-0000-0000-0000-000000000000', { status: 'expired' }),
       ).rejects.toThrow(/not found/i);
+    });
+  });
+
+  describe('listCredentialsForPersons', () => {
+    it('returns credentials for all given persons in one call', async () => {
+      const a = await makePerson();
+      const b = await createPerson({ firstName: 'Maria', lastName: 'Santos', dateOfBirth: '1992-08-08' });
+      await addCredential({ personId: a.id, credType: 'sosia_license' });
+      await addCredential({ personId: a.id, credType: 'nbi_clearance' });
+      await addCredential({ personId: b.id, credType: 'drug_test' });
+
+      const all = await listCredentialsForPersons([a.id, b.id]);
+      expect(all).toHaveLength(3);
+      expect(all.filter((c) => c.personId === a.id)).toHaveLength(2);
+      expect(all.filter((c) => c.personId === b.id)).toHaveLength(1);
+    });
+
+    it('returns an empty array when given no person ids', async () => {
+      expect(await listCredentialsForPersons([])).toEqual([]);
     });
   });
 });

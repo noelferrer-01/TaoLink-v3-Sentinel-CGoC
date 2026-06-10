@@ -54,6 +54,7 @@ export {
   addCredential,
   updateCredential,
   listCredentials,
+  listCredentialsForPersons,
   type AddCredentialInput,
   type AddCredentialOptions,
 } from './service';
