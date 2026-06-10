@@ -968,3 +968,77 @@ describe('hr.getEmployeesWithIdentityPage — T10: name search via persons', () 
     expect(r.rows.some((e) => e.employeeCode === 'CG-IP10-NOPERSON')).toBe(true);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T10 gap-closers: similarity ordering + 0.2-threshold band coverage
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('hr.searchEmployees — T10: similarity ordering', () => {
+  beforeEach(cleanupPersons);
+  afterAll(async () => { await closeDb(); });
+
+  it('returns better match before weaker match (ORDER BY similarity DESC)', async () => {
+    // Query: 'Juan Cruz'
+    // similarity('Juan Cruz', 'Juan Cruz')      = 1.0   (exact)
+    // similarity('Juan Cruz', 'Juana Cruzado')  = 0.5   (partial)
+    // Both are above the 0.2 threshold, so both appear; exact must rank first.
+    await hr.createEmployee({
+      employeeCode: 'CG-T10-ORD-001',
+      firstName: 'Juan', lastName: 'Cruz',
+      basicSalary: 1, payFrequency: 'MONTHLY', hiredOn: '2026-01-01',
+    });
+    await hr.createEmployee({
+      employeeCode: 'CG-T10-ORD-002',
+      firstName: 'Juana', lastName: 'Cruzado',
+      basicSalary: 1, payFrequency: 'MONTHLY', hiredOn: '2026-01-01',
+    });
+
+    const r = await hr.searchEmployees('Juan Cruz');
+    const codes = r.map((e) => e.employeeCode);
+
+    // Both names must appear (similarity 1.0 and 0.5 — both above 0.2 threshold).
+    expect(codes).toContain('CG-T10-ORD-001');
+    expect(codes).toContain('CG-T10-ORD-002');
+
+    // The exact match (sim = 1.0) must come before the partial match (sim = 0.5).
+    expect(codes.indexOf('CG-T10-ORD-001')).toBeLessThan(codes.indexOf('CG-T10-ORD-002'));
+  });
+});
+
+describe('hr.listEmployeesPage — T10: 0.2-threshold band', () => {
+  beforeEach(cleanupPersons);
+  afterAll(async () => { await closeDb(); });
+
+  it('matches when similarity is in (0.2, 0.3] — would be excluded at default 0.3 threshold', async () => {
+    // similarity('mend', 'Rosa Mendoza') = 0.2857143 — verified on test DB.
+    // At default pg_trgm threshold of 0.3, 'mend' % 'Rosa Mendoza' is FALSE
+    // and this employee would be invisible. SET LOCAL 0.2 makes it TRUE.
+    await hr.createEmployee({
+      employeeCode: 'CG-LP10-BAND-001',
+      firstName: 'Rosa', lastName: 'Mendoza',
+      basicSalary: 1, payFrequency: 'MONTHLY', hiredOn: '2026-01-01',
+    });
+
+    const r = await hr.listEmployeesPage({ query: 'mend' });
+    expect(r.rows.some((e) => e.employeeCode === 'CG-LP10-BAND-001')).toBe(true);
+  });
+});
+
+describe('hr.getEmployeesWithIdentityPage — T10: 0.2-threshold band', () => {
+  beforeEach(cleanupPersons);
+  afterAll(async () => { await closeDb(); });
+
+  it('matches when similarity is in (0.2, 0.3] — would be excluded at default 0.3 threshold', async () => {
+    // similarity('stillo', 'Gregorio Castillo') = 0.25 — verified on test DB.
+    // At default pg_trgm threshold of 0.3, 'stillo' % 'Gregorio Castillo' is FALSE
+    // and this employee would be invisible. SET LOCAL 0.2 makes it TRUE.
+    await hr.createEmployee({
+      employeeCode: 'CG-IP10-BAND-001',
+      firstName: 'Gregorio', lastName: 'Castillo',
+      basicSalary: 1, payFrequency: 'MONTHLY', hiredOn: '2026-01-01',
+    });
+
+    const r = await hr.getEmployeesWithIdentityPage({ query: 'stillo' });
+    expect(r.rows.some((e) => e.employeeCode === 'CG-IP10-BAND-001')).toBe(true);
+  });
+});
