@@ -39,12 +39,16 @@ export type ApplicantIdentity = {
   middleName:  Person['middleName'];
   dateOfBirth: Person['dateOfBirth'];
   sssNumber:   Person['sssNumber'];
-  // Anchor identity — the recruiter may have anchored on any ID type, not just
-  // SSS. anchorIdType is the canonical anchor ('none' = provisional); the three
-  // unique-ID numbers let the detail page show whichever one is on file.
+  // Anchor identity — the recruiter may have anchored on any ID type in the
+  // ladder, not just SSS. anchorIdType is the canonical anchor ('none' =
+  // provisional); the ID numbers let the detail page show whichever is on file
+  // (incl. secondary anchors: passport / UMID / driver's license).
   anchorIdType:  Person['anchorIdType'];
   philsysNumber: Person['philsysNumber'];
   tinNumber:     Person['tinNumber'];
+  passportNumber:       Person['passportNumber'];
+  umidNumber:           Person['umidNumber'];
+  driversLicenseNumber: Person['driversLicenseNumber'];
   phone:       Person['phone'];
   email:       Person['email'];
   addressLine1: Person['addressLine1'];
@@ -194,6 +198,9 @@ export async function getApplicant(
     anchorIdType:  p.anchorIdType,
     philsysNumber: p.philsysNumber,
     tinNumber:     p.tinNumber,
+    passportNumber:       p.passportNumber,
+    umidNumber:           p.umidNumber,
+    driversLicenseNumber: p.driversLicenseNumber,
     phone:        p.phone,
     email:        p.email,
     addressLine1: p.addressLine1,

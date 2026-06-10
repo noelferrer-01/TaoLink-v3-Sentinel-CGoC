@@ -21,6 +21,10 @@ import { HireModal } from './hire-modal';
 const DOC_STATUSES: DocStatus[] = ['pending', 'submitted', 'verified', 'expired'];
 const TERMINAL: Stage[] = ['hired', 'rejected', 'withdrawn'];
 
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 export default async function ApplicantDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const got = await recruitment.getApplicant(id);
@@ -38,11 +42,14 @@ export default async function ApplicantDetailPage({ params }: { params: Promise<
     sssNumber: ident.sssNumber,
   });
 
-  // The anchor ID can be any unique type, not just SSS — show whichever is on file.
+  // The anchor ID can be any type in the ladder — show whichever is on file.
   const anchorValue =
     ident.anchorIdType === 'sss' ? ident.sssNumber
     : ident.anchorIdType === 'philsys' ? ident.philsysNumber
     : ident.anchorIdType === 'tin' ? ident.tinNumber
+    : ident.anchorIdType === 'passport' ? ident.passportNumber
+    : ident.anchorIdType === 'umid' ? ident.umidNumber
+    : ident.anchorIdType === 'drivers_license' ? ident.driversLicenseNumber
     : null;
 
   const isActive = !TERMINAL.includes(a.pipelineStage);
@@ -181,7 +188,7 @@ export default async function ApplicantDetailPage({ params }: { params: Promise<
             ))}
 
             {a.pipelineStage === 'documents' && (
-              <HireModal applicantId={a.id} defaultCode={defaultCode} today={a.appliedOn} readyToHire={allVerified} needsId={ident.anchorIdType === 'none'} />
+              <HireModal applicantId={a.id} defaultCode={defaultCode} today={todayIso()} readyToHire={allVerified} needsId={ident.anchorIdType === 'none'} />
             )}
 
             <details style={{ marginLeft: 'auto' }}>

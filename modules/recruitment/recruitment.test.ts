@@ -251,6 +251,21 @@ describe('recruitment.createApplicant — dual-write (T7)', () => {
     expect(got?.identity.firstName).toBe('Lena');
     expect(got?.identity.sssNumber).toBe('34-7777777-7');
   });
+
+  it('exposes secondary-ID anchors (passport/UMID/DL) through getApplicant identity', async () => {
+    // A walk-in whose only ID is a passport — the ladder anchors on it, and the
+    // detail page must be able to display it (not "Not set — provisional").
+    const a = await recruitment.createApplicant({
+      firstName: 'Pasaporte', lastName: 'Lang',
+      source: 'walk_in', appliedOn: '2026-06-01',
+      passportNumber: 'P1234567A',
+    });
+    const got = await recruitment.getApplicant(a.id);
+    expect(got?.identity.anchorIdType).toBe('passport');
+    expect(got?.identity.passportNumber).toBe('P1234567A');
+    expect(got?.identity.umidNumber).toBeNull();
+    expect(got?.identity.driversLicenseNumber).toBeNull();
+  });
 });
 
 describe('recruitment.hireApplicant — reuses applicant personId (T7)', () => {
