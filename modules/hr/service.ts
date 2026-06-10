@@ -235,7 +235,7 @@ export async function getEmployeeWithIdentity(id: string): Promise<EmployeeWithI
     .from(employees)
     .leftJoin(persons, eq(employees.personId, persons.id))
     .where(eq(employees.id, id));
-  return (rows[0] as EmployeeWithIdentity) ?? null;
+  return rows[0] ?? null;
 }
 
 export type GetEmployeesWithIdentityPageOptions = {
@@ -545,14 +545,15 @@ function personNameSimilarityDesc(query: string) {
  * Wraps `fn` in a transaction with `pg_trgm.similarity_threshold` set to
  * NAME_SEARCH_THRESHOLD for the duration of that transaction only (SET LOCAL
  * is pool-safe — reverts automatically on commit/rollback).
+ *
+ * Typed as the full DB client (not DbOrTx) because `.transaction()` is only
+ * available on the top-level client. Every caller passes `getDb()` directly.
  */
 async function withNameSearchThreshold<T>(
-  db: DbOrTx,
+  db: ReturnType<typeof getDb>,
   fn: (tx: DbOrTx) => Promise<T>,
 ): Promise<T> {
-  // db.transaction is only available on the full DB client, not on a tx object.
-  // Cast as needed — the caller always passes the top-level db here.
-  return (db as ReturnType<typeof getDb>).transaction(async (tx) => {
+  return db.transaction(async (tx) => {
     await tx.execute(sql`SET LOCAL pg_trgm.similarity_threshold = ${sql.raw(String(NAME_SEARCH_THRESHOLD))}`);
     return fn(tx);
   });
