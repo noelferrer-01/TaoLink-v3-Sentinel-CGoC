@@ -54,7 +54,9 @@ export const CRED_WINDOW_DAYS: Partial<Record<CredType, number>> = { ltopf_licen
 
 ### Task 3: `listReadinessIssues` — missing + expiring vs the credential required set
 
-**Files:** Modify `modules/persons/service.ts`, test
+> **Post-build correction (pressure test):** this shipped in **`modules/hr/service.ts`**, not persons — readiness joins hr employees with credentials and persons imports nothing downstream. Selection also fixed to report the *most severe* present state (revoked > expired > pending) rather than the "best", and the user window control was dropped (per-credential windows are authoritative). See [done-sweep §4](3b-credentials-and-readiness-done-sweep.md).
+
+**Files:** Modify `modules/hr/service.ts`, `modules/hr/labels.ts`, test (`modules/hr/hr.test.ts`)
 
 - [ ] **Step 1: Failing tests:**
   - Armed employee (person + `isArmedPost=true`) with **no LTOPF row** → a `missing` issue.

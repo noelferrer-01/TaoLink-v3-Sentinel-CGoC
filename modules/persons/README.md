@@ -42,8 +42,9 @@ against the owning Person (the aggregate root) with a `person.credential.*` acti
 `expired`. `READINESS_CRED_SET(isArmedPost)` is the required *credential* set (licences/
 clearances only — **excludes `resume_biodata`**; armed posts add `ltopf_license`).
 `CRED_WINDOW_DAYS` holds per-credential renewal windows. The readiness radar that
-consumes these lives in **`recruitment`**, not here (persons imports nothing
-downstream — see the deviation note in `wiki/slices/3b-credentials-and-readiness-done-sweep.md`).
+consumes these lives in **`hr`** (`hr.listReadinessIssues` — readiness joins
+employees with credentials; persons imports nothing downstream, so it only
+exposes the building blocks). See `wiki/slices/3b-credentials-and-readiness-done-sweep.md` §4.
 
 ### Search primitives (shared, so hr + recruitment use one definition)
 

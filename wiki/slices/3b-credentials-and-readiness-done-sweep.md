@@ -62,23 +62,51 @@ Logged in as `admin@sentinel.local` (dev server on :3001). Screenshots in
    adding a doc type forces a decision; the round-trip test guards the gap.
 3. **`isArmedPost` is nullable** in the shipped schema → readiness treats `null` as
    **unarmed** (`isArmedPost ?? false`).
-4. **`listReadinessIssues` lives in `recruitment`, NOT `persons`** — the contract §6 and
-   the 3b plan Task 3 named `persons.listReadinessIssues`, but **persons is a strict
-   identity foundation that imports nothing downstream** (only hr/recruitment schema
-   import persons, never the reverse). Readiness must join hr employees (armed profile +
-   code + active status) with person credentials; recruitment already depends on both, so
-   it composes. persons only gained the thin `listCredentialsForPersons` batch reader.
-   Following the contract literally would have inverted the layering 3a established + the
-   backlog sweep reinforced (entry-point-only imports) — the "safe shortcut" that would
-   have been the latent architectural bug. The readiness **page + nav** stay under
-   recruitment per the design.
+4. **`listReadinessIssues` lives in `hr`, NOT `persons`** (and not recruitment) — the
+   contract §6 and the 3b plan Task 3 named `persons.listReadinessIssues`, but **persons
+   is a strict identity foundation that imports nothing downstream**. It was first built
+   in recruitment; the pre-ship pressure test (§6) moved it to **hr** — readiness joins
+   hr `employees` with person credentials and uses *zero* recruitment-domain code, and hr
+   owns `employees` + already imports persons. persons only exposes the building blocks
+   (`listCredentialsForPersons`, `READINESS_CRED_SET`, `CRED_WINDOW_DAYS`, `deriveCredState`).
+   The hire **carry-forward** + `DOC_TO_CRED_TYPE` stay in recruitment (hire is its job).
+   The readiness **page + nav** stay under `/recruitment` per the design (the page imports
+   `hr.listReadinessIssues`). Following the contract literally would have inverted the
+   layering — the "safe shortcut" that would have been the latent architectural bug.
 
-## 5. Backlog / follow-ups raised by 3b
+## 6. Pre-ship pressure test (4-lens adversarial review) + remediation
 
-- **Readiness perf at scale** — `listReadinessIssues` computes issues in-app across all
-  active guards, then paginates. Fine for an admin radar now; if it becomes a hot path at
-  10k+ guards, push the missing/expiring diff into SQL. Measure via `pnpm db:stress` first
-  (same discipline as the existing `listApplicantsPage`/`listEmployeesPage` perf items).
+Before shipping, 3b went through four independent break-it reviews (correctness,
+architecture, security, scale). No showstoppers (all users are admin clerks, so no
+privilege-escalation/corruption path), but **six real fixes + one architecture move** were
+folded in, each test-first:
+
+| Fix | What | Commit |
+|---|---|---|
+| Edit scoping (IDOR) | `updateCredential` gains `{ expectedPersonId }`; the action scopes a credId to the employee's person (was editable cross-person) | a4facde |
+| Action hardening | credential actions validate dates + try/catch (no crash to the Next error overlay) | a4facde |
+| Redaction scrubs wallet | `redactPerson` deletes the person's credentials (licence numbers/notes are PII) | dcbd103 |
+| Migration idempotency | 0026 enums wrapped in `DO $$ … duplicate_object` guards | dcbd103 |
+| Hire resilience | carry-forward is best-effort (per-credential try/catch; hire never fails on a copy hiccup; the radar surfaces any gap) | f5b8656 |
+| Readiness home | moved `listReadinessIssues` recruitment → **hr** (employee concern; see §4) | 168bbba |
+| Severity selection | report the most severe present state (revoked > expired > pending), not the "best"; drop the misleading window dropdown (per-credential windows authoritative) | 168bbba |
+
+New edge tests added in `hr.test.ts` (best-of-N same-type, expired+pending severity,
+expired/revoked/pending kinds, pagination) + scope/redaction tests in `persons.test.ts`.
+
+## 7. Backlog / follow-ups raised by 3b
+
+- **Readiness perf at scale (sharpened)** — `listReadinessIssues` computes issues in-app
+  across all active guards, then paginates (recomputing on every page click). Fine for an
+  admin radar at current/demo scale. Two scale risks before true 10k+ production: (a) the
+  in-app load/compute is heavy (~0.3–1.5s/load at 10k); (b) `listCredentialsForPersons`
+  sends **one bind param per guard**, so the batch read approaches the Postgres ~65k
+  parameter ceiling as the active-employee count grows (it *throws*, not just slows, past
+  it). Fix both with one SQL rewrite: a `LEFT JOIN` diff that emits only missing/expiring
+  rows with DB-side `LIMIT/OFFSET/COUNT` (personIds never cross the wire). **Prereq:** the
+  `db/stress` harness seeds **no** `person_credentials` and never calls readiness — so the
+  "measure via `pnpm db:stress`" gate needs harness work first (seed a realistic per-guard
+  credential distribution + a readiness timing case).
 - **LTOPF ↔ firearm/agency linkage** stays deferred (ADR 0018 out-of-scope) — the radar's
   permanent "firearm link unverified" caveat is the interim guard against a false green.
 - **Commander SOP (open)** — confirm the authoritative armed/unarmed posting source so
