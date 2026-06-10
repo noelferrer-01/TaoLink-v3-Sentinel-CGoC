@@ -32,7 +32,11 @@ import {
   findPossibleDuplicates,
   updatePerson,
   redactPerson,
+  addCredential,
+  updateCredential,
+  listCredentials,
 } from './service';
+import { auditLog } from '@/modules/audit/schema';
 
 // ─── Cleanup ──────────────────────────────────────────────────────────────────
 
@@ -672,6 +676,117 @@ describe('persons service (integration)', () => {
       // findPersonByAnyId also returns null — PII is truly gone.
       const found = await findPersonByAnyId('sss', '55-9876543-1');
       expect(found).toBeNull();
+    });
+  });
+});
+
+// ─── Integration: credentials wallet (Slice 3b) ───────────────────────────────
+
+describe('credentials service (integration)', () => {
+  beforeEach(cleanup);
+  afterAll(async () => {
+    await cleanup();
+    await closeDb();
+  });
+
+  async function makePerson() {
+    return createPerson({
+      firstName: 'Juan',
+      lastName: 'Dela Cruz',
+      dateOfBirth: '1990-04-02',
+    });
+  }
+
+  describe('addCredential', () => {
+    it('inserts a credential and returns the full row', async () => {
+      const p = await makePerson();
+      const cred = await addCredential({
+        personId:   p.id,
+        credType:   'sosia_license',
+        credNumber: 'SG-2024-887',
+        expiresOn:  '2027-02-01',
+      });
+
+      expect(cred.id).toBeTruthy();
+      expect(cred.personId).toBe(p.id);
+      expect(cred.credType).toBe('sosia_license');
+      expect(cred.credNumber).toBe('SG-2024-887');
+      expect(cred.expiresOn).toBe('2027-02-01');
+    });
+
+    it('defaults status to valid when not provided', async () => {
+      const p = await makePerson();
+      const cred = await addCredential({ personId: p.id, credType: 'nbi_clearance' });
+      expect(cred.status).toBe('valid');
+    });
+
+    it('records a person.credential.added audit row targeting the person', async () => {
+      const p = await makePerson();
+      const cred = await addCredential({ personId: p.id, credType: 'ltopf_license', credNumber: 'LT-99102' });
+
+      const rows = await getDb()
+        .select()
+        .from(auditLog)
+        .where(sql`target_kind = 'person' AND target_id = ${p.id} AND action = 'person.credential.added'`);
+      expect(rows.length).toBe(1);
+      const payload = rows[0]!.payload as { credId: string; credType: string };
+      expect(payload.credId).toBe(cred.id);
+      expect(payload.credType).toBe('ltopf_license');
+    });
+  });
+
+  describe('listCredentials', () => {
+    it('returns only the given person’s credentials', async () => {
+      const a = await makePerson();
+      const b = await createPerson({ firstName: 'Maria', lastName: 'Santos', dateOfBirth: '1992-08-08' });
+      await addCredential({ personId: a.id, credType: 'sosia_license' });
+      await addCredential({ personId: a.id, credType: 'nbi_clearance' });
+      await addCredential({ personId: b.id, credType: 'drug_test' });
+
+      const credsA = await listCredentials(a.id);
+      expect(credsA).toHaveLength(2);
+      expect(credsA.every((c) => c.personId === a.id)).toBe(true);
+      expect(credsA.map((c) => c.credType).sort()).toEqual(['nbi_clearance', 'sosia_license']);
+    });
+
+    it('returns an empty array for a person with no credentials', async () => {
+      const p = await makePerson();
+      expect(await listCredentials(p.id)).toEqual([]);
+    });
+  });
+
+  describe('updateCredential', () => {
+    it('updates fields and returns the updated row', async () => {
+      const p = await makePerson();
+      const cred = await addCredential({ personId: p.id, credType: 'sosia_license', expiresOn: '2027-02-01' });
+
+      const updated = await updateCredential(cred.id, { status: 'revoked', notes: 'licence revoked by SOSIA' });
+      expect(updated.id).toBe(cred.id);
+      expect(updated.status).toBe('revoked');
+      expect(updated.notes).toBe('licence revoked by SOSIA');
+      // unchanged fields survive
+      expect(updated.expiresOn).toBe('2027-02-01');
+    });
+
+    it('records a person.credential.updated audit row', async () => {
+      const p = await makePerson();
+      const cred = await addCredential({ personId: p.id, credType: 'nbi_clearance', status: 'valid' });
+      await updateCredential(cred.id, { status: 'expired' });
+
+      const rows = await getDb()
+        .select()
+        .from(auditLog)
+        .where(sql`target_kind = 'person' AND target_id = ${p.id} AND action = 'person.credential.updated'`);
+      expect(rows.length).toBe(1);
+      const payload = rows[0]!.payload as { credId: string; changedFields: string[] };
+      expect(payload.credId).toBe(cred.id);
+      expect(payload.changedFields).toContain('status');
+    });
+
+    it('throws a plain-language error when the credential does not exist', async () => {
+      await expect(
+        updateCredential('00000000-0000-0000-0000-000000000000', { status: 'expired' }),
+      ).rejects.toThrow(/not found/i);
     });
   });
 });

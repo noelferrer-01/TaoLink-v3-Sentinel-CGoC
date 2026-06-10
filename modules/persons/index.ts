@@ -50,6 +50,12 @@ export {
   redactPerson,
   type CreatePersonInput,
   type CreatePersonOptions,
+  // Credentials (Slice 3b)
+  addCredential,
+  updateCredential,
+  listCredentials,
+  type AddCredentialInput,
+  type AddCredentialOptions,
 } from './service';
 
 // ─── Name-search primitives (shared by hr + recruitment) ───────────────────────

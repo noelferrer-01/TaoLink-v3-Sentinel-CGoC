@@ -23,8 +23,8 @@ import { getDb, type DbOrTx } from '@/core/db';
 import { isPgError } from '@/core/errors';
 import { audit } from '@/modules/audit';
 import { events } from '@/modules/events';
-import { persons, type Person, type NewPerson } from './schema';
-import { checkIdFormat, normalizeNameKey, ANCHOR_ID_LABELS, type AnchorIdType } from './labels';
+import { persons, personCredentials, type Person, type NewPerson, type PersonCredential } from './schema';
+import { checkIdFormat, normalizeNameKey, ANCHOR_ID_LABELS, type AnchorIdType, type CredType, type CredStatus } from './labels';
 
 // ─── Column map ───────────────────────────────────────────────────────────────
 // Maps each anchorIdType to its corresponding schema column name and Drizzle
@@ -529,4 +529,145 @@ export async function redactPerson(
   await events.publish('person.redacted', { id });
 
   return updated;
+}
+
+// ─── Credentials wallet (Slice 3b — ADR 0018) ───────────────────────────────────
+//
+// Credentials are owned by a Person; every mutation is audited against the
+// Person (the aggregate root) with a `person.credential.*` action so a person's
+// full history — identity edits AND credential changes — reads as one trail.
+
+export type AddCredentialInput = {
+  personId:    string;
+  credType:    CredType;
+  credNumber?: string | null;
+  issuingBody?: string | null;
+  issuedOn?:   string | null;
+  expiresOn?:  string | null;
+  status?:     CredStatus;          // defaults to 'valid'
+  verifiedByUserId?: string | null;
+  verifiedOn?: string | null;
+  notes?:      string | null;
+  actorUserId?: string | null;
+};
+
+/**
+ * Options for `addCredential`. Pass `{ tx }` so the insert runs inside an
+ * existing transaction — `hireApplicant` carries verified clearances forward
+ * atomically with the hire. Audit/events use their own handle (as elsewhere).
+ */
+export type AddCredentialOptions = {
+  tx?: DbOrTx;
+};
+
+/**
+ * Adds a credential to a Person's wallet and returns the created row.
+ * `status` defaults to 'valid'. Records a `person.credential.added` audit row.
+ */
+export async function addCredential(
+  input: AddCredentialInput,
+  opts?: AddCredentialOptions,
+): Promise<PersonCredential> {
+  const executor: DbOrTx = opts?.tx ?? getDb();
+
+  const values = {
+    personId:         input.personId,
+    credType:         input.credType,
+    credNumber:       input.credNumber ?? null,
+    issuingBody:      input.issuingBody ?? null,
+    issuedOn:         input.issuedOn ?? null,
+    expiresOn:        input.expiresOn ?? null,
+    status:           input.status ?? 'valid',
+    verifiedByUserId: input.verifiedByUserId ?? null,
+    verifiedOn:       input.verifiedOn ?? null,
+    notes:            input.notes ?? null,
+  };
+
+  const [created] = await executor.insert(personCredentials).values(values).returning();
+  if (!created) throw new Error('[persons/addCredential] insert returned no row');
+
+  await audit.record({
+    actor:   input.actorUserId ?? null,
+    action:  'person.credential.added',
+    target:  { kind: 'person', id: input.personId },
+    payload: {
+      credId:    created.id,
+      credType:  created.credType,
+      status:    created.status,
+      expiresOn: created.expiresOn,
+    },
+  });
+  await events.publish('person.credential.added', { personId: input.personId, credId: created.id });
+
+  return created;
+}
+
+// ─── updateCredential ─────────────────────────────────────────────────────────
+
+type UpdateCredentialPatch = Partial<
+  Omit<PersonCredential, 'id' | 'personId' | 'createdAt' | 'updatedAt'>
+>;
+
+/**
+ * Updates a credential and returns the updated row. Records the changed fields
+ * in a `person.credential.updated` audit row (targeted at the owning Person).
+ * Throws a plain-language error if the credential does not exist.
+ */
+export async function updateCredential(
+  id: string,
+  patch: UpdateCredentialPatch,
+  actorUserId?: string | null,
+): Promise<PersonCredential> {
+  const db = getDb();
+
+  const [before] = await db.select().from(personCredentials).where(eq(personCredentials.id, id));
+  if (!before) throw new Error(`Credential not found — no credential with id ${id}.`);
+
+  // personId / id / timestamps are not caller-editable.
+  const IMMUTABLE = ['id', 'personId', 'createdAt'] as const;
+  const safePatch = { ...patch } as Record<string, unknown>;
+  for (const field of IMMUTABLE) delete safePatch[field];
+
+  const [updated] = await db
+    .update(personCredentials)
+    .set({ ...safePatch, updatedAt: new Date() })
+    .where(eq(personCredentials.id, id))
+    .returning();
+  if (!updated) throw new Error(`[persons/updateCredential] update returned no row for ${id}`);
+
+  const changedFields = Object.keys(safePatch).filter(
+    (k) => (before as Record<string, unknown>)[k] !== (updated as Record<string, unknown>)[k],
+  );
+
+  await audit.record({
+    actor:   actorUserId ?? null,
+    action:  'person.credential.updated',
+    target:  { kind: 'person', id: updated.personId },
+    payload: {
+      credId:   id,
+      credType: updated.credType,
+      changedFields,
+      before:   Object.fromEntries(changedFields.map((k) => [k, (before as Record<string, unknown>)[k]])),
+      after:    Object.fromEntries(changedFields.map((k) => [k, (updated as Record<string, unknown>)[k]])),
+    },
+  });
+  await events.publish('person.credential.updated', { personId: updated.personId, credId: id, changedFields });
+
+  return updated;
+}
+
+// ─── listCredentials ──────────────────────────────────────────────────────────
+
+/**
+ * Returns a Person's credentials, ordered by type then soonest expiry (NULL
+ * expiries last). The display layer derives Valid/Expiring/Expired/etc. via
+ * `deriveCredState` (labels.ts) — this is a plain read, no state computed here.
+ */
+export async function listCredentials(personId: string): Promise<PersonCredential[]> {
+  const db = getDb();
+  return db
+    .select()
+    .from(personCredentials)
+    .where(eq(personCredentials.personId, personId))
+    .orderBy(personCredentials.credType, sql`${personCredentials.expiresOn} ASC NULLS LAST`);
 }
