@@ -15,10 +15,14 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { closeDb, getDb } from '@/core/db';
-import { persons } from './schema';
+import { persons, personCredType, personCredStatus } from './schema';
 import {
   checkIdFormat,
   normalizeNameKey,
+  deriveCredState,
+  READINESS_CRED_SET,
+  CRED_TYPE_LABELS,
+  CRED_STATUS_LABELS,
 } from './labels';
 import {
   createPerson,
@@ -181,6 +185,89 @@ describe('normalizeNameKey', () => {
     const a = normalizeNameKey('Pedro', 'De Los Reyes', '1985-01-15');
     const b = normalizeNameKey('Pedro', 'Delos Reyes', '1985-01-15');
     expect(a).toBe(b);
+  });
+});
+
+// ─── Unit: deriveCredState (Slice 3b) ─────────────────────────────────────────
+
+describe('deriveCredState', () => {
+  const today = '2026-06-11';
+
+  it('returns revoked when status is revoked, even with a future expiry', () => {
+    expect(deriveCredState('2027-01-01', 'revoked', today)).toBe('revoked');
+  });
+
+  it('keeps revoked DISTINCT from expired (revoked + past expiry → revoked)', () => {
+    // The core 3b rule: a revoked licence is a compliance event, not a lapse.
+    expect(deriveCredState('2020-01-01', 'revoked', today)).toBe('revoked');
+  });
+
+  it('returns pending when status is pending', () => {
+    expect(deriveCredState('2027-01-01', 'pending', today)).toBe('pending');
+  });
+
+  it('returns valid when there is no expiry date', () => {
+    expect(deriveCredState(null, 'valid', today)).toBe('valid');
+  });
+
+  it('returns expired when the expiry date is in the past', () => {
+    expect(deriveCredState('2026-05-01', 'valid', today)).toBe('expired');
+  });
+
+  it('returns expiring when the expiry falls within the window', () => {
+    expect(deriveCredState('2026-07-01', 'valid', today, 60)).toBe('expiring');
+  });
+
+  it('returns valid when the expiry is beyond the window', () => {
+    expect(deriveCredState('2027-01-01', 'valid', today, 60)).toBe('valid');
+  });
+
+  it('treats an expiry exactly today as expiring (not expired)', () => {
+    expect(deriveCredState(today, 'valid', today)).toBe('expiring');
+  });
+
+  it('respects a custom window', () => {
+    // 45 days out: inside a 60-day window (expiring), outside a 30-day window (valid).
+    expect(deriveCredState('2026-07-26', 'valid', today, 60)).toBe('expiring');
+    expect(deriveCredState('2026-07-26', 'valid', today, 30)).toBe('valid');
+  });
+});
+
+// ─── Unit: READINESS_CRED_SET (Slice 3b) ──────────────────────────────────────
+
+describe('READINESS_CRED_SET', () => {
+  it('includes the 8 base clearances for an unarmed post and excludes LTOPF', () => {
+    const set = READINESS_CRED_SET(false);
+    expect(set).toHaveLength(8);
+    expect(set).not.toContain('ltopf_license');
+    expect(set).toContain('sosia_license');
+  });
+
+  it('adds the firearms licence (LTOPF) for an armed post', () => {
+    const set = READINESS_CRED_SET(true);
+    expect(set).toHaveLength(9);
+    expect(set).toContain('ltopf_license');
+  });
+
+  it('never includes resume_biodata (a document, not a credential)', () => {
+    expect(READINESS_CRED_SET(true)).not.toContain('resume_biodata');
+    expect(READINESS_CRED_SET(false)).not.toContain('resume_biodata');
+  });
+});
+
+// ─── Unit: credential label completeness (Slice 3b) ───────────────────────────
+
+describe('credential labels', () => {
+  it('has a non-empty label for every credential type', () => {
+    for (const t of personCredType.enumValues) {
+      expect(CRED_TYPE_LABELS[t], `missing label for credType ${t}`).toBeTruthy();
+    }
+  });
+
+  it('has a non-empty label for every credential status', () => {
+    for (const s of personCredStatus.enumValues) {
+      expect(CRED_STATUS_LABELS[s], `missing label for credStatus ${s}`).toBeTruthy();
+    }
   });
 });
 
