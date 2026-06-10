@@ -8,7 +8,7 @@
  *   findPersonByAnyId  — exact match on a column OR in quarantinedIds
  *   findPossibleDuplicates — normalized name+DOB match (collapses PH particles)
  *   updatePerson       — the ONLY identity-edit path; refuses to edit redacted rows
- *   redactPerson       — tombstone: clear identity, move anchor to quarantinedIds
+ *   redactPerson       — tombstone: clear identity + all IDs (PII removed, not parked)
  *
  * Every mutation records an audit row and publishes an event.
  * Unique-violation errors (Postgres 23505) are caught and re-thrown as plain language.

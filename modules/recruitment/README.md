@@ -15,7 +15,7 @@ Import from `@/modules/recruitment` (the `recruitment` object or named exports).
 | Function | Signature | Notes |
 | --- | --- | --- |
 | `createApplicant` | `(CreateApplicantInput) => Promise<Applicant>` | Atomically **mints a Person** (provisional if no government ID) and inserts the applicant (stage `applied`), seeding the required-doc checklist. Accepts the full gov-ID ladder (`sssNumber`, `philsysNumber`, `tinNumber`, `passportNumber`, `umidNumber`, `driversLicenseNumber`); the anchor is the first present by `ID_TYPE_LADDER` preference. Sets the `idPending` flag when no anchor ID was captured (provisional save — never blocks; **service-internal** — the UI derives the nudge from the live Person anchor, not this stored column). Audits + emits `recruitment.applicant.created`. |
-| `getApplicant` | `(id) => Promise<{ applicant, documents } \| null>` | Applicant + its document rows. |
+| `getApplicant` | `(id) => Promise<{ applicant, identity, documents } \| null>` | Applicant role row + its `ApplicantIdentity` (joined from the linked Person — identity is **not** on the applicant row since 0024) + document rows. |
 | `listApplicantsPage` | `({ query?, stage?, limit, offset }) => Promise<{ rows, total }>` | Paginated/searchable across ALL applicants (incl. rejected/withdrawn). |
 | `advanceStage` | `(id, next, opts?) => Promise<Applicant>` | Enforces `ALLOWED_TRANSITIONS`. Audits + emits `recruitment.applicant.stage_changed`. Throws on illegal transitions. |
 | `setDocument` | `(applicantId, docType, { status, expiresOn?, notes?, verifiedByUserId? }) => Promise<void>` | Updates one checklist row; stamps `verifiedOn` when status becomes `verified`. |
