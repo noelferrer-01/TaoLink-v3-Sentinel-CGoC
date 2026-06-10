@@ -17,7 +17,7 @@ import { payslips, payRuns } from '@/modules/payroll/schema';
 import { dtrEntries, dtrPeriodCloses } from '@/modules/dtr/schema';
 import { assignments as assignmentsTable } from '@/modules/assignments/schema';
 import { hr } from '@/modules/hr';
-import { createPerson } from '@/modules/persons';
+import { createPerson, updatePerson } from '@/modules/persons';
 import { runPayroll, listPayslips } from '@/modules/payroll';
 import { recruitment } from './index';
 
@@ -320,6 +320,23 @@ describe('recruitment.hireApplicant — T11: hire gate', () => {
     const emp = await recruitment.hireApplicant(a.id, { basicSalary: 18000, hiredOn: '2026-06-10' });
     expect(emp.status).toBe('hired');
     // Employee shares the applicant's Person
+    expect(emp.personId).toBe(a.personId);
+  });
+
+  it('hires a provisional applicant once the Person is anchored via updatePerson (HireModal path)', async () => {
+    const a = await recruitment.createApplicant({
+      firstName: 'Provisional', lastName: 'Hire',
+      source: 'walk_in', appliedOn: '2026-06-01',
+      // no ID → anchorIdType 'none'
+    });
+    await recruitment.advanceStage(a.id, 'contacted');
+    await recruitment.advanceStage(a.id, 'documents');
+
+    // The HireModal path: anchor type + ID value set TOGETHER, then hire.
+    await updatePerson(a.personId, { anchorIdType: 'sss', sssNumber: '34-HMOD-001' });
+
+    const emp = await recruitment.hireApplicant(a.id, { basicSalary: 18000, hiredOn: '2026-06-10' });
+    expect(emp.status).toBe('hired');
     expect(emp.personId).toBe(a.personId);
   });
 });
