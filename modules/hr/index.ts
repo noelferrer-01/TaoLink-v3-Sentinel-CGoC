@@ -13,6 +13,7 @@ import {
   updateEmployee,
   searchEmployees,
   generateNextEmployeeCode,
+  IDENTITY_FIELDS,
 } from './service';
 export type {
   BulkImportResult,
@@ -66,4 +67,5 @@ export {
   updateEmployee,
   searchEmployees,
   generateNextEmployeeCode,
+  IDENTITY_FIELDS,
 };

@@ -4,13 +4,11 @@ import { z } from 'zod';
 import { getDb, type DbOrTx } from '@/core/db';
 import { isWithinUndoWindow } from '@/core/time';
 import { employees, type Employee, type NewEmployee } from './schema';
-import { persons, type Person } from '@/modules/persons/schema';
+import { persons, type Person, createPerson, ID_TYPE_LADDER } from '@/modules/persons';
 import { auditLog } from '@/modules/audit/schema';
 import { audit } from '@/modules/audit';
 import { events } from '@/modules/events';
 import { ALLOWED_TRANSITIONS, type Status } from './labels';
-import { createPerson } from '@/modules/persons/service';
-import { ID_TYPE_LADDER } from '@/modules/persons/labels';
 
 // Drizzle types `numeric` columns as `string`, but callers reasonably pass numbers.
 // We widen basicSalary to accept both and stringify before insert.
@@ -481,7 +479,7 @@ const IMMUTABLE_FIELDS = ['id', 'employeeCode', 'createdAt'] as const;
  * `rdoCode` is intentionally NOT here — it is a BIR compliance field that stays
  * on the employee row (per T8 design decision).
  */
-const IDENTITY_FIELDS = [
+export const IDENTITY_FIELDS = [
   'firstName', 'middleName', 'lastName',
   'email', 'phone',
   'dateOfBirth',

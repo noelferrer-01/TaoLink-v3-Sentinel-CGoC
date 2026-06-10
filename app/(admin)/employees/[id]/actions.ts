@@ -1,12 +1,9 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { hr } from '@/modules/hr';
+import { hr, IDENTITY_FIELDS } from '@/modules/hr';
 import { updatePerson } from '@/modules/persons';
 import { getSessionFromCookie } from '@/modules/auth';
-import { getDb } from '@/core/db';
-import { employees } from '@/modules/hr/schema';
-import { eq } from 'drizzle-orm';
 
 /**
  * Editable patch shape — only the fields the detail/edit form is allowed to
@@ -36,13 +33,25 @@ export interface EmployeePatchInput {
   postalCode?: string | null;
 }
 
-/** Identity keys that belong on the Person (not on the employee row). */
-const IDENTITY_KEYS: ReadonlyArray<keyof EmployeePatchInput> = [
+/**
+ * Identity keys that belong on the Person (not on the employee row).
+ *
+ * This list is the intersection of hr's IDENTITY_FIELDS and the fields exposed
+ * by EmployeePatchInput. The `satisfies` annotation ensures every entry is a
+ * valid key of EmployeePatchInput — if a field is added to EmployeePatchInput
+ * and is also an identity field, the compiler will flag it as unhandled here,
+ * preventing silent strips in hr.updateEmployee.
+ *
+ * Note: IDENTITY_FIELDS may contain more fields (e.g. phone, sssNumber) that
+ * are not yet in EmployeePatchInput. Those are handled by the hr.updateEmployee
+ * strip safety-belt when/if they are ever added.
+ */
+const IDENTITY_KEYS = [
   'firstName', 'lastName',
   'email',
   'dateOfBirth',
   'addressLine1', 'addressLine2', 'city', 'province', 'postalCode',
-];
+] as const satisfies ReadonlyArray<keyof EmployeePatchInput & typeof IDENTITY_FIELDS[number]>;
 
 export type UpdateResult =
   | { kind: 'ok' }
@@ -64,7 +73,7 @@ export async function updateEmployeeAction(
   const identityPatch: Record<string, unknown> = {};
   const employmentPatch: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(patch)) {
-    if (IDENTITY_KEYS.includes(key as keyof EmployeePatchInput)) {
+    if ((IDENTITY_KEYS as readonly string[]).includes(key)) {
       identityPatch[key] = value;
     } else {
       employmentPatch[key] = value;
@@ -72,20 +81,48 @@ export async function updateEmployeeAction(
   }
 
   try {
-    // If the patch contains identity keys, look up the personId and route to persons.updatePerson.
+    // If the patch contains identity keys, diff against the current merged identity
+    // before routing to persons.updatePerson.
+    //
+    // Why diff first:
+    //   (a) pre-backfill employees (personId=null) can still save employment-only
+    //       edits — if no identity field actually changed, we skip updatePerson
+    //       entirely and never hit the "not migrated" error.
+    //   (b) avoids writing a person.updated audit row with empty changedFields
+    //       every time the form is saved (audit noise).
+    //
+    // Normalization: toPatch() in the form converts empty strings → null, so we
+    // treat null and '' as equivalent when comparing.
     if (Object.keys(identityPatch).length > 0) {
-      const db = getDb();
-      const [row] = await db.select({ personId: employees.personId }).from(employees).where(eq(employees.id, id));
-      if (!row) {
+      // Load current merged identity to compute actual diff.
+      const current = await hr.getEmployeeWithIdentity(id);
+      if (!current) {
         return { kind: 'error', message: "We couldn't find that employee — they may have been removed. Try refreshing the list." };
       }
-      if (!row.personId) {
-        return {
-          kind: 'error',
-          message: "This employee's identity record hasn't been migrated yet — run the identity backfill first.",
-        };
+
+      const normalize = (v: unknown): string | null =>
+        v === null || v === undefined || v === '' ? null : String(v).trim();
+
+      const reallyChanged: Record<string, unknown> = {};
+      for (const [key, submitted] of Object.entries(identityPatch)) {
+        const existing = (current as Record<string, unknown>)[key];
+        if (normalize(submitted) !== normalize(existing)) {
+          reallyChanged[key] = submitted;
+        }
       }
-      await updatePerson(row.personId, identityPatch, session.user.id);
+
+      if (Object.keys(reallyChanged).length > 0) {
+        // Identity DID change — require a linked Person.
+        if (!current.personId) {
+          return {
+            kind: 'error',
+            message: "This employee's identity record hasn't been migrated yet — run the identity backfill first.",
+          };
+        }
+        await updatePerson(current.personId, reallyChanged, session.user.id);
+      }
+      // If reallyChanged is empty, skip updatePerson entirely — employment patch
+      // (if any) can still proceed below.
     }
 
     // Route employment fields to hr.updateEmployee (identity keys are stripped there too, as a safety belt).

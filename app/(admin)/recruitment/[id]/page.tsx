@@ -9,6 +9,7 @@ import {
   requiredDocsFor,
   type Stage,
   type DocStatus,
+  type MatchKind,
 } from '@/modules/recruitment';
 import { hr, EMPLOYMENT_TYPE_LABELS } from '@/modules/hr';
 import { PageShell } from '@/components/page-shell';
@@ -18,6 +19,14 @@ import { HireModal } from './hire-modal';
 
 const DOC_STATUSES: DocStatus[] = ['pending', 'submitted', 'verified', 'expired'];
 const TERMINAL: Stage[] = ['hired', 'rejected', 'withdrawn'];
+
+/** Compile-time exhaustive label map for every MatchKind. */
+const KIND_LABELS: Record<MatchKind, string> = {
+  blacklist:           'Blacklist',
+  terminated_employee: 'Terminated employee',
+  active_employee:     'Active employee',
+  concurrent_applicant: 'Concurrent application',
+};
 
 export default async function ApplicantDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -70,10 +79,7 @@ export default async function ApplicantDetailPage({ params }: { params: Promise<
           <ul style={{ margin: 0, paddingLeft: '1.125rem', color: 'var(--ink-soft)', fontSize: '0.875rem' }}>
             {matches.map((m) => (
               <li key={`${m.kind}-${m.refId}`} style={{ marginBottom: '0.25rem' }}>
-                {m.kind === 'blacklist' && 'Blacklist'}
-                {m.kind === 'terminated_employee' && 'Terminated employee'}
-                {m.kind === 'active_employee' && 'Active employee'}
-                {m.kind === 'concurrent_applicant' && 'Concurrent application'}
+                {KIND_LABELS[m.kind]}
                 {' '}({m.confidence === 'exact' ? 'exact match' : 'possible match'}): {m.label}
               </li>
             ))}

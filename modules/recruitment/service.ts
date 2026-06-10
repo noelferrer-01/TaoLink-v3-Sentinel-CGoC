@@ -4,7 +4,7 @@
  * event, mirroring modules/hr and modules/assignments.
  */
 
-import { and, desc, eq, ilike, or, sql, inArray, ne } from 'drizzle-orm';
+import { and, desc, eq, ilike, or, sql, inArray, ne, notInArray } from 'drizzle-orm';
 import { getDb } from '@/core/db';
 import { audit } from '@/modules/audit';
 import { events } from '@/modules/events';
@@ -19,9 +19,7 @@ import {
   type BlacklistEntry,
 } from './schema';
 import { ALLOWED_TRANSITIONS, requiredDocsFor, type DocType, type DocStatus, type Stage } from './labels';
-import { createPerson, assertAnchored, findPersonByAnyId, findPossibleDuplicates } from '@/modules/persons/service';
-import { ID_TYPE_LADDER, normalizeNameKey } from '@/modules/persons/labels';
-import { persons, type Person } from '@/modules/persons/schema';
+import { createPerson, assertAnchored, findPersonByAnyId, findPossibleDuplicates, persons, type Person, ID_TYPE_LADDER } from '@/modules/persons';
 
 // ─── ApplicantWithPerson ──────────────────────────────────────────────────────
 // getApplicant returns this shape: the applicant row plus the linked Person's
@@ -211,7 +209,8 @@ export async function listApplicantsPage(opts: {
 /**
  * Computes the idPending nudge flag from the linked Person.
  * Returns true when the person has no anchor ID (anchorIdType='none') or when
- * there is no linked Person at all (personId=null). Never throws.
+ * there is no linked Person at all (personId=null). Never throws for a missing
+ * person or missing ID — DB errors propagate normally.
  */
 async function computeIdPending(personId: string | null): Promise<boolean> {
   if (!personId) return true;
@@ -386,7 +385,7 @@ export async function checkMatches(input: {
       const isActive = e.status !== 'terminated';
       const kind: MatchKind = isActive ? 'active_employee' : 'terminated_employee';
       const statusLabel = isActive
-        ? `Currently active as ${e.employeeCode} — possible double-hire`
+        ? `Currently active as ${e.employeeCode} — may be a double-hire`
         : `${e.lastName ?? ''}, ${e.firstName ?? ''} (${e.employeeCode}) — terminated`;
       matches.push({
         kind,
@@ -412,7 +411,7 @@ export async function checkMatches(input: {
         and(
           inArray(applicants.personId, [...exactPersonIds]),
           // Only in-flight stages count as "concurrent"
-          sql`${applicants.pipelineStage} NOT IN ('hired', 'rejected', 'withdrawn')`,
+          notInArray(applicants.pipelineStage, TERMINAL_STAGES),
           ...(input.excludeApplicantId ? [ne(applicants.id, input.excludeApplicantId)] : []),
         ),
       );
@@ -495,7 +494,7 @@ export async function checkMatches(input: {
           .where(
             and(
               eq(applicants.personId, fp.id),
-              sql`${applicants.pipelineStage} NOT IN ('hired', 'rejected', 'withdrawn')`,
+              notInArray(applicants.pipelineStage, TERMINAL_STAGES),
               ...(input.excludeApplicantId ? [ne(applicants.id, input.excludeApplicantId)] : []),
             ),
           ),
@@ -505,7 +504,7 @@ export async function checkMatches(input: {
         const isActive = e.status !== 'terminated';
         const kind: MatchKind = isActive ? 'active_employee' : 'terminated_employee';
         const statusLabel = isActive
-          ? `Currently active as ${e.employeeCode} — possible double-hire`
+          ? `Currently active as ${e.employeeCode} — may be a double-hire`
           : `${e.lastName ?? ''}, ${e.firstName ?? ''} (${e.employeeCode}) — terminated`;
         matches.push({ kind, confidence: 'possible', label: statusLabel, refId: e.id });
       }
