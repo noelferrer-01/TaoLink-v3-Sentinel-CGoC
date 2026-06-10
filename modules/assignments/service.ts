@@ -160,8 +160,8 @@ export async function listActiveAssignments(
       employee: {
         id: r.employeeId,
         employeeCode: r.employeeCode,
-        firstName: r.firstName ?? '',
-        lastName: r.lastName ?? '',
+        firstName: r.firstName,
+        lastName: r.lastName,
       },
       detachment: { id: r.detachmentId, name: r.detachmentName },
       client: { id: r.clientId, name: r.clientName },
@@ -214,8 +214,8 @@ export async function listAssignmentsOverlappingPeriod(
     employee: {
       id: r.employeeId,
       employeeCode: r.employeeCode,
-      firstName: r.firstName ?? '',
-      lastName: r.lastName ?? '',
+      firstName: r.firstName,
+      lastName: r.lastName,
     },
     detachment: { id: r.detachmentId, name: r.detachmentName },
     client: { id: r.clientId, name: r.clientName },
@@ -383,8 +383,8 @@ export async function listAssignableEmployees(asOf: string): Promise<AssignableE
   return rows.map((r) => ({
     id: r.id,
     employeeCode: r.employeeCode,
-    firstName: r.firstName ?? '',
-    lastName: r.lastName ?? '',
+    firstName: r.firstName,
+    lastName: r.lastName,
   }));
 }
 

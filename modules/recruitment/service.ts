@@ -6,6 +6,7 @@
 
 import { and, desc, eq, ilike, sql, inArray, ne, notInArray, getTableColumns } from 'drizzle-orm';
 import { getDb, type DbOrTx } from '@/core/db';
+import { isPgError } from '@/core/errors';
 import { audit } from '@/modules/audit';
 import { events } from '@/modules/events';
 import { hr, employees } from '@/modules/hr';
@@ -156,10 +157,10 @@ export async function createApplicant(input: CreateApplicantInput): Promise<Appl
   } catch (err: unknown) {
     // Plain-language errors from createPerson ("SSS already on file …") and
     // already-prefixed invariants pass through untouched. Raw Postgres errors
-    // from the applicant insert (they carry a `code`) get the module prefix —
-    // never let a raw library exception leak out unannotated.
-    if (typeof (err as { code?: unknown }).code === 'string') {
-      throw new Error(`[recruitment/createApplicant] ${err instanceof Error ? err.message : String(err)}`);
+    // from the applicant insert get the module prefix — never let a raw
+    // library exception leak out unannotated.
+    if (isPgError(err)) {
+      throw new Error(`[recruitment/createApplicant] ${err.message ?? String(err)}`);
     }
     throw err;
   }

@@ -388,8 +388,8 @@ export async function listPayslipsWithEmployee(payRunId: string): Promise<Paysli
     employee: {
       id: r.employeeId,
       employeeCode: r.employeeCode,
-      firstName: r.firstName ?? '',
-      lastName: r.lastName ?? '',
+      firstName: r.firstName,
+      lastName: r.lastName,
     },
   }));
 }
@@ -439,8 +439,8 @@ export async function listPayslipsWithEmployeePage(
       employee: {
         id: r.employeeId,
         employeeCode: r.employeeCode,
-        firstName: r.firstName ?? '',
-        lastName: r.lastName ?? '',
+        firstName: r.firstName,
+        lastName: r.lastName,
       },
     })),
     total: countResult[0]?.total ?? 0,

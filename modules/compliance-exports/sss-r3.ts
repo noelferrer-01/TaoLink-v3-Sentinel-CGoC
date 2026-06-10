@@ -170,8 +170,8 @@ export async function exportSSS_R3(
 
     rows.push({
       sss_number: sssNumber ?? 'MISSING',
-      surname: emp.lastName ?? '',
-      given_name: emp.firstName ?? '',
+      surname: emp.lastName,
+      given_name: emp.firstName,
       middle_initial: (emp.middleName ?? '').charAt(0),
       ss_1st_month: month === 1 ? ssStr : blank,
       ss_2nd_month: month === 2 ? ssStr : blank,
