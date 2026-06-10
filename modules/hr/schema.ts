@@ -20,9 +20,9 @@ export const employmentType = pgEnum('hr_employment_type', [
 
 // Role record ONLY (ADR 0017 / Slice 3a Task 12): all personal identity —
 // name, contact, DOB, statutory IDs, address — lives on the linked Person
-// (modules/persons). The legacy identity columns were renamed to legacy_* by
-// migration 0024 and are deliberately NOT declared here (invisible to code;
-// physically dropped later by Task 12b). Identity reads go through
+// (modules/persons). The duplicated identity columns were renamed to legacy_*
+// by migration 0024 and physically dropped by 0025 (T12b) — persons is the
+// only identity store. Identity reads go through
 // `getEmployeeWithIdentity`; identity edits go through `persons.updatePerson`.
 export const employees = pgTable('hr_employees', {
   id: uuid('id').primaryKey().defaultRandom(),

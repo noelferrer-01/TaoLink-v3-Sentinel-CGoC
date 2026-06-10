@@ -242,6 +242,12 @@ describe('hr.searchEmployees', () => {
     expect(r.some((e) => e.employeeCode === 'CG-S-0002')).toBe(true);
   });
 
+  it('treats LIKE wildcards in the query as literals (_ and % do not match)', async () => {
+    // 'S_0002' must NOT match 'S-0002' — an unescaped _ matches any one char.
+    const r = await hr.searchEmployees('S_0002');
+    expect(r.some((e) => e.employeeCode === 'CG-S-0002')).toBe(false);
+  });
+
   it('respects employmentType filter', async () => {
     const r = await hr.searchEmployees('', { employmentType: 'OFFICE_STAFF' });
     expect(r.every((e) => e.employmentType === 'OFFICE_STAFF')).toBe(true);

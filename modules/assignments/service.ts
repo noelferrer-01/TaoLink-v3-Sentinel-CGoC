@@ -1,8 +1,8 @@
 import { and, eq, lte, gte, or, isNull, desc, notInArray, ne, count, sql } from 'drizzle-orm';
 import { getDb } from '@/core/db';
 import { assignments, type Assignment } from './schema';
-import { employees } from '@/modules/hr/schema';
-import { persons } from '@/modules/persons/schema';
+import { employees } from '@/modules/hr';
+import { persons } from '@/modules/persons';
 import { detachments, clients } from '@/modules/clients/schema';
 import { audit } from '@/modules/audit';
 import { events } from '@/modules/events';
@@ -133,7 +133,7 @@ export async function listActiveAssignments(
         startDate: assignments.startDate,
         employeeId: employees.id,
         employeeCode: employees.employeeCode,
-        // T9: name sourced from persons (LEFT JOIN so rows survive a missing personId).
+        // Name sourced from persons (INNER JOIN — personId NOT NULL since 0024).
         firstName: persons.firstName,
         lastName: persons.lastName,
         detachmentId: detachments.id,
@@ -143,7 +143,7 @@ export async function listActiveAssignments(
       })
       .from(assignments)
       .innerJoin(employees, eq(employees.id, assignments.employeeId))
-      .leftJoin(persons, eq(persons.id, employees.personId))
+      .innerJoin(persons, eq(persons.id, employees.personId))
       .innerJoin(detachments, eq(detachments.id, assignments.detachmentId))
       .innerJoin(clients, eq(clients.id, detachments.clientId))
       .where(activeWhere)
@@ -160,8 +160,8 @@ export async function listActiveAssignments(
       employee: {
         id: r.employeeId,
         employeeCode: r.employeeCode,
-        firstName: r.firstName ?? '',
-        lastName: r.lastName ?? '',
+        firstName: r.firstName,
+        lastName: r.lastName,
       },
       detachment: { id: r.detachmentId, name: r.detachmentName },
       client: { id: r.clientId, name: r.clientName },
@@ -187,7 +187,7 @@ export async function listAssignmentsOverlappingPeriod(
       startDate: assignments.startDate,
       employeeId: employees.id,
       employeeCode: employees.employeeCode,
-      // T9: name sourced from persons (LEFT JOIN so rows survive a missing personId).
+      // Name sourced from persons (INNER JOIN — personId NOT NULL since 0024).
       firstName: persons.firstName,
       lastName: persons.lastName,
       detachmentId: detachments.id,
@@ -197,7 +197,7 @@ export async function listAssignmentsOverlappingPeriod(
     })
     .from(assignments)
     .innerJoin(employees, eq(employees.id, assignments.employeeId))
-    .leftJoin(persons, eq(persons.id, employees.personId))
+    .innerJoin(persons, eq(persons.id, employees.personId))
     .innerJoin(detachments, eq(detachments.id, assignments.detachmentId))
     .innerJoin(clients, eq(clients.id, detachments.clientId))
     .where(
@@ -214,8 +214,8 @@ export async function listAssignmentsOverlappingPeriod(
     employee: {
       id: r.employeeId,
       employeeCode: r.employeeCode,
-      firstName: r.firstName ?? '',
-      lastName: r.lastName ?? '',
+      firstName: r.firstName,
+      lastName: r.lastName,
     },
     detachment: { id: r.detachmentId, name: r.detachmentName },
     client: { id: r.clientId, name: r.clientName },
@@ -367,7 +367,7 @@ export async function listAssignableEmployees(asOf: string): Promise<AssignableE
       ),
     );
 
-  // T9: name sourced from persons (LEFT JOIN so rows survive a missing personId).
+  // Name sourced from persons (INNER JOIN — personId NOT NULL since 0024).
   const rows = await db
     .select({
       id: employees.id,
@@ -376,15 +376,15 @@ export async function listAssignableEmployees(asOf: string): Promise<AssignableE
       lastName: persons.lastName,
     })
     .from(employees)
-    .leftJoin(persons, eq(persons.id, employees.personId))
+    .innerJoin(persons, eq(persons.id, employees.personId))
     .where(and(ne(employees.status, 'terminated'), notInArray(employees.id, assignedIds)))
     .orderBy(persons.lastName, persons.firstName);
 
   return rows.map((r) => ({
     id: r.id,
     employeeCode: r.employeeCode,
-    firstName: r.firstName ?? '',
-    lastName: r.lastName ?? '',
+    firstName: r.firstName,
+    lastName: r.lastName,
   }));
 }
 

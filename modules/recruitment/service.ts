@@ -6,10 +6,10 @@
 
 import { and, desc, eq, ilike, sql, inArray, ne, notInArray, getTableColumns } from 'drizzle-orm';
 import { getDb, type DbOrTx } from '@/core/db';
+import { isPgError } from '@/core/errors';
 import { audit } from '@/modules/audit';
 import { events } from '@/modules/events';
-import { hr } from '@/modules/hr';
-import { employees } from '@/modules/hr/schema';
+import { hr, employees } from '@/modules/hr';
 import {
   applicants,
   applicantDocuments,
@@ -22,7 +22,7 @@ import { ALLOWED_TRANSITIONS, requiredDocsFor, type DocType, type DocStatus, typ
 import {
   createPerson, assertAnchored, getPerson, findPersonByAnyId, findPossibleDuplicates,
   persons, type Person, ID_TYPE_LADDER,
-  personFullNameMatches, personFullNameSimilarityDesc, withNameSearchThreshold,
+  escapeLike, personFullNameMatches, personFullNameSimilarityDesc, withNameSearchThreshold,
 } from '@/modules/persons';
 
 // ─── ApplicantIdentity ────────────────────────────────────────────────────────
@@ -154,10 +154,14 @@ export async function createApplicant(input: CreateApplicantInput): Promise<Appl
 
       return applicant;
     });
-  } catch (err: any) {
-    // Re-surface clean errors from createPerson (e.g. "SSS already on file")
-    // and from the applicant insert without wrapping twice.
-    if (err.message?.startsWith('[recruitment/') || err.message?.startsWith('[persons/')) throw err;
+  } catch (err: unknown) {
+    // Plain-language errors from createPerson ("SSS already on file …") and
+    // already-prefixed invariants pass through untouched. Raw Postgres errors
+    // from the applicant insert get the module prefix — never let a raw
+    // library exception leak out unannotated.
+    if (isPgError(err)) {
+      throw new Error(`[recruitment/createApplicant] ${err.message ?? String(err)}`);
+    }
     throw err;
   }
 
@@ -245,7 +249,7 @@ export async function listApplicantsPage(opts: {
 
   const stageFilter = opts.stage ? [eq(applicants.pipelineStage, opts.stage)] : [];
   const queryFilter = isSssQuery
-    ? [ilike(persons.sssNumber, `%${trimmed}%`)]
+    ? [ilike(persons.sssNumber, `%${escapeLike(trimmed)}%`)]
     : isNameQuery
       ? [personFullNameMatches(trimmed)]
       : [];

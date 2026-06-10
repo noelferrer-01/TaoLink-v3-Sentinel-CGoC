@@ -20,6 +20,7 @@
 
 import { eq, and, sql } from 'drizzle-orm';
 import { getDb, type DbOrTx } from '@/core/db';
+import { isPgError } from '@/core/errors';
 import { audit } from '@/modules/audit';
 import { events } from '@/modules/events';
 import { persons, type Person, type NewPerson } from './schema';
@@ -69,8 +70,8 @@ const PARTIAL_UNIQUE_FIELDS: Record<string, AnchorIdType> = {
  * violation is one of the known partial-unique indexes. Otherwise returns null.
  */
 function uniqueViolationMessage(err: unknown): string | null {
+  if (!isPgError(err) || err.code !== '23505') return null;
   const e = err as Record<string, unknown>;
-  if (e.code !== '23505') return null;
   const constraint = String(e.constraint_name ?? e.constraint ?? '');
   const detail = String(e.detail ?? '');
 

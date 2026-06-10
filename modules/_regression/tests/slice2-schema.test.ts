@@ -21,11 +21,11 @@ describe('Slice 2 schema gate', () => {
     expect(rows.length).toBe(1);
   });
 
-  // Updated at Slice 3a T12 (migration 0024): identity-shaped BIR fields
-  // (date_of_birth, address_line1, postal_code) moved to `persons`; the
-  // employee role row keeps employment_type + rdo_code. The legacy columns
-  // were RENAMED to legacy_* (recovery window), not dropped — Task 12b drops
-  // them later, at which point the legacy_* assertions below get removed too.
+  // Updated at Slice 3a T12 (migration 0024) + T12b (migration 0025):
+  // identity-shaped BIR fields (date_of_birth, address_line1, postal_code)
+  // live on `persons`; the employee role row keeps employment_type + rdo_code.
+  // 0024 renamed the duplicated identity columns to legacy_* (recovery
+  // window); 0025 physically dropped them — persons is the only identity store.
   it('hr_employees keeps role fields; identity BIR fields live on persons', async () => {
     const sql = getSql();
     const roleCols = await sql`
@@ -44,14 +44,14 @@ describe('Slice 2 schema gate', () => {
     `;
     expect(personCols.length).toBe(3);
 
-    // 0024 renamed (did not drop) the legacy identity columns.
+    // 0025 dropped every legacy_* column — none may remain on either role table.
     const legacyCols = await sql`
       SELECT column_name
       FROM information_schema.columns
-      WHERE table_name = 'hr_employees'
-        AND column_name IN ('legacy_date_of_birth', 'legacy_address_line1', 'legacy_postal_code')
+      WHERE table_name IN ('hr_employees', 'recruitment_applicants')
+        AND column_name LIKE 'legacy_%'
     `;
-    expect(legacyCols.length).toBe(3);
+    expect(legacyCols.length).toBe(0);
   });
 
   it('detachments has required_headcount', async () => {

@@ -11,8 +11,8 @@ import { and, between, count, desc, eq, inArray, notInArray, sql } from 'drizzle
 import { getDb } from '@/core/db';
 import { payRuns, payslips, type PayRun, type Payslip } from './schema';
 import { computePayrollLine, type PayrollRates } from './compute';
-import { employees } from '@/modules/hr/schema';
-import { persons } from '@/modules/persons/schema';
+import { employees } from '@/modules/hr';
+import { persons } from '@/modules/persons';
 import { dtrEntries, type DtrEntry } from '@/modules/dtr/schema';
 import {
   sssBracketForMonthly,
@@ -373,13 +373,13 @@ export async function listPayslipsWithEmployee(payRunId: string): Promise<Paysli
       payslip: payslips,
       employeeId: employees.id,
       employeeCode: employees.employeeCode,
-      // T9: name sourced from persons (LEFT JOIN so rows survive a missing personId).
+      // Name sourced from persons (INNER JOIN — personId NOT NULL since 0024).
       firstName: persons.firstName,
       lastName: persons.lastName,
     })
     .from(payslips)
     .innerJoin(employees, eq(employees.id, payslips.employeeId))
-    .leftJoin(persons, eq(persons.id, employees.personId))
+    .innerJoin(persons, eq(persons.id, employees.personId))
     .where(eq(payslips.payRunId, payRunId))
     .orderBy(persons.lastName, persons.firstName);
 
@@ -388,8 +388,8 @@ export async function listPayslipsWithEmployee(payRunId: string): Promise<Paysli
     employee: {
       id: r.employeeId,
       employeeCode: r.employeeCode,
-      firstName: r.firstName ?? '',
-      lastName: r.lastName ?? '',
+      firstName: r.firstName,
+      lastName: r.lastName,
     },
   }));
 }
@@ -419,13 +419,13 @@ export async function listPayslipsWithEmployeePage(
         payslip: payslips,
         employeeId: employees.id,
         employeeCode: employees.employeeCode,
-        // T9: name sourced from persons (LEFT JOIN so rows survive a missing personId).
+        // Name sourced from persons (INNER JOIN — personId NOT NULL since 0024).
         firstName: persons.firstName,
         lastName: persons.lastName,
       })
       .from(payslips)
       .innerJoin(employees, eq(employees.id, payslips.employeeId))
-      .leftJoin(persons, eq(persons.id, employees.personId))
+      .innerJoin(persons, eq(persons.id, employees.personId))
       .where(eq(payslips.payRunId, payRunId))
       .orderBy(persons.lastName, persons.firstName)
       .limit(limit)
@@ -439,8 +439,8 @@ export async function listPayslipsWithEmployeePage(
       employee: {
         id: r.employeeId,
         employeeCode: r.employeeCode,
-        firstName: r.firstName ?? '',
-        lastName: r.lastName ?? '',
+        firstName: r.firstName,
+        lastName: r.lastName,
       },
     })),
     total: countResult[0]?.total ?? 0,

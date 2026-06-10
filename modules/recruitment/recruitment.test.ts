@@ -252,6 +252,17 @@ describe('recruitment.createApplicant — dual-write (T7)', () => {
     expect(got?.identity.sssNumber).toBe('34-7777777-7');
   });
 
+  it('prefixes raw Postgres errors from the applicant insert with the module name', async () => {
+    // createPerson succeeds (names only), then the applicant INSERT fails on the
+    // malformed date — that raw pg error must carry the module prefix.
+    await expect(
+      recruitment.createApplicant({
+        firstName: 'Bad', lastName: 'Date',
+        source: 'walk_in', appliedOn: 'not-a-date',
+      }),
+    ).rejects.toThrow(/\[recruitment\/createApplicant\]/);
+  });
+
   it('exposes secondary-ID anchors (passport/UMID/DL) through getApplicant identity', async () => {
     // A walk-in whose only ID is a passport — the ladder anchors on it, and the
     // detail page must be able to display it (not "Not set — provisional").

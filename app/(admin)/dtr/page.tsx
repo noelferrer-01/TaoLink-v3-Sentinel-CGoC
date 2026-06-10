@@ -9,10 +9,7 @@ import { CountdownBadge } from '@/components/countdown-badge';
 import { ClosePeriodButton } from './close-period-button';
 import { FillRowButton, FillAllButton } from './fill-buttons';
 import { pickerPeriods, periodForDate, currentPeriod, countDays } from './period';
-
-function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
-}
+import { todayIso } from '@/core/dates';
 
 function parsePage(raw: string | undefined): number {
   const n = Number.parseInt(raw ?? '1', 10);

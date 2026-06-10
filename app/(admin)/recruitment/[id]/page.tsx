@@ -17,13 +17,10 @@ import { PageShell } from '@/components/page-shell';
 import { Field, TwoCol, Muted } from '@/components/form';
 import { advanceStageAction, setDocumentAction, rejectApplicantAction, withdrawApplicantAction } from '../actions';
 import { HireModal } from './hire-modal';
+import { todayIso } from '@/core/dates';
 
 const DOC_STATUSES: DocStatus[] = ['pending', 'submitted', 'verified', 'expired'];
 const TERMINAL: Stage[] = ['hired', 'rejected', 'withdrawn'];
-
-function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
-}
 
 export default async function ApplicantDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -33,14 +30,22 @@ export default async function ApplicantDetailPage({ params }: { params: Promise<
   // record only (legacy identity columns retired at 0024).
   const { applicant: a, identity: ident, documents } = got;
 
-  const matches = await recruitment.checkMatches({
-    personId: a.personId,
-    excludeApplicantId: a.id,
-    firstName: ident.firstName,
-    lastName: ident.lastName,
-    dateOfBirth: ident.dateOfBirth,
-    sssNumber: ident.sssNumber,
-  });
+  const isActive = !TERMINAL.includes(a.pipelineStage);
+
+  // The match banner is "review before hiring" guidance — once the applicant is
+  // terminal (hired/rejected/withdrawn) the decision is made, and a hired
+  // applicant would otherwise be flagged against their OWN new employee record
+  // as a possible double-hire.
+  const matches = isActive
+    ? await recruitment.checkMatches({
+        personId: a.personId,
+        excludeApplicantId: a.id,
+        firstName: ident.firstName,
+        lastName: ident.lastName,
+        dateOfBirth: ident.dateOfBirth,
+        sssNumber: ident.sssNumber,
+      })
+    : [];
 
   // The anchor ID can be any type in the ladder — show whichever is on file.
   const anchorValue =
@@ -52,7 +57,6 @@ export default async function ApplicantDetailPage({ params }: { params: Promise<
     : ident.anchorIdType === 'drivers_license' ? ident.driversLicenseNumber
     : null;
 
-  const isActive = !TERMINAL.includes(a.pipelineStage);
   const requiredSet = new Set(requiredDocsFor(a.isArmedPost));
   const allVerified = documents
     .filter((d) => requiredSet.has(d.docType))

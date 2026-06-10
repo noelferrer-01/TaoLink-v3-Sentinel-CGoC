@@ -5,10 +5,7 @@ import { PageShell } from '@/components/page-shell';
 import { Pagination, clampPageSize } from '@/components/pagination';
 import { AssignForm } from './assign-form';
 import { AssignmentsListBody } from './assignments-list-body';
-
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
+import { todayIso } from '@/core/dates';
 
 function parsePage(raw: string | undefined): number {
   const n = Number.parseInt(raw ?? '1', 10);
@@ -23,7 +20,7 @@ export default async function AssignmentsPage({
   const params = await searchParams;
   const page = parsePage(params.page);
   const pageSize = clampPageSize(params.size);
-  const asOf = today();
+  const asOf = todayIso();
 
   const [activeResult, assignable, clientsWithDetachments] = await Promise.all([
     assignments.listActiveAssignments(asOf, {

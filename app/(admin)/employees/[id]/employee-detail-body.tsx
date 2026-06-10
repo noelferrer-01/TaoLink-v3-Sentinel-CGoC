@@ -2,8 +2,7 @@
 
 import { useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import type { Employee } from '@/modules/hr/schema';
-import type { EmployeeWithIdentity } from '@/modules/hr';
+import type { Employee, EmployeeWithIdentity } from '@/modules/hr';
 import {
   STATUS_LABELS,
   EMPLOYMENT_TYPE_LABELS,

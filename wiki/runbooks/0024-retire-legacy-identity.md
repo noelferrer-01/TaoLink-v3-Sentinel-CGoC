@@ -94,14 +94,13 @@ Two layers, in order of preference:
    (If a custom-format dump was taken with `pg_dump -Fc`, use `pg_restore -d`
    instead of `psql <`.)
 
-## Task 12b note — the physical drop is SEPARATE and LATER
+## Task 12b — DONE: the physical drop landed as migration 0025
 
-The `legacy_*` columns are intentionally still on disk. A future one-line
-migration (`00NN_drop_legacy_identity.sql`, same gate prefix) drops them — but
-only after the app has been verified live on the Person in the target
-environment and slice 3 is tagged. Do not fold the drop into any other change.
-When 12b lands, also remove the `legacy_*` assertions from
-`modules/_regression/tests/slice2-schema.test.ts`.
+The recovery window is closed. `0025_drop_legacy_identity.sql` dropped the
+`legacy_*` columns (own gate + abort-before-damage test); the slice2-schema
+regression now asserts zero `legacy_%` columns remain. See
+[0025-drop-legacy-identity.md](0025-drop-legacy-identity.md) — after 0025,
+recovery means restoring the pre-0025 pg_dump.
 
 ## Known failure modes
 
