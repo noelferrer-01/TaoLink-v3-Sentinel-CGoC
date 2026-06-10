@@ -116,6 +116,46 @@ describe('recruitment service', () => {
     expect(clean.length).toBe(0);
   });
 
+  // ─── listApplicantsPage (search + paginate) ─────────────────────────────────
+  describe('listApplicantsPage', () => {
+    async function seedTrio() {
+      await recruitment.createApplicant({ firstName: 'Juan', lastName: 'Dela Cruz', source: 'walk_in', appliedOn: '2026-05-01', sssNumber: '34-1234567-8' });
+      await recruitment.createApplicant({ firstName: 'Maria', lastName: 'Santos', source: 'referral', appliedOn: '2026-05-02', sssNumber: '99-8888888-7' });
+      await recruitment.createApplicant({ firstName: 'Pedro', lastName: 'Reyes', source: 'walk_in', appliedOn: '2026-05-03' });
+    }
+
+    it('name search returns the matching applicant (fuzzy, case-insensitive) and excludes non-matches', async () => {
+      await seedTrio();
+      const { rows } = await recruitment.listApplicantsPage({ query: 'DELA CRUZ', limit: 50, offset: 0 });
+      expect(rows.length).toBeGreaterThanOrEqual(1);
+      expect(rows[0]?.lastName).toBe('Dela Cruz');
+      expect(rows.some((r) => r.lastName === 'Santos')).toBe(false);
+    });
+
+    it('a numeric query searches by SSS (substring), not by name', async () => {
+      await seedTrio();
+      const { rows } = await recruitment.listApplicantsPage({ query: '1234567', limit: 50, offset: 0 });
+      expect(rows.length).toBe(1);
+      expect(rows[0]?.firstName).toBe('Juan');
+    });
+
+    it('stage filter restricts results and total', async () => {
+      await seedTrio();
+      const found = await recruitment.listApplicantsPage({ query: 'Santos', limit: 50, offset: 0 });
+      await recruitment.advanceStage(found.rows[0]!.id, 'contacted');
+      const applied = await recruitment.listApplicantsPage({ stage: 'applied', limit: 50, offset: 0 });
+      expect(applied.total).toBe(2);
+      expect(applied.rows.some((r) => r.lastName === 'Santos')).toBe(false);
+    });
+
+    it('total counts all matches; rows respect the page limit', async () => {
+      await seedTrio();
+      const { rows, total } = await recruitment.listApplicantsPage({ limit: 2, offset: 0 });
+      expect(total).toBe(3);
+      expect(rows.length).toBe(2);
+    });
+  });
+
   // ─── hireApplicant (ADR 0009 handoff) ───────────────────────────────────────
   it('hireApplicant creates an employee, back-links, and is terminal', async () => {
     const a = await recruitment.createApplicant({

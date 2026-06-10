@@ -310,10 +310,11 @@ export async function findPersonByAnyId(
  * `normalizeNameKey` collapses common PH surname particles (de la / dela / de)
  * so "Juan De La Cruz 1990-04-02" and "Juan Dela Cruz 1990-04-02" collide.
  *
- * The match is done in JS over all persons (not SQL) to keep the normalisation
- * logic in one place (labels.ts). For the 10k-guard scale this is acceptable
- * in the intake path; if needed, the GIN trigram index + SQL approach is a
- * direct-drop refactor (same public API).
+ * Candidates are narrowed by exact `date_of_birth` IN SQL first (uses
+ * `persons_dob_idx`), then the normalized name key is compared in JS so the
+ * normalisation logic stays in one place (labels.ts). Even the worst real case —
+ * a large "January 1st" unknown-birthday cluster — only loads that one date's
+ * rows; the stress harness confirms this holds at 10k+ guards.
  */
 export async function findPossibleDuplicates(input: {
   firstName:   string;

@@ -38,3 +38,12 @@ export {
   type CreatePersonInput,
   type CreatePersonOptions,
 } from './service';
+
+// ─── Name-search primitives (shared by hr + recruitment) ───────────────────────
+
+export {
+  NAME_SEARCH_THRESHOLD,
+  personFullNameMatches,
+  personFullNameSimilarityDesc,
+  withNameSearchThreshold,
+} from './search';

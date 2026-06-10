@@ -1,10 +1,13 @@
-import { eq, and, desc, sql, count } from 'drizzle-orm';
+import { eq, and, or, desc, sql, count } from 'drizzle-orm';
 import Papa from 'papaparse';
 import { z } from 'zod';
 import { getDb, type DbOrTx } from '@/core/db';
 import { isWithinUndoWindow } from '@/core/time';
 import { employees, type Employee, type NewEmployee } from './schema';
-import { persons, type Person, createPerson, ID_TYPE_LADDER } from '@/modules/persons';
+import {
+  persons, type Person, createPerson, ID_TYPE_LADDER,
+  personFullNameMatches, personFullNameSimilarityDesc, withNameSearchThreshold,
+} from '@/modules/persons';
 import { auditLog } from '@/modules/audit/schema';
 import { audit } from '@/modules/audit';
 import { events } from '@/modules/events';
@@ -315,7 +318,7 @@ export async function getEmployeesWithIdentityPage(
   };
 
   const primaryOrder = trimmedQuery.length > 0
-    ? personNameSimilarityDesc(trimmedQuery)
+    ? personFullNameSimilarityDesc(trimmedQuery)
     : persons.lastName;
 
   const runQueries = async (runner: DbOrTx): Promise<GetEmployeesWithIdentityPageResult> => {
@@ -572,48 +575,15 @@ export async function updateEmployee(
 
 // ─── Search employees ─────────────────────────────────────────────────────────
 //
-// Private helpers shared by searchEmployees, listEmployeesPage, and
-// getEmployeesWithIdentityPage. Not exported — module-internal only.
-
-/** pg_trgm similarity threshold applied per-transaction via SET LOCAL. */
-const NAME_SEARCH_THRESHOLD = 0.2;
-
-/**
- * SQL fragment: true when the persons full name fuzzy-matches `query`
- * OR the employee code contains `query` (ILIKE). Cast required because
- * Drizzle's typed condition stack doesn't know about the `%` operator.
- */
+// hr-specific name predicate. Combines the shared persons full-name trigram
+// match (GIN-accelerated) with an employee-code ILIKE. The threshold wrapper and
+// similarity order come from modules/persons/search — one definition, shared
+// with recruitment's applicant search.
 function personNameMatchesPredicate(query: string) {
-  return sql`(
-    (${persons.firstName} || ' ' || ${persons.lastName}) % ${query}
-    OR ${employees.employeeCode} ILIKE ${'%' + query + '%'}
-  )` as unknown as ReturnType<typeof eq>;
-}
-
-/**
- * SQL fragment: ORDER BY trigram similarity DESC, NULLs last.
- * Used as the primary sort key when a name-search query is active.
- */
-function personNameSimilarityDesc(query: string) {
-  return sql`similarity(${persons.firstName} || ' ' || ${persons.lastName}, ${query}) DESC NULLS LAST` as unknown as ReturnType<typeof eq>;
-}
-
-/**
- * Wraps `fn` in a transaction with `pg_trgm.similarity_threshold` set to
- * NAME_SEARCH_THRESHOLD for the duration of that transaction only (SET LOCAL
- * is pool-safe — reverts automatically on commit/rollback).
- *
- * Typed as the full DB client (not DbOrTx) because `.transaction()` is only
- * available on the top-level client. Every caller passes `getDb()` directly.
- */
-async function withNameSearchThreshold<T>(
-  db: ReturnType<typeof getDb>,
-  fn: (tx: DbOrTx) => Promise<T>,
-): Promise<T> {
-  return db.transaction(async (tx) => {
-    await tx.execute(sql`SET LOCAL pg_trgm.similarity_threshold = ${sql.raw(String(NAME_SEARCH_THRESHOLD))}`);
-    return fn(tx);
-  });
+  return or(
+    personFullNameMatches(query),
+    sql`${employees.employeeCode} ILIKE ${'%' + query + '%'}`,
+  ) as unknown as ReturnType<typeof eq>;
 }
 
 export type SearchEmployeeOptions = {
@@ -689,7 +659,7 @@ export async function searchEmployees(
   };
 
   const primaryOrder = trimmedQuery.length > 0
-    ? personNameSimilarityDesc(trimmedQuery)
+    ? personFullNameSimilarityDesc(trimmedQuery)
     : persons.lastName;
 
   const run = async (runner: DbOrTx) => {
@@ -774,7 +744,7 @@ export async function listEmployeesPage(
   };
 
   const primaryOrder = trimmedQuery.length > 0
-    ? personNameSimilarityDesc(trimmedQuery)
+    ? personFullNameSimilarityDesc(trimmedQuery)
     : persons.lastName;
 
   const runQueries = async (runner: DbOrTx): Promise<ListEmployeesPageResult> => {

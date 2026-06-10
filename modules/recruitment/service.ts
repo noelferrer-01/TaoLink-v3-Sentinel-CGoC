@@ -4,8 +4,8 @@
  * event, mirroring modules/hr and modules/assignments.
  */
 
-import { and, desc, eq, ilike, or, sql, inArray, ne, notInArray, getTableColumns } from 'drizzle-orm';
-import { getDb } from '@/core/db';
+import { and, desc, eq, ilike, sql, inArray, ne, notInArray, getTableColumns } from 'drizzle-orm';
+import { getDb, type DbOrTx } from '@/core/db';
 import { audit } from '@/modules/audit';
 import { events } from '@/modules/events';
 import { hr } from '@/modules/hr';
@@ -19,7 +19,11 @@ import {
   type BlacklistEntry,
 } from './schema';
 import { ALLOWED_TRANSITIONS, requiredDocsFor, type DocType, type DocStatus, type Stage } from './labels';
-import { createPerson, assertAnchored, getPerson, findPersonByAnyId, findPossibleDuplicates, persons, type Person, ID_TYPE_LADDER } from '@/modules/persons';
+import {
+  createPerson, assertAnchored, getPerson, findPersonByAnyId, findPossibleDuplicates,
+  persons, type Person, ID_TYPE_LADDER,
+  personFullNameMatches, personFullNameSimilarityDesc, withNameSearchThreshold,
+} from '@/modules/persons';
 
 // ─── ApplicantIdentity ────────────────────────────────────────────────────────
 // getApplicant returns this shape: the applicant role row plus the linked
@@ -188,33 +192,57 @@ export async function listApplicantsPage(opts: {
   offset: number;
 }): Promise<{ rows: ApplicantListItem[]; total: number }> {
   const db = getDb();
-  const filters = [];
-  if (opts.query?.trim()) {
-    const q = `%${opts.query.trim()}%`;
-    // Name/SSS search runs on the Person (sole identity source since 0024).
-    filters.push(or(ilike(persons.firstName, q), ilike(persons.lastName, q), ilike(persons.sssNumber, q)));
-  }
-  if (opts.stage) filters.push(eq(applicants.pipelineStage, opts.stage));
-  const where = filters.length ? and(...filters) : undefined;
+  const trimmed = (opts.query ?? '').trim();
 
-  const rows = await db
-    .select({
-      ...getTableColumns(applicants),
-      firstName: persons.firstName,
-      lastName: persons.lastName,
-    })
-    .from(applicants)
-    .innerJoin(persons, eq(applicants.personId, persons.id))
-    .where(where)
-    .orderBy(desc(applicants.appliedOn))
-    .limit(opts.limit)
-    .offset(opts.offset);
-  const countRows = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(applicants)
-    .innerJoin(persons, eq(applicants.personId, persons.id))
-    .where(where);
-  return { rows, total: countRows[0]?.count ?? 0 };
+  // Route the query to ONE predicate, never an OR of both. A query that is all
+  // digits (ignoring spaces/dashes) is an SSS lookup; anything else is a name
+  // search. The name path uses the GIN trigram index (`persons_fullname_trgm`);
+  // OR-ing in a substring SSS match would drag the common name search back into
+  // a full-table scan, so SSS substring stays on its own (rare, small) branch.
+  const digits = trimmed.replace(/[\s-]/g, '');
+  const isSssQuery = trimmed.length > 0 && digits.length >= 4 && /^\d+$/.test(digits);
+  const isNameQuery = trimmed.length > 0 && !isSssQuery;
+
+  const stageFilter = opts.stage ? [eq(applicants.pipelineStage, opts.stage)] : [];
+  const queryFilter = isSssQuery
+    ? [ilike(persons.sssNumber, `%${trimmed}%`)]
+    : isNameQuery
+      ? [personFullNameMatches(trimmed)]
+      : [];
+  const allFilters = [...stageFilter, ...queryFilter];
+  const where = allFilters.length ? and(...allFilters) : undefined;
+
+  // Name search ranks by trigram similarity (best match first); otherwise newest first.
+  const order = isNameQuery
+    ? [personFullNameSimilarityDesc(trimmed), desc(applicants.appliedOn)]
+    : [desc(applicants.appliedOn)];
+
+  const run = async (runner: DbOrTx) => {
+    const [rows, countRows] = await Promise.all([
+      runner
+        .select({
+          ...getTableColumns(applicants),
+          firstName: persons.firstName,
+          lastName: persons.lastName,
+        })
+        .from(applicants)
+        .innerJoin(persons, eq(applicants.personId, persons.id))
+        .where(where)
+        .orderBy(...order)
+        .limit(opts.limit)
+        .offset(opts.offset),
+      runner
+        .select({ count: sql<number>`count(*)::int` })
+        .from(applicants)
+        .innerJoin(persons, eq(applicants.personId, persons.id))
+        .where(where),
+    ]);
+    return { rows, total: countRows[0]?.count ?? 0 };
+  };
+
+  // The trigram `%` operator honours the per-transaction SET LOCAL threshold —
+  // wrap only the name path so rows + count both see the 0.2 threshold.
+  return isNameQuery ? withNameSearchThreshold(db, run) : run(db);
 }
 
 // ─── advanceStage ───────────────────────────────────────────────────────────────
