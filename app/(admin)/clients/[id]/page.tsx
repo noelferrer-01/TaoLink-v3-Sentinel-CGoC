@@ -1,97 +1,86 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { clients } from '@/modules/clients';
+import { payrollCalendars } from '@/modules/payroll-calendars';
+import { PageShell } from '@/components/page-shell';
+import { Pagination, clampPageSize } from '@/components/pagination';
 import { AddDetachmentForm } from './add-detachment-form';
+import { ClientDetailBody } from './client-detail-body';
+import { DetachmentsList } from './detachments-list';
+
+function parsePage(raw: string | undefined): number {
+  const n = Number.parseInt(raw ?? '1', 10);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
 
 export default async function ClientDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<Record<string, string | undefined>>;
 }) {
   const { id } = await params;
-  const client = await clients.getClient(id);
+  const sp = await searchParams;
+  const page = parsePage(sp.page);
+  const pageSize = clampPageSize(sp.size);
+
+  const [client, detachmentResult, allCalendars] = await Promise.all([
+    clients.getClient(id),
+    clients.listDetachmentsWithDeploymentPage({
+      clientId: id,
+      limit: pageSize,
+      offset: (page - 1) * pageSize,
+    }),
+    payrollCalendars.list(),
+  ]);
   if (!client) notFound();
-  const detachments = await clients.listDetachments(id);
+
+  const { rows: detachments, total } = detachmentResult;
+  const currentCalendar =
+    client.defaultPayrollCalendarId
+      ? allCalendars.find((c) => c.id === client.defaultPayrollCalendarId) ?? null
+      : null;
 
   return (
-    <>
-      <header className="page-header">
-        <div className="breadcrumb">
-          <Link href="/clients" style={{ textDecoration: 'none' }}>
-            Clients
-          </Link>{' '}
-          · {client.name}
-        </div>
-        <h1 className="page-title">{client.name}</h1>
-        <p className="page-sub">
-          Manage the detachments &mdash; the actual locations where this
-          client&rsquo;s guards are deployed. You&rsquo;ll assign guards to
-          detachments, not directly to clients.
-        </p>
-      </header>
+    <PageShell
+      breadcrumb={
+        <>
+          <Link href="/clients">Clients</Link> · {client.name}
+        </>
+      }
+      title={client.name}
+      description="View and update this client's details. The default payroll calendar drives cut-off and payday dates for pay runs at this client's detachments."
+      footerHint="Editing here updates the client record and writes to the audit log."
+    >
+      <ClientDetailBody
+        client={client}
+        allCalendars={allCalendars}
+        currentCalendar={currentCalendar}
+      />
 
-      <div className="card" style={{ marginBottom: '2rem' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-          <div>
-            <div className="field-label">Contact email</div>
-            <div style={{ marginTop: '0.25rem' }}>
-              {client.contactEmail ?? <span style={{ color: 'var(--muted)' }}>—</span>}
-            </div>
-          </div>
-          <div>
-            <div className="field-label">Contact phone</div>
-            <div style={{ marginTop: '0.25rem' }}>
-              {client.contactPhone ?? <span style={{ color: 'var(--muted)' }}>—</span>}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="section-rule">
+      <div className="section-rule" style={{ marginTop: '2.5rem' }}>
         <h2>Detachments</h2>
       </div>
 
       <div className="page-toolbar">
         <div className="page-toolbar-meta">
-          {detachments.length} {detachments.length === 1 ? 'detachment' : 'detachments'}
+          {total}{' '}
+          {total === 1 ? 'detachment' : 'detachments'}
         </div>
       </div>
 
-      {detachments.length === 0 ? (
-        <div className="empty-state">
-          <h3>No detachments yet</h3>
-          <p>
-            Add the first detachment for {client.name}. A detachment is the
-            physical location where guards work — for example a mall, an office
-            tower, or a warehouse.
-          </p>
-        </div>
-      ) : (
-        <div className="table-wrap">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Detachment</th>
-                <th>Address</th>
-                <th>Added</th>
-              </tr>
-            </thead>
-            <tbody>
-              {detachments.map((d) => (
-                <tr key={d.id}>
-                  <td>
-                    <div className="cell-name">{d.name}</div>
-                  </td>
-                  <td>{d.address ?? <span style={{ color: 'var(--muted)' }}>—</span>}</td>
-                  <td className="cell-num">{d.createdAt.toISOString().slice(0, 10)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      <DetachmentsList clientId={client.id} rows={detachments} />
+      <Pagination
+        total={total}
+        page={page}
+        pageSize={pageSize}
+        searchParams={sp}
+        basePath={`/clients/${client.id}`}
+        unitLabel="detachment"
+      />
 
       <AddDetachmentForm clientId={client.id} />
-    </>
+    </PageShell>
   );
 }

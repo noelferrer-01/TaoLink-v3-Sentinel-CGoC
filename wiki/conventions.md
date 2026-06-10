@@ -31,6 +31,23 @@ wiki/
 - Number is monotonic; never reuse.
 - On resolution, update the `decisions/index.md` table.
 
+## Slice contracts
+
+Slice contracts live in `slices/N-short-title.md` and follow this section order:
+
+1. **Header** — Status, Ships, Demo-at-end one-liner.
+2. **What Slice N buys us** — the *why*, in plain language.
+3. **Wireframes** — ASCII layout per impactful screen, with annotations for interactive behavior. Required for any slice that ships a user-facing screen.
+4. **UX walk-through** — narration of the demo as the end-user (clerk, recruiter, guard) would experience it, written *before* code. If a step requires a field the Components section doesn't include, the schema is wrong, not the walk-through.
+5. **Components** — per-module additions (schema, public API, dependencies, audit/events).
+6. **Cross-module contracts** — table of caller/callee + notes.
+7. **Done criteria** — numbered list. The slice is done iff *all* are true.
+8. **Discipline rules baked in** — slice-specific invariants + restated cross-slice rules.
+9. **Open questions resolved during drafting** — decisions captured so future readers can see the reasoning.
+10. **Out of scope** — what's explicitly deferred, with a pointer to where it lives.
+
+**Discipline:** Wireframes and UX walk-through precede the Components section. UI design happens at contract-drafting time, not at implementation-phase end. Established 2026-05-24 after Slice 1's UX walk surfaced ~15 polish items that contract-stage wireframing would have caught (see [`slices/1-first-payslip-ux-walk-findings.md`](slices/1-first-payslip-ux-walk-findings.md) §J1). The wireframe drives the schema, not the other way around.
+
 ## When to add a page
 
 - **A decision is made** → ADR in `decisions/`.

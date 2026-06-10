@@ -6,14 +6,9 @@ import { assignments } from '@/modules/assignments';
 import { getSessionFromCookie } from '@/modules/auth';
 
 const assignSchema = z.object({
-  employeeId: z.string().uuid('Pick a guard from the dropdown.'),
+  employeeId: z.string().uuid('Pick an employee from the dropdown.'),
   detachmentId: z.string().uuid('Pick a detachment from the dropdown.'),
   startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Pick a start date.'),
-});
-
-const endSchema = z.object({
-  endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Pick an end date.'),
-  endReason: z.string().trim().min(1, 'Please write a short reason for ending this assignment.'),
 });
 
 export type FormState =
@@ -46,41 +41,101 @@ export async function assignAction(
       actorUserId: session.user.id,
     });
     revalidatePath('/assignments');
-    return { kind: 'success', message: 'Guard assigned.' };
+    return { kind: 'success', message: 'Employee assigned.' };
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
-    return { kind: 'error', message: `Couldn't assign the guard: ${message}` };
+    return { kind: 'error', message: `Couldn't assign the employee: ${message}` };
   }
 }
 
-export async function endAssignmentAction(
-  assignmentId: string,
-  _prev: FormState,
-  formData: FormData,
-): Promise<FormState> {
+// ─── Bulk actions ────────────────────────────────────────────────────────────
+
+const bulkTransferSchema = z.object({
+  employeeIds: z.array(z.string().uuid()).min(1, 'Select at least one row.'),
+  toDetachmentId: z.string().uuid('Pick a detachment from the dropdown.'),
+  transferDate: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Pick a transfer date.'),
+});
+
+const bulkEndSchema = z.object({
+  assignmentIds: z.array(z.string().uuid()).min(1, 'Select at least one row.'),
+  endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Pick an end date.'),
+  reason: z
+    .string()
+    .trim()
+    .min(3, 'Add a short reason so the audit log makes sense later.'),
+});
+
+export type BulkActionResult =
+  | { kind: 'ok'; succeeded: number; errors: { id: string; reason: string }[] }
+  | { kind: 'error'; message: string };
+
+export async function bulkTransferAction(
+  employeeIds: string[],
+  toDetachmentId: string,
+  transferDate: string,
+): Promise<BulkActionResult> {
   const session = await getSessionFromCookie();
-  if (!session) return { kind: 'error', message: 'Your session expired. Please sign in again.' };
+  if (!session) {
+    return { kind: 'error', message: 'Your session expired. Please sign in again.' };
+  }
 
-  const parsed = endSchema.safeParse({
-    endDate: formData.get('endDate'),
-    endReason: formData.get('endReason'),
-  });
-
+  const parsed = bulkTransferSchema.safeParse({ employeeIds, toDetachmentId, transferDate });
   if (!parsed.success) {
     return { kind: 'error', message: parsed.error.issues[0]?.message ?? 'Please check the form.' };
   }
 
   try {
-    await assignments.endAssignment(
-      assignmentId,
-      parsed.data.endDate,
-      parsed.data.endReason,
-      { actorUserId: session.user.id },
+    const result = await assignments.bulkTransfer(
+      parsed.data.employeeIds,
+      parsed.data.toDetachmentId,
+      parsed.data.transferDate,
+      session.user.id,
     );
     revalidatePath('/assignments');
-    return { kind: 'success', message: 'Assignment ended.' };
+    return {
+      kind: 'ok',
+      succeeded: result.transferred.length,
+      errors: result.errors.map((e) => ({ id: e.employeeId, reason: e.reason })),
+    };
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
-    return { kind: 'error', message: `Couldn't end the assignment: ${message}` };
+    return { kind: 'error', message: `Couldn't transfer: ${message}` };
   }
 }
+
+export async function bulkEndAssignmentsAction(
+  assignmentIds: string[],
+  endDate: string,
+  reason: string,
+): Promise<BulkActionResult> {
+  const session = await getSessionFromCookie();
+  if (!session) {
+    return { kind: 'error', message: 'Your session expired. Please sign in again.' };
+  }
+
+  const parsed = bulkEndSchema.safeParse({ assignmentIds, endDate, reason });
+  if (!parsed.success) {
+    return { kind: 'error', message: parsed.error.issues[0]?.message ?? 'Please check the form.' };
+  }
+
+  try {
+    const result = await assignments.bulkEndAssignments(
+      parsed.data.assignmentIds,
+      parsed.data.endDate,
+      parsed.data.reason,
+      session.user.id,
+    );
+    revalidatePath('/assignments');
+    return {
+      kind: 'ok',
+      succeeded: result.ended.length,
+      errors: result.errors.map((e) => ({ id: e.assignmentId, reason: e.reason })),
+    };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    return { kind: 'error', message: `Couldn't end assignments: ${message}` };
+  }
+}
+

@@ -3,6 +3,18 @@ import { complianceExports } from '@/modules/compliance-exports';
 import { hr } from '@/modules/hr';
 import { getSessionFromCookie } from '@/modules/auth';
 
+/**
+ * GET /api/exports/bir-2316/[employeeId]/[year]
+ *
+ * Streams a BIR Form 2316 PDF as application/pdf with Content-Disposition
+ * attachment. Warnings (missing RDO / DOB / address / no locked pay runs)
+ * are surfaced *separately* via the filing-readiness preview server action
+ * before the user clicks download — see app/(admin)/exports/bir-picker.tsx.
+ * The download response intentionally carries no warning headers because
+ * HTTP headers are Latin-1 and warning copy contains em dashes (UTF-8).
+ *
+ * Mirrors the SSS R-3 route-handler pattern.
+ */
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ employeeId: string; year: string }> },
@@ -20,19 +32,21 @@ export async function GET(
 
   const emp = await hr.getEmployee(employeeId);
   if (!emp) {
-    return new NextResponse('Guard not found', { status: 404 });
+    return new NextResponse('Employee not found', { status: 404 });
   }
 
   try {
-    const result = await complianceExports.exportBIR_2316(employeeId, yearNum, {
+    const { pdf } = await complianceExports.exportBIR_2316(employeeId, yearNum, {
       actorUserId: session.user.id,
     });
-    const safeName = `${emp.lastName}_${emp.firstName}`.replace(/[^a-z0-9_-]/gi, '_');
-    const filename = `bir-2316_${safeName}_${yearNum}.json`;
-    return new NextResponse(JSON.stringify(result, null, 2), {
+
+    const safeName = `${emp.employeeCode}`.replace(/[^a-z0-9_-]/gi, '_');
+    const filename = `2316-${safeName}-${yearNum}.pdf`;
+
+    return new NextResponse(new Uint8Array(pdf), {
       status: 200,
       headers: {
-        'Content-Type': 'application/json; charset=utf-8',
+        'Content-Type': 'application/pdf',
         'Content-Disposition': `attachment; filename="${filename}"`,
       },
     });

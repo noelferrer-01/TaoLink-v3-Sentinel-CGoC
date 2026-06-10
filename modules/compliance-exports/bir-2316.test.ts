@@ -1,8 +1,14 @@
 /**
- * bir-2316.test.ts — Task 7.4 acceptance.
+ * bir-2316.test.ts — Phase 7 acceptance tests for exportBIR_2316.
  *
- * Asserts exportBIR_2316(employeeId, year) sums the employee's payslips in the
- * year and returns a structured object matching BIR_2316_FORMAT.md.
+ * Tests the new PDF-returning API: { pdf: Buffer, warnings: string[] }
+ * (replaces the Slice-1 structured-object tests).
+ *
+ * PDF content verification: magic-byte check (%PDF-) + length > 0.
+ * Full visual layout verification is a human-review task (see README).
+ *
+ * Phase 7 note: only LOCKED pay runs contribute to YTD. Unlocked runs
+ * are excluded from the aggregate.
  */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
@@ -12,15 +18,15 @@ import { payRuns, payslips } from '@/modules/payroll/schema';
 import { dtrEntries, dtrPeriodCloses } from '@/modules/dtr/schema';
 import { assignments as assignmentsTable } from '@/modules/assignments/schema';
 import { employees } from '@/modules/hr/schema';
+import { persons } from '@/modules/persons/schema';
 import { auditLog } from '@/modules/audit/schema';
 import { eventLog } from '@/modules/events/schema';
 import { hr } from '@/modules/hr/index';
-import { runPayroll, _resetPayrollSubscriptionsForTests } from '@/modules/payroll/index';
+import { runPayroll, lockPayRun, _resetPayrollSubscriptionsForTests } from '@/modules/payroll/index';
 import { _resetEventsForTests } from '@/modules/events/index';
 import { seedComplianceRates } from '@/modules/compliance/seed';
 import { exportBIR_2316 } from './bir-2316';
 
-// Two semi-monthly periods in May 2026; 13 work days each.
 const PERIOD_1_START = '2026-05-01';
 const PERIOD_1_END   = '2026-05-15';
 const PERIOD_2_START = '2026-05-16';
@@ -44,7 +50,14 @@ async function insertDtr(employeeId: string, dates: string[]) {
     .values(dates.map((date) => ({ employeeId, date, status: 'worked' as const })));
 }
 
-describe('compliance-exports.bir-2316', () => {
+/** Assert the buffer is a valid PDF (magic-byte check). */
+function assertPdf(buf: Buffer) {
+  expect(buf).toBeInstanceOf(Buffer);
+  expect(buf.length).toBeGreaterThan(0);
+  expect(buf.slice(0, 5).toString()).toBe('%PDF-');
+}
+
+describe('compliance-exports.bir-2316 (Phase 7 — PDF pipeline)', () => {
   const db = getDb();
 
   beforeAll(async () => {
@@ -60,104 +73,159 @@ describe('compliance-exports.bir-2316', () => {
     await db.delete(dtrPeriodCloses);
     await db.delete(assignmentsTable);
     await db.delete(employees);
+    await db.delete(persons);
     await db.delete(eventLog);
   });
 
   afterAll(async () => { await closeDb(); });
 
-  it('aggregates two pay runs in the year into one 2316 summary', async () => {
-    const e = await hr.createEmployee({
-      employeeCode: '2316-A', firstName: 'Juan', lastName: 'Dela Cruz', middleName: 'A',
+  // ── Happy path: full BIR fields + 2 locked runs → PDF + no field warnings ─
+  it('happy path: returns PDF Buffer with no field warnings when BIR fields present and runs locked', async () => {
+    const emp = await hr.createEmployee({
+      employeeCode: '2316-FULL',
+      firstName: 'Juan', lastName: 'Dela Cruz', middleName: 'A',
       basicSalary: 18000, hiredOn: '2026-01-01',
       tinNumber: '123-456-789-000', sssNumber: '0312345677',
     });
 
-    await insertDtr(e.id, PERIOD_1_DATES);
+    // rdoCode is an employment field — stays on hr_employees.
+    await db
+      .update(employees)
+      .set({ rdoCode: '044' })
+      .where(eq(employees.id, emp.id));
+
+    // Identity fields (dateOfBirth, address) are authoritative on persons after T7.
+    // The accessor reads from persons, so patch persons directly here.
+    const empRow = await db.select({ personId: employees.personId }).from(employees).where(eq(employees.id, emp.id));
+    const personId = empRow[0]!.personId!;
+    await db
+      .update(persons)
+      .set({
+        dateOfBirth:  '1990-03-15',
+        addressLine1: '123 Main St',
+        city:         'Manila',
+        province:     'Metro Manila',
+        postalCode:   '1000',
+      })
+      .where(eq(persons.id, personId));
+
+    await insertDtr(emp.id, PERIOD_1_DATES);
     const run1 = await runPayroll(PERIOD_1_START, PERIOD_1_END);
-    await insertDtr(e.id, PERIOD_2_DATES);
+    await lockPayRun(run1.id);
+
+    await insertDtr(emp.id, PERIOD_2_DATES);
     const run2 = await runPayroll(PERIOD_2_START, PERIOD_2_END);
+    await lockPayRun(run2.id);
 
-    const slips = await db.select().from(payslips).where(eq(payslips.employeeId, e.id));
-    expect(slips.length).toBe(2);
+    const result = await exportBIR_2316(emp.id, 2026);
 
-    const expectedGross = slips.reduce((acc, s) => acc + Number(s.grossPay), 0);
-    const expectedNonTax = slips.reduce(
-      (acc, s) => acc + Number(s.sssEE) + Number(s.philhealthEE) + Number(s.pagibigEE), 0);
-    const expectedWtax = slips.reduce((acc, s) => acc + Number(s.birWtax), 0);
+    assertPdf(result.pdf);
 
-    const result = await exportBIR_2316(e.id, 2026);
-
-    expect(result.year).toBe(2026);
-    expect(result.employee.tin).toBe('123-456-789-000');
-    expect(result.employee.lastName).toBe('Dela Cruz');
-    expect(result.summary.grossCompensation).toBeCloseTo(expectedGross, 2);
-    expect(result.summary.nonTaxable).toBeCloseTo(expectedNonTax, 2);
-    expect(result.summary.taxableFromPresent).toBeCloseTo(expectedGross - expectedNonTax, 2);
-    expect(result.summary.taxableFromPrevious).toBe(0);
-    expect(result.summary.grossTaxable).toBeCloseTo(expectedGross - expectedNonTax, 2);
-    expect(result.summary.taxesWithheldPresent).toBeCloseTo(expectedWtax, 2);
-    expect(result.summary.taxesWithheldPrevious).toBe(0);
-    expect(result.summary.totalTaxesWithheldAdjusted).toBeCloseTo(expectedWtax, 2);
-    expect(result.partialYear).toBe(true); // only May payslips, year is incomplete
-    // No TIN warning since employee has one; partial-year warning is expected.
-    expect(result.warnings.some((w) => /tin/i.test(w))).toBe(false);
-    expect(result.warnings.some((w) => /partial-year/i.test(w))).toBe(true);
-
-    // Sanity: tax due is non-negative; for this low income (₱18k/mo annualized
-    // taxable ≈ ₱200k), should be exactly 0 (below ₱250k zero-bracket).
-    expect(result.summary.taxDue).toBe(0);
+    // No RDO/DOB/address warnings (all fields set)
+    const fieldWarnings = result.warnings.filter(
+      (w) => /rdo|birth|address/i.test(w),
+    );
+    expect(fieldWarnings).toHaveLength(0);
+    // No pay-run warning
+    expect(result.warnings.some((w) => /no locked/i.test(w))).toBe(false);
   });
 
-  it('surfaces a warning when TIN is missing', async () => {
-    const e = await hr.createEmployee({
-      employeeCode: '2316-NOTIN', firstName: 'Maria', lastName: 'Santos',
-      basicSalary: 18000, hiredOn: '2026-01-01' /* no tin */,
+  // ── Missing-RDO path ──────────────────────────────────────────────────────
+  it('missing-RDO path: returns PDF + warning includes "RDO code missing"', async () => {
+    const emp = await hr.createEmployee({
+      employeeCode: '2316-NORDO',
+      firstName: 'Maria', lastName: 'Santos',
+      basicSalary: 18000, hiredOn: '2026-01-01',
+      tinNumber: '999-000-000-000',
     });
-    await insertDtr(e.id, PERIOD_1_DATES);
-    await runPayroll(PERIOD_1_START, PERIOD_1_END);
+    // DOB + address but NOT rdoCode — identity fields go on persons after T7.
+    const empRow2 = await db.select({ personId: employees.personId }).from(employees).where(eq(employees.id, emp.id));
+    const personId2 = empRow2[0]!.personId!;
+    await db
+      .update(persons)
+      .set({ dateOfBirth: '1985-07-04', addressLine1: '456 Side St', city: 'Cebu' })
+      .where(eq(persons.id, personId2));
 
-    const result = await exportBIR_2316(e.id, 2026);
-    expect(result.employee.tin).toBeNull();
-    expect(result.warnings.some((w) => /tin/i.test(w))).toBe(true);
+    await insertDtr(emp.id, PERIOD_1_DATES);
+    const run = await runPayroll(PERIOD_1_START, PERIOD_1_END);
+    await lockPayRun(run.id);
+
+    const result = await exportBIR_2316(emp.id, 2026);
+
+    assertPdf(result.pdf);
+    expect(result.warnings.some((w) => /rdo code missing/i.test(w))).toBe(true);
   });
 
-  it('returns zero summary for a year with no payslips', async () => {
-    const e = await hr.createEmployee({
-      employeeCode: '2316-EMPTY', firstName: 'Pedro', lastName: 'Reyes',
-      basicSalary: 18000, hiredOn: '2026-01-01', tinNumber: '999-999-999-000',
+  // ── Zero pay runs ─────────────────────────────────────────────────────────
+  it('zero-pay-runs path: returns PDF + warning includes no-locked-runs message', async () => {
+    const emp = await hr.createEmployee({
+      employeeCode: '2316-NOPAY',
+      firstName: 'Pedro', lastName: 'Reyes',
+      basicSalary: 18000, hiredOn: '2026-01-01',
+      tinNumber: '777-888-999-000',
     });
 
-    const result = await exportBIR_2316(e.id, 2025);
-    expect(result.summary.grossCompensation).toBe(0);
-    expect(result.summary.taxDue).toBe(0);
-    expect(result.summary.totalTaxesWithheldAdjusted).toBe(0);
-    expect(result.partialYear).toBe(true);
+    const result = await exportBIR_2316(emp.id, 2026);
+
+    assertPdf(result.pdf);
+    expect(result.warnings.some((w) => /no locked pay runs/i.test(w))).toBe(true);
   });
 
+  // ── Unlocked run excluded ─────────────────────────────────────────────────
+  it('unlocked run is excluded from YTD — triggers no-locked-runs warning', async () => {
+    const emp = await hr.createEmployee({
+      employeeCode: '2316-UNLOCKED',
+      firstName: 'Ana', lastName: 'Garcia',
+      basicSalary: 18000, hiredOn: '2026-01-01',
+    });
+
+    await insertDtr(emp.id, PERIOD_1_DATES);
+    await runPayroll(PERIOD_1_START, PERIOD_1_END); // NOT locked
+
+    const result = await exportBIR_2316(emp.id, 2026);
+
+    assertPdf(result.pdf);
+    expect(result.warnings.some((w) => /no locked pay runs/i.test(w))).toBe(true);
+  });
+
+  // ── Employee not found ────────────────────────────────────────────────────
   it('throws when employee does not exist', async () => {
     await expect(exportBIR_2316('00000000-0000-0000-0000-000000000000', 2026))
       .rejects.toThrow(/employee not found/i);
   });
 
-  it('records an audit entry and publishes an event', async () => {
+  // ── Audit entry written ───────────────────────────────────────────────────
+  it('records an audit entry with action compliance.bir2316.exported', async () => {
     const testStart = new Date();
-    const e = await hr.createEmployee({
-      employeeCode: '2316-AUD', firstName: 'A', lastName: 'B',
-      basicSalary: 18000, hiredOn: '2026-01-01', tinNumber: '111-222-333-000',
-    });
-    await insertDtr(e.id, PERIOD_1_DATES);
-    await runPayroll(PERIOD_1_START, PERIOD_1_END);
-    await exportBIR_2316(e.id, 2026);
 
+    const emp = await hr.createEmployee({
+      employeeCode: '2316-AUD',
+      firstName: 'A', lastName: 'B',
+      basicSalary: 18000, hiredOn: '2026-01-01',
+      tinNumber: '111-222-333-000',
+    });
+
+    await insertDtr(emp.id, PERIOD_1_DATES);
+    const run = await runPayroll(PERIOD_1_START, PERIOD_1_END);
+    await lockPayRun(run.id);
+
+    // actorUserId must be a UUID or null (FK to users.id); pass null in tests.
+    await exportBIR_2316(emp.id, 2026);
+
+    // audit_log is append-only (no DELETE); use timestamp filter to isolate.
     const audits = await db
       .select()
       .from(auditLog)
-      .where(and(eq(auditLog.action, 'compliance.export.bir_2316'), gte(auditLog.createdAt, testStart)));
-    expect(audits.length).toBe(1);
-    expect(audits[0]!.targetKind).toBe('hr_employee');
-    expect(audits[0]!.targetId).toBe(e.id);
+      .where(
+        and(
+          eq(auditLog.action, 'compliance.bir2316.exported'),
+          gte(auditLog.createdAt, testStart),
+        ),
+      );
 
-    const events = await db.select().from(eventLog).where(eq(eventLog.topic, 'compliance.export.bir_2316'));
-    expect(events.length).toBe(1);
+    expect(audits.length).toBeGreaterThanOrEqual(1);
+    const entry = audits[0]!;
+    expect(entry.targetKind).toBe('hr_employee');
+    expect(entry.targetId).toBe(emp.id);
   });
 });

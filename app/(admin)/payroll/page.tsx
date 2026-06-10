@@ -1,5 +1,12 @@
 import Link from 'next/link';
 import { payroll } from '@/modules/payroll';
+import { PageShell } from '@/components/page-shell';
+import { Pagination, clampPageSize } from '@/components/pagination';
+
+function parsePage(raw: string | undefined): number {
+  const n = Number.parseInt(raw ?? '1', 10);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
 
 function statusLabel(s: string): string {
   switch (s) {
@@ -19,29 +26,34 @@ function statusClass(s: string): string {
   }
 }
 
-export default async function PayrollPage() {
-  const runs = await payroll.listPayRuns();
+export default async function PayrollPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | undefined>>;
+}) {
+  const params = await searchParams;
+  const page = parsePage(params.page);
+  const pageSize = clampPageSize(params.size);
+
+  const { rows: runs, total } = await payroll.listPayRunsPage({
+    limit: pageSize,
+    offset: (page - 1) * pageSize,
+  });
 
   return (
-    <>
-      <header className="page-header">
-        <div className="breadcrumb">Sentinel · Payroll</div>
-        <h1 className="page-title">Pay runs</h1>
-        <p className="page-sub">
-          One row per closed DTR period. Open a pay run to see every guard&rsquo;s
-          payslip with the four statutory deductions (SSS, PhilHealth,
-          Pag-IBIG, withholding tax). Lock the run when you&rsquo;re ready to
-          file government reports.
-        </p>
-      </header>
-
+    <PageShell
+      breadcrumb={<>Sentinel · Payroll · Pay runs</>}
+      title="Pay runs"
+      description="One row per closed DTR period. Open a pay run to see every employee's payslip with the four statutory deductions (SSS, PhilHealth, Pag-IBIG, withholding tax). Lock the run when you're ready to file government reports."
+      footerHint="Closed periods land here automatically. Open a row to view payslips and lock the run for export."
+    >
       <div className="page-toolbar">
         <div className="page-toolbar-meta">
-          {runs.length} pay {runs.length === 1 ? 'run' : 'runs'} on file
+          {total} pay {total === 1 ? 'run' : 'runs'} on file
         </div>
       </div>
 
-      {runs.length === 0 ? (
+      {total === 0 ? (
         <div className="empty-state">
           <h3>No pay runs yet</h3>
           <p>
@@ -99,6 +111,15 @@ export default async function PayrollPage() {
           </table>
         </div>
       )}
-    </>
+
+      <Pagination
+        total={total}
+        page={page}
+        pageSize={pageSize}
+        searchParams={params}
+        basePath="/payroll"
+        unitLabel="pay run"
+      />
+    </PageShell>
   );
 }

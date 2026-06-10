@@ -1,30 +1,59 @@
 import {
   createClient,
   getClient,
+  updateClient,
+  deleteClient,
   listClients,
+  listClientsPage,
   listClientsWithDetachments,
   createDetachment,
   getDetachment,
+  updateDetachment,
   listDetachments,
+  getDetachmentDeploymentSummary,
+  listDetachmentsWithDeployment,
+  listDetachmentsWithDeploymentPage,
 } from './service';
 
-export type { ClientWithDetachments } from './service';
+export type {
+  ClientWithDetachments,
+  DeploymentSummary,
+  DetachmentWithDeployment,
+  ListClientsPageOptions,
+  ListClientsPageResult,
+  ListDetachmentsWithDeploymentPageOptions,
+  ListDetachmentsWithDeploymentPageResult,
+} from './service';
 
 export const clients = {
   createClient,
   getClient,
+  updateClient,
+  deleteClient,
   listClients,
+  listClientsPage,
   listClientsWithDetachments,
   createDetachment,
   getDetachment,
+  updateDetachment,
   listDetachments,
+  getDetachmentDeploymentSummary,
+  listDetachmentsWithDeployment,
+  listDetachmentsWithDeploymentPage,
 };
 export {
   createClient,
   getClient,
+  updateClient,
+  deleteClient,
   listClients,
+  listClientsPage,
   listClientsWithDetachments,
   createDetachment,
   getDetachment,
+  updateDetachment,
   listDetachments,
+  getDetachmentDeploymentSummary,
+  listDetachmentsWithDeployment,
+  listDetachmentsWithDeploymentPage,
 };

@@ -1,40 +1,54 @@
 import Link from 'next/link';
 import { assignments } from '@/modules/assignments';
 import { clients } from '@/modules/clients';
+import { PageShell } from '@/components/page-shell';
+import { Pagination, clampPageSize } from '@/components/pagination';
 import { AssignForm } from './assign-form';
-import { EndAssignmentRow } from './end-assignment-row';
+import { AssignmentsListBody } from './assignments-list-body';
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-export default async function AssignmentsPage() {
+function parsePage(raw: string | undefined): number {
+  const n = Number.parseInt(raw ?? '1', 10);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
+export default async function AssignmentsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | undefined>>;
+}) {
+  const params = await searchParams;
+  const page = parsePage(params.page);
+  const pageSize = clampPageSize(params.size);
   const asOf = today();
-  const [active, assignable, clientsWithDetachments] = await Promise.all([
-    assignments.listActiveAssignments(asOf),
+
+  const [activeResult, assignable, clientsWithDetachments] = await Promise.all([
+    assignments.listActiveAssignments(asOf, {
+      limit: pageSize,
+      offset: (page - 1) * pageSize,
+    }),
     assignments.listAssignableEmployees(asOf),
     clients.listClientsWithDetachments(),
   ]);
 
+  const { rows: active, total } = activeResult;
   const hasGuards = assignable.length > 0;
   const hasDetachments = clientsWithDetachments.some((c) => c.detachments.length > 0);
   const blocked = !hasGuards || !hasDetachments;
 
   return (
-    <>
-      <header className="page-header">
-        <div className="breadcrumb">Sentinel · Operations</div>
-        <h1 className="page-title">Assignments</h1>
-        <p className="page-sub">
-          Who&rsquo;s working where. Assign a guard to a detachment, end an
-          assignment when the contract changes or the guard moves on. A guard
-          can have only one active assignment at a time.
-        </p>
-      </header>
-
+    <PageShell
+      breadcrumb={<>Sentinel · Operations · Assignments</>}
+      title="Assignments"
+      description="Who's working where. Assign an employee to a detachment, end an assignment when the contract changes or the employee moves on. An employee can have only one active assignment at a time."
+      footerHint="Select rows to transfer or end in bulk. Use the form above to add one assignment at a time."
+    >
       <div className="page-toolbar">
         <div className="page-toolbar-meta">
-          {active.length} active {active.length === 1 ? 'assignment' : 'assignments'}
+          {total} active {total === 1 ? 'assignment' : 'assignments'}
         </div>
       </div>
 
@@ -44,17 +58,17 @@ export default async function AssignmentsPage() {
         today={asOf}
       />
 
-      {blocked && active.length === 0 ? (
+      {blocked && total === 0 ? (
         <div className="empty-state">
           <h3>Nothing assigned yet</h3>
           <p>
-            Before you can assign anyone, you need at least one guard on file{' '}
+            Before you can assign anyone, you need at least one employee on file{' '}
             <strong>and</strong> at least one client with a detachment.
           </p>
           <div className="empty-state-actions">
             {!hasGuards ? (
               <Link href="/employees/import" className="btn btn--ghost">
-                Import guards →
+                Import employees →
               </Link>
             ) : null}
             {!hasDetachments ? (
@@ -64,52 +78,23 @@ export default async function AssignmentsPage() {
             ) : null}
           </div>
         </div>
-      ) : active.length === 0 ? (
-        <div className="empty-state">
-          <h3>No active assignments</h3>
-          <p>Use the &ldquo;Assign a guard&rdquo; button above to put a guard on a detachment.</p>
-        </div>
       ) : (
-        <div className="table-wrap">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Guard</th>
-                <th>Client &amp; detachment</th>
-                <th>Started</th>
-                <th aria-label="Actions"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {active.map((a) => (
-                <tr key={a.id}>
-                  <td>
-                    <div className="cell-name">
-                      {a.employee.lastName}, {a.employee.firstName}
-                    </div>
-                    <div className="cell-sub" style={{ fontFamily: 'var(--ff-mono)' }}>
-                      {a.employee.employeeCode}
-                    </div>
-                  </td>
-                  <td>
-                    <div className="cell-name">{a.detachment.name}</div>
-                    <div className="cell-sub">{a.client.name}</div>
-                  </td>
-                  <td className="cell-num">{a.startDate}</td>
-                  <td>
-                    <EndAssignmentRow
-                      assignmentId={a.id}
-                      today={asOf}
-                      guardName={`${a.employee.firstName} ${a.employee.lastName}`}
-                      detachmentName={a.detachment.name}
-                    />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <>
+          <AssignmentsListBody
+            rows={active}
+            clientsWithDetachments={clientsWithDetachments}
+            today={asOf}
+          />
+          <Pagination
+            total={total}
+            page={page}
+            pageSize={pageSize}
+            searchParams={params}
+            basePath="/assignments"
+            unitLabel="assignment"
+          />
+        </>
       )}
-    </>
+    </PageShell>
   );
 }

@@ -27,8 +27,15 @@
   - [0015 — VPS deployment (deferred)](decisions/0015-vps-deployment.md) — **PARTIALLY RESOLVED**
   - [0016 — Cross-platform deployment](decisions/0016-cross-platform-deployment.md) — **RESOLVED**
 
+## Slices
+- [slices/0-foundation.md](slices/0-foundation.md) — Slice 0: auth/audit/approvals/events primitives. **SHIPPED.**
+- [slices/1-first-payslip.md](slices/1-first-payslip.md) — Slice 1: HR + Clients/Detachments + Assignments + DTR + Payroll (4-deduction) + SSS R3 + BIR 2316. **SHIPPED** (`slice-1-done` tag, 2026-05-24).
+- [slices/1-first-payslip-ux-walk-findings.md](slices/1-first-payslip-ux-walk-findings.md) — UX-walk findings from Slice 1 that feed Slice 2 scope.
+- [slices/2-multi-client-at-scale.md](slices/2-multi-client-at-scale.md) — Slice 2: sidebar + Employees rename + multi-select + typeahead/search + edit on masters + required_headcount + payroll calendar + BIR 2316 completion. **CONTRACT DRAFT** (2026-05-24).
+
 ## Runbooks
 - [runbooks/README.md](runbooks/README.md) — convention; populated as ops procedures emerge.
+- [runbooks/0024-retire-legacy-identity.md](runbooks/0024-retire-legacy-identity.md) — applying/rolling back the Slice 3a column-retirement migration (backup precondition, restore command, Task 12b note).
 
 ## Manuals
 - [manuals/README.md](manuals/README.md) — convention; end-user manuals populated as features ship.

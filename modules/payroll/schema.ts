@@ -9,6 +9,8 @@ export const payRuns = pgTable('pay_runs', {
   periodEnd: date('period_end').notNull(),
   status: payRunStatus('status').notNull().default('draft'),
   workDaysPerMonth: integer('work_days_per_month').notNull().default(26),
+  dtrCutoffDate: date('dtr_cutoff_date'),  // nullable for backfilled runs
+  paydayDate: date('payday_date'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   calculatedAt: timestamp('calculated_at', { withTimezone: true }),
   lockedAt: timestamp('locked_at', { withTimezone: true }),

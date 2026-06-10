@@ -28,6 +28,8 @@ Architectural Decision Records (ADRs) for the Sentinel project. One file per cal
 | [0014](0014-tool-stack-and-cost-discipline.md) | Tool stack & cost discipline (free-tier-first) | **RESOLVED 2026-05-24** | GitHub Actions / Sentry / Resend / R2 / Caddy / UptimeRobot free; OpenRouter for LLM (paid at Slice 7). |
 | [0015](0015-vps-deployment.md) | VPS deployment (deferred; local-first for now) | **PARTIALLY RESOLVED 2026-05-24** | Specs locked (Hostinger KVM4); provisioning + domain deferred until CGoC is ready. |
 | [0016](0016-cross-platform-deployment.md) | Cross-platform deployment (Mac + Windows + Linux) | **RESOLVED 2026-05-24** | Docker handles cross-platform. Fresh CGoC server (not their existing) if local prod replica needed. |
+| [0017](0017-person-centric-identity.md) | Person-centric identity (applicants & employees as roles on a shared Person) | **RESOLVED 2026-06-10** | One Person = single source of truth (no mirror columns; reads via accessor/view + GIN index on persons). Anchor ID on a ladder (PhilSys→SSS→TIN→passport→UMID→DL); gate at advance/hire, not at the front desk; non-blocking legacy. All-status exact matcher + format-check + dup flag; Person retention/redaction preserves 0004 purge intent. Refines 0009 & 0004. |
+| [0018](0018-credentials-first-class.md) | Licences & clearances as first-class durable records | **RESOLVED 2026-06-10** | `person_credentials` on the Person; expiry/requalification tracking; hire carries verified clearances forward. Pairs with 0017. |
 
 ## All gates closed — but for these
 

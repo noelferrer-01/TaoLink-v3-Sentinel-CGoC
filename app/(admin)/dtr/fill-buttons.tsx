@@ -62,7 +62,7 @@ export function FillAllButton({
         <button type="submit" className="btn" disabled={pending || employeeIds.length === 0}>
           {pending
             ? 'Filling all…'
-            : `Mark all ${employeeIds.length} guards as worked for this period`}
+            : `Mark all ${employeeIds.length} employees as worked for this period`}
         </button>
       </form>
       {state.kind === 'success' ? (

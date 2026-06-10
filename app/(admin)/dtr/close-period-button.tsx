@@ -42,7 +42,7 @@ export function ClosePeriodButton({
       </p>
       <ul style={{ margin: '0 0 0 1rem', color: 'var(--ink-soft)', paddingLeft: '0.5rem' }}>
         <li>Lock all DTR entries for this period (no more edits).</li>
-        <li>Automatically compute payslips for every guard with entries.</li>
+        <li>Automatically compute payslips for every employee with entries.</li>
       </ul>
       <p style={{ margin: 0, color: 'var(--ink-soft)' }}>
         You can still edit DTR for other periods. To unlock this one,

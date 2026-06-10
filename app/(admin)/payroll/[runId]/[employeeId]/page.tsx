@@ -10,9 +10,11 @@ export default async function PayslipPage({
   params: Promise<{ runId: string; employeeId: string }>;
 }) {
   const { runId, employeeId } = await params;
+  // getEmployeeWithIdentity: the guard's name lives on the Person (sole
+  // identity source since 0024), merged with the employment fields.
   const [run, employee, slips] = await Promise.all([
     payroll.getPayRun(runId),
-    hr.getEmployee(employeeId),
+    hr.getEmployeeWithIdentity(employeeId),
     payroll.listPayslips({ payRunId: runId, employeeId }),
   ]);
   if (!run || !employee || slips.length === 0) notFound();

@@ -4,10 +4,28 @@ import {
   getActiveAssignment,
   listActiveAssignments,
   listAssignmentsOverlappingPeriod,
+  listOverlappingEmployeesPage,
+  listOverlappingEmployeeIds,
   listAssignableEmployees,
+  bulkAssign,
+  bulkEndAssignments,
+  bulkTransfer,
+  updateAssignment,
+  list,
 } from './service';
 
-export type { ActiveAssignmentRow, AssignableEmployee } from './service';
+export type {
+  ActiveAssignmentRow,
+  AssignableEmployee,
+  BulkAssignResult,
+  BulkEndResult,
+  BulkTransferResult,
+  UpdateAssignmentPatch,
+  ListAssignmentsOptions,
+  ListAssignmentsResult,
+  ListOverlappingEmployeesPageOptions,
+  ListOverlappingEmployeesPageResult,
+} from './service';
 
 export const assignments = {
   assign,
@@ -15,7 +33,14 @@ export const assignments = {
   getActiveAssignment,
   listActiveAssignments,
   listAssignmentsOverlappingPeriod,
+  listOverlappingEmployeesPage,
+  listOverlappingEmployeeIds,
   listAssignableEmployees,
+  bulkAssign,
+  bulkEndAssignments,
+  bulkTransfer,
+  updateAssignment,
+  list,
 };
 
 export {
@@ -24,5 +49,12 @@ export {
   getActiveAssignment,
   listActiveAssignments,
   listAssignmentsOverlappingPeriod,
+  listOverlappingEmployeesPage,
+  listOverlappingEmployeeIds,
   listAssignableEmployees,
+  bulkAssign,
+  bulkEndAssignments,
+  bulkTransfer,
+  updateAssignment,
+  list,
 };

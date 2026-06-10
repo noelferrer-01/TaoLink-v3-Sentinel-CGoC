@@ -270,7 +270,7 @@ ref/
 1. Read `00-RESUME-POINT.md` (this file) end-to-end.
 2. Read `sentinel-docs/sentinel-conversation-log.md` — full decision history.
 3. Skim `sentinel-docs/commander-group-meeting-notes.md` and `sentinel-docs/sentinel-client-questionnaire.md` for context.
-4. Check the v3 workspace root (`/Users/user/Desktop/Antigravity Workflows/Taolink v3 - Sentinel/`) for any CLAUDE.md, memory/, mem0, or wiki/ Noel has set up — that's his fresh starting structure.
+4. Check the v3 workspace root (`/Volumes/1TB/Antigravity Workflows/Taolink v3 - Sentinel/`) for any CLAUDE.md, memory/, mem0, or wiki/ Noel has set up — that's his fresh starting structure.
 5. Ask Noel: **"Where do you want to start? Options:**
     - **(a) Send the client questionnaire** to Commander Group department heads so we can unblock Phase 0.
     - **(b) Stack call** — TypeScript vs Python — and lock the decision before anything else.

@@ -15,15 +15,20 @@
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import postgres from 'postgres';
-import { getEnv } from '../core/env';
+import { getActiveDatabaseUrl } from '../core/env';
 import { seedSuperAdmin } from '../modules/auth/bootstrap';
 import { closeDb } from '../core/db';
 
 const MIGRATIONS_DIR = path.resolve(__dirname, 'migrations');
 
+function redactCredentials(url: string): string {
+  return url.replace(/(postgres:\/\/[^:]+:)[^@]+(@)/i, '$1***$2');
+}
+
 async function main() {
-  const { DATABASE_URL } = getEnv();
-  const sql = postgres(DATABASE_URL, { max: 1, prepare: false });
+  const databaseUrl = getActiveDatabaseUrl();
+  console.log(`[migrate] target: ${redactCredentials(databaseUrl)}`);
+  const sql = postgres(databaseUrl, { max: 1, prepare: false });
 
   try {
     await sql`

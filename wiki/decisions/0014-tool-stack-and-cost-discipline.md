@@ -60,4 +60,4 @@ Noel pushed back on Anthropic-by-default; the pushback was correct. Anthropic-di
 ## Cross-references
 
 - [0005](0005-stack.md), [0006](0006-database.md), [0008](0008-dev-environment.md), [0015](0015-vps-deployment.md), [0016](0016-cross-platform-deployment.md).
-- Delegation framework that authorized these picks: `~/.claude/projects/-Users-user-Desktop-Aintigravity-Workflows-Taolink-v3---Sentinel/memory/feedback_delegation_framework.md`.
+- Delegation framework that authorized these picks: `~/.claude/projects/-Volumes-1TB-Antigravity-Workflows-Taolink-v3---Sentinel/memory/feedback_delegation_framework.md`.

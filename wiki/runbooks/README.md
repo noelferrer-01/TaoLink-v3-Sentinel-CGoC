@@ -10,7 +10,9 @@ Operational procedures for running the Sentinel system.
 
 ## Status
 
-Empty. Runbooks will land here as ops procedures emerge during and after Phase 0.
+- [`0024-retire-legacy-identity.md`](0024-retire-legacy-identity.md) — Slice 3a column-retirement migration: backup precondition, apply, verify, restore path, Task 12b note.
+
+More runbooks land here as ops procedures emerge during and after Phase 0.
 
 ## Examples of expected runbooks (future)
 

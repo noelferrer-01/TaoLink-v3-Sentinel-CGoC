@@ -7,11 +7,12 @@
  * numeric column contract.
  */
 
-import { and, between, count, desc, eq, inArray, notInArray } from 'drizzle-orm';
+import { and, between, count, desc, eq, inArray, notInArray, sql } from 'drizzle-orm';
 import { getDb } from '@/core/db';
 import { payRuns, payslips, type PayRun, type Payslip } from './schema';
 import { computePayrollLine, type PayrollRates } from './compute';
 import { employees } from '@/modules/hr/schema';
+import { persons } from '@/modules/persons/schema';
 import { dtrEntries, type DtrEntry } from '@/modules/dtr/schema';
 import {
   sssBracketForMonthly,
@@ -21,6 +22,13 @@ import {
 } from '@/modules/compliance/service';
 import { audit } from '@/modules/audit';
 import { events } from '@/modules/events';
+import { resolveForPeriod } from '@/modules/payroll-calendars/service';
+
+// Sentinel UUID used when resolving the global-default calendar in a run that
+// has no per-client scope yet. resolveForPeriod → getForClient will find no
+// match for this ID and fall back to the global-default calendar row (or
+// fallback-defaults if none exists).
+const GLOBAL_CALENDAR_SENTINEL = '00000000-0000-0000-0000-000000000000';
 
 // Statuses to EXCLUDE from the payroll run (non-active statuses).
 const EXCLUDED_STATUSES = ['applicant', 'terminated'] as const;
@@ -100,6 +108,14 @@ export async function runPayroll(
       // Slice-1: OT hours not yet captured via UI.
       const otHours = 0;
 
+      // No attendance in this period → no payslip. Prevents hired-but-undeployed
+      // employees (e.g. fresh hires from Recruitment) from generating a phantom
+      // payslip that carries statutory deductions into the SSS R-3 / BIR exports.
+      // See wiki/slices/3-recruitment-ats.md §2.
+      if (daysWorked === 0 && otHours === 0) {
+        continue;
+      }
+
       const basicSalaryMonthly = Number(emp.basicSalary);
       const workDaysPerMonth = run.workDaysPerMonth;
 
@@ -174,10 +190,27 @@ export async function runPayroll(
     }
   }
 
-  // ── Step 4: Finalize the pay_run ─────────────────────────────────────────
+  // ── Step 4: Resolve calendar dates and finalize the pay_run ─────────────
+  // Calendar resolution uses the global-default calendar (Slice 1 runs are
+  // not scoped to a specific client). Per-client resolution will be added in
+  // a later slice when pay_runs gains a clientId column.
+  const resolved = await resolveForPeriod(
+    GLOBAL_CALENDAR_SENTINEL,
+    new Date(periodStart + 'T00:00:00Z'),
+    new Date(periodEnd + 'T00:00:00Z'),
+  );
+  // Format as YYYY-MM-DD for the date column.
+  const dtrCutoffDateStr = resolved.dtrCutoffDate.toISOString().slice(0, 10);
+  const paydayDateStr = resolved.paydayDate.toISOString().slice(0, 10);
+
   const [updated] = await db
     .update(payRuns)
-    .set({ status: 'calculated', calculatedAt: new Date() })
+    .set({
+      status: 'calculated',
+      calculatedAt: new Date(),
+      dtrCutoffDate: dtrCutoffDateStr,
+      paydayDate: paydayDateStr,
+    })
     .where(eq(payRuns.id, run.id))
     .returning();
 
@@ -307,6 +340,23 @@ export async function listPayRuns(): Promise<PayRun[]> {
   return getDb().select().from(payRuns).orderBy(desc(payRuns.periodStart));
 }
 
+// Paginated list-page sibling of listPayRuns. Kept separate so the dropdown
+// callers (e.g. /exports) still get the full list.
+export type ListPayRunsPageOptions = { limit?: number; offset?: number };
+export type ListPayRunsPageResult = { rows: PayRun[]; total: number };
+export async function listPayRunsPage(
+  opts: ListPayRunsPageOptions = {},
+): Promise<ListPayRunsPageResult> {
+  const db = getDb();
+  const limit = Math.max(1, Math.min(opts.limit ?? 50, 500));
+  const offset = Math.max(opts.offset ?? 0, 0);
+  const [rows, countResult] = await Promise.all([
+    db.select().from(payRuns).orderBy(desc(payRuns.periodStart)).limit(limit).offset(offset),
+    db.select({ total: count() }).from(payRuns),
+  ]);
+  return { rows, total: countResult[0]?.total ?? 0 };
+}
+
 export async function getPayRun(id: string): Promise<PayRun | null> {
   const rows = await getDb().select().from(payRuns).where(eq(payRuns.id, id)).limit(1);
   return rows[0] ?? null;
@@ -323,21 +373,114 @@ export async function listPayslipsWithEmployee(payRunId: string): Promise<Paysli
       payslip: payslips,
       employeeId: employees.id,
       employeeCode: employees.employeeCode,
-      firstName: employees.firstName,
-      lastName: employees.lastName,
+      // T9: name sourced from persons (LEFT JOIN so rows survive a missing personId).
+      firstName: persons.firstName,
+      lastName: persons.lastName,
     })
     .from(payslips)
     .innerJoin(employees, eq(employees.id, payslips.employeeId))
+    .leftJoin(persons, eq(persons.id, employees.personId))
     .where(eq(payslips.payRunId, payRunId))
-    .orderBy(employees.lastName, employees.firstName);
+    .orderBy(persons.lastName, persons.firstName);
 
   return rows.map((r) => ({
     ...r.payslip,
     employee: {
       id: r.employeeId,
       employeeCode: r.employeeCode,
-      firstName: r.firstName,
-      lastName: r.lastName,
+      firstName: r.firstName ?? '',
+      lastName: r.lastName ?? '',
     },
   }));
+}
+
+// Paginated list-page sibling of listPayslipsWithEmployee. Same JOIN +
+// COUNT(*) over payslips for the run. Per-run payslip count can hit
+// 500+ at full agency scale (BIR-2316-ZIP at year-end), so paginate.
+export type ListPayslipsWithEmployeePageOptions = {
+  limit?: number;
+  offset?: number;
+};
+export type ListPayslipsWithEmployeePageResult = {
+  rows: PayslipWithEmployee[];
+  total: number;
+};
+export async function listPayslipsWithEmployeePage(
+  payRunId: string,
+  opts: ListPayslipsWithEmployeePageOptions = {},
+): Promise<ListPayslipsWithEmployeePageResult> {
+  const db = getDb();
+  const limit = Math.max(1, Math.min(opts.limit ?? 50, 500));
+  const offset = Math.max(opts.offset ?? 0, 0);
+
+  const [rows, countResult] = await Promise.all([
+    db
+      .select({
+        payslip: payslips,
+        employeeId: employees.id,
+        employeeCode: employees.employeeCode,
+        // T9: name sourced from persons (LEFT JOIN so rows survive a missing personId).
+        firstName: persons.firstName,
+        lastName: persons.lastName,
+      })
+      .from(payslips)
+      .innerJoin(employees, eq(employees.id, payslips.employeeId))
+      .leftJoin(persons, eq(persons.id, employees.personId))
+      .where(eq(payslips.payRunId, payRunId))
+      .orderBy(persons.lastName, persons.firstName)
+      .limit(limit)
+      .offset(offset),
+    db.select({ total: count() }).from(payslips).where(eq(payslips.payRunId, payRunId)),
+  ]);
+
+  return {
+    rows: rows.map((r) => ({
+      ...r.payslip,
+      employee: {
+        id: r.employeeId,
+        employeeCode: r.employeeCode,
+        firstName: r.firstName ?? '',
+        lastName: r.lastName ?? '',
+      },
+    })),
+    total: countResult[0]?.total ?? 0,
+  };
+}
+
+// SQL-aggregated totals for a pay run. Used by the payslips list page so the
+// "Totals" footer row stays accurate across pagination — without this, the
+// totals row would only reflect the currently-rendered page and silently
+// lie about the run.
+export type PayRunTotals = {
+  count: number;
+  gross: number;
+  sss: number;
+  philhealth: number;
+  pagibig: number;
+  birWtax: number;
+  net: number;
+};
+export async function getPayRunTotals(payRunId: string): Promise<PayRunTotals> {
+  const db = getDb();
+  const [row] = await db
+    .select({
+      count: count(),
+      gross: sql<string>`COALESCE(SUM(${payslips.grossPay}), 0)::text`,
+      sss: sql<string>`COALESCE(SUM(${payslips.sssEE}), 0)::text`,
+      philhealth: sql<string>`COALESCE(SUM(${payslips.philhealthEE}), 0)::text`,
+      pagibig: sql<string>`COALESCE(SUM(${payslips.pagibigEE}), 0)::text`,
+      birWtax: sql<string>`COALESCE(SUM(${payslips.birWtax}), 0)::text`,
+      net: sql<string>`COALESCE(SUM(${payslips.netPay}), 0)::text`,
+    })
+    .from(payslips)
+    .where(eq(payslips.payRunId, payRunId));
+  return {
+    count: row?.count ?? 0,
+    gross: Number(row?.gross ?? 0),
+    sss: Number(row?.sss ?? 0),
+    philhealth: Number(row?.philhealth ?? 0),
+    pagibig: Number(row?.pagibig ?? 0),
+    birWtax: Number(row?.birWtax ?? 0),
+    net: Number(row?.net ?? 0),
+  };
 }

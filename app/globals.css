@@ -17,9 +17,15 @@
   --muted: #6B6253;
   --danger: #8B2E1F;
   --success: #2E5D3B;
+  --warning: #B8862F;
 
   --shadow-soft: 0 1px 0 rgba(20, 16, 10, 0.04);
   --radius: 2px;
+
+  /* Stack Sans Text drives both display and body. Loaded via Google Fonts
+     stylesheet in app/layout.tsx. Mono stays Plex Mono via next/font. */
+  --ff-display: "Stack Sans Text";
+  --ff-body: "Stack Sans Text";
 }
 
 *,
@@ -50,9 +56,9 @@ a {
 }
 
 h1, h2, h3, h4, h5 {
-  font-family: var(--ff-display), Georgia, "Iowan Old Style", serif;
-  font-weight: 500;
-  letter-spacing: -0.012em;
+  font-family: var(--ff-display), system-ui, -apple-system, sans-serif;
+  font-weight: 600;
+  letter-spacing: -0.005em;
   margin: 0;
 }
 
@@ -69,6 +75,12 @@ h1, h2, h3, h4, h5 {
   display: grid;
   grid-template-columns: 252px 1fr;
   min-height: 100vh;
+  transition: grid-template-columns 200ms ease;
+}
+
+/* Collapsed sidebar — icon-only rail */
+.admin-shell.is-sidebar-collapsed {
+  grid-template-columns: 52px 1fr;
 }
 
 .admin-sidebar {
@@ -80,6 +92,112 @@ h1, h2, h3, h4, h5 {
   position: sticky;
   top: 0;
   height: 100vh;
+  overflow: hidden;
+  transition: padding 200ms ease;
+}
+
+.admin-shell.is-sidebar-collapsed .admin-sidebar {
+  padding: 1.75rem 0.5rem 1.5rem;
+}
+
+/* Hide masthead text in collapsed state */
+.admin-shell.is-sidebar-collapsed .masthead-rule,
+.admin-shell.is-sidebar-collapsed .masthead-tag,
+.admin-shell.is-sidebar-collapsed .sidebar-foot-user {
+  display: none;
+}
+
+.admin-shell.is-sidebar-collapsed .masthead-title {
+  font-size: 1.25rem;
+}
+
+/* Sidebar nav root — wraps collapse button + nav */
+.sidebar-nav-root {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Collapse toggle button */
+.sidebar-collapse-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 1.125rem;
+  padding: 0.375rem 0.5rem;
+  margin-bottom: 0.5rem;
+  border-radius: var(--radius);
+  align-self: flex-start;
+  transition: color 120ms ease, background-color 120ms ease;
+  line-height: 1;
+}
+
+.sidebar-collapse-btn:hover {
+  color: var(--ink);
+  background: rgba(20, 16, 10, 0.05);
+}
+
+/* Sidebar links — flex to align icon + label */
+.sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.5rem 0.75rem;
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 0.9375rem;
+  border-left: 2px solid transparent;
+  margin-left: -2px;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.sidebar-link:hover {
+  background: rgba(20, 16, 10, 0.045);
+}
+
+.sidebar-link.is-active {
+  border-left-color: var(--ochre);
+  background: rgba(184, 134, 47, 0.10);
+  color: var(--ink);
+  font-weight: 500;
+}
+
+/* In collapsed state, center the icon and hide the label */
+.admin-shell.is-sidebar-collapsed .sidebar-link {
+  justify-content: center;
+  padding: 0.5rem;
+  margin-left: 0;
+  border-left: none;
+  border-radius: var(--radius);
+}
+
+.admin-shell.is-sidebar-collapsed .sidebar-link.is-active {
+  background: rgba(184, 134, 47, 0.14);
+  border-left: none;
+}
+
+.sidebar-link-icon {
+  font-size: 1rem;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.sidebar-link-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* In collapsed state, hide section headings completely */
+.admin-shell.is-sidebar-collapsed .sidebar-section {
+  visibility: hidden;
+  height: 0.25rem;
+  padding: 0;
+  margin: 0;
 }
 
 .masthead {
@@ -92,11 +210,11 @@ h1, h2, h3, h4, h5 {
 }
 
 .masthead-title {
-  font-family: var(--ff-display), serif;
+  font-family: var(--ff-display), system-ui, sans-serif;
   font-size: 1.875rem;
-  font-weight: 500;
+  font-weight: 600;
   line-height: 1;
-  letter-spacing: -0.022em;
+  letter-spacing: -0.01em;
   color: var(--navy);
 }
 
@@ -143,28 +261,6 @@ h1, h2, h3, h4, h5 {
 
 .sidebar-section:first-child { margin-top: 0; }
 
-.sidebar-link {
-  display: block;
-  padding: 0.5rem 0.75rem;
-  color: var(--ink);
-  text-decoration: none;
-  font-size: 0.9375rem;
-  border-left: 2px solid transparent;
-  margin-left: -2px;
-  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
-}
-
-.sidebar-link:hover {
-  background: rgba(20, 16, 10, 0.045);
-}
-
-.sidebar-link.is-active {
-  border-left-color: var(--ochre);
-  background: rgba(184, 134, 47, 0.10);
-  color: var(--ink);
-  font-weight: 500;
-}
-
 .sidebar-foot {
   margin-top: auto;
   padding-top: 1.25rem;
@@ -207,8 +303,9 @@ h1, h2, h3, h4, h5 {
 
 .admin-main {
   padding: 2.75rem 3.25rem 4rem;
-  max-width: 1080px;
   width: 100%;
+  /* Body fills the screen so right padding matches left visually. Line-length is
+     constrained per-element (e.g. `.page-sub` uses max-width: 62ch). */
 }
 
 .page-header {
@@ -225,10 +322,11 @@ h1, h2, h3, h4, h5 {
 }
 
 .page-title {
+  font-family: var(--ff-display), system-ui, -apple-system, sans-serif;
   font-size: 2.625rem;
-  font-weight: 500;
-  line-height: 1.02;
-  letter-spacing: -0.024em;
+  font-weight: 600;
+  line-height: 1.05;
+  letter-spacing: -0.01em;
   color: var(--navy);
 }
 
@@ -236,7 +334,7 @@ h1, h2, h3, h4, h5 {
   margin: 0.875rem 0 0;
   color: var(--ink-soft);
   max-width: 62ch;
-  font-size: 1.0625rem;
+  font-size: 0.9375rem; /* 15px — matches body */
   line-height: 1.55;
 }
 
@@ -398,6 +496,13 @@ h1, h2, h3, h4, h5 {
   color: var(--muted);
 }
 
+/* In a TwoCol grid, sibling fields should stretch to the tallest one and
+   their inputs should bottom-anchor — that way label heights can vary without
+   pushing inputs out of horizontal alignment. Each .field already uses
+   grid-template-rows: auto auto, so we anchor the .field box to the bottom
+   of the parent grid's track. */
+.field { align-self: end; }
+
 .input {
   font-family: var(--ff-body), sans-serif;
   font-size: 0.9375rem;
@@ -413,6 +518,21 @@ h1, h2, h3, h4, h5 {
   outline: none;
   border-color: var(--ochre);
   box-shadow: 0 0 0 3px rgba(184, 134, 47, 0.18);
+}
+
+/* Native <select> styling — strip the browser chevron and draw our own at the
+   same right offset the Typeahead uses (0.9rem), so every dropdown across the
+   app has identical chevron placement. Without this, browser-default chevrons
+   sit flush against the right border on some pages, inconsistent with the
+   Typeahead and the styled select on the employees list filter. */
+select.input {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding-right: 2.25rem;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M0 0h10L5 6z' fill='%23677'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 0.9rem center;
 }
 
 /* Native file input — keep it functional but make the trigger button match the design system. */
@@ -472,7 +592,7 @@ h1, h2, h3, h4, h5 {
 }
 
 .auth-wordmark {
-  font-family: var(--ff-display), serif;
+  font-family: var(--ff-display), system-ui, sans-serif;
   font-size: 1.875rem;
   font-weight: 500;
   letter-spacing: -0.022em;
@@ -591,7 +711,7 @@ th.cell-num { text-align: right; }
 }
 
 .empty-state h3 {
-  font-family: var(--ff-display), serif;
+  font-family: var(--ff-display), system-ui, sans-serif;
   font-size: 1.625rem;
   color: var(--navy);
   margin-bottom: 0.5rem;
@@ -636,6 +756,72 @@ th.cell-num { text-align: right; }
   align-items: center;
 }
 
+/* ───── Pagination ───── */
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.pagination__readout {
+  font-family: var(--ff-mono), monospace;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.pagination__readout strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.pagination__controls {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.pagination__sizer {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.pagination__sizer label {
+  font-family: var(--ff-mono), monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.75rem;
+}
+
+.pagination__sizer select {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.8125rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.btn--sm {
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8125rem;
+}
+
+.btn.is-disabled,
+span.btn.is-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 /* ───── Import result block ───── */
 
 .import-result {
@@ -651,7 +837,7 @@ th.cell-num { text-align: right; }
 }
 
 .import-result-summary strong {
-  font-family: var(--ff-display), serif;
+  font-family: var(--ff-display), system-ui, sans-serif;
   font-size: 1.75rem;
   font-weight: 500;
   color: var(--navy);

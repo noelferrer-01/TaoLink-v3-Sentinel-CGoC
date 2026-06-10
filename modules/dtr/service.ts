@@ -4,6 +4,11 @@ import { dtrEntries, dtrPeriodCloses, type DtrEntry } from './schema';
 import { audit } from '@/modules/audit';
 import { events } from '@/modules/events';
 import { getActiveAssignment } from '@/modules/assignments/service';
+import { resolveForPeriod } from '@/modules/payroll-calendars/service';
+
+// Sentinel UUID for global-default calendar lookup (no per-client scope).
+// closePeriod is period-wide; late-warning uses the global-default calendar.
+const GLOBAL_CALENDAR_SENTINEL = '00000000-0000-0000-0000-000000000000';
 
 export async function recordDTR(input: {
   employeeId: string;
@@ -154,7 +159,7 @@ export async function bulkFillWorked(
 export async function closePeriod(
   periodStart: string,
   periodEnd: string,
-  opts: { actorUserId?: string | null } = {},
+  opts: { actorUserId?: string | null; _nowOverride?: Date } = {},
 ): Promise<void> {
   const db = getDb();
   try {
@@ -173,4 +178,48 @@ export async function closePeriod(
     payload: { periodStart, periodEnd },
   });
   await events.publish('dtr.period.closed', { periodStart, periodEnd });
+
+  // ── Late-DTR-close warning ────────────────────────────────────────────────
+  // closePeriod is period-wide (no client scope). We resolve the global-default
+  // calendar and compare now() to dtrCutoffDate. If the close happens after the
+  // cut-off, we emit a warning event + audit record. The close is NOT blocked.
+  try {
+    const calendar = await resolveForPeriod(
+      GLOBAL_CALENDAR_SENTINEL,
+      new Date(periodStart + 'T00:00:00Z'),
+      new Date(periodEnd + 'T00:00:00Z'),
+    );
+    const now = opts._nowOverride ?? new Date();
+    if (now > calendar.dtrCutoffDate) {
+      const periodId = `${periodStart}_${periodEnd}`;
+      await audit.record({
+        actor: opts.actorUserId ?? null,
+        action: 'dtr.period.closed.late',
+        target: { kind: 'dtr_period', id: periodId },
+        payload: {
+          periodStart,
+          periodEnd,
+          dtrCutoffDate: calendar.dtrCutoffDate.toISOString(),
+          closedAt: now.toISOString(),
+          calendarSource: calendar.source,
+        },
+      });
+      await events.publish('dtr.period.closed.late', {
+        periodStart,
+        periodEnd,
+        dtrCutoffDate: calendar.dtrCutoffDate.toISOString(),
+        closedAt: now.toISOString(),
+        calendarSource: calendar.source,
+      });
+    }
+  } catch (warnErr: any) {
+    // Late-warning is best-effort; never let it propagate and block the close.
+    // A warning in the audit log about the failed check is sufficient.
+    await audit.record({
+      actor: opts.actorUserId ?? null,
+      action: 'dtr.late.warning.failed',
+      target: { kind: 'dtr_period', id: `${periodStart}_${periodEnd}` },
+      payload: { error: warnErr?.message ?? String(warnErr) },
+    }).catch(() => { /* truly swallow — audit itself failing must not crash */ });
+  }
 }

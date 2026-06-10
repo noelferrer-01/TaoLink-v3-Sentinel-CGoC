@@ -23,6 +23,7 @@ import { dtrEntries, dtrPeriodCloses } from '@/modules/dtr/schema';
 import { assignments as assignmentsTable } from '@/modules/assignments/schema';
 import { detachments, clients } from '@/modules/clients/schema';
 import { employees } from '@/modules/hr/schema';
+import { persons } from '@/modules/persons/schema';
 import { eventLog } from '@/modules/events/schema';
 import { hr } from '@/modules/hr/index';
 import { seedComplianceRates } from '@/modules/compliance/seed';
@@ -107,6 +108,7 @@ describe('payroll module — v2 reconciliation (Done criterion #7)', () => {
     await db.delete(detachments);
     await db.delete(clients);
     await db.delete(employees);
+    await db.delete(persons);
     await db.delete(eventLog);
   });
 

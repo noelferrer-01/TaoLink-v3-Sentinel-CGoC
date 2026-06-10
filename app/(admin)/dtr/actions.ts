@@ -73,7 +73,7 @@ export async function fillAllAction(
 
   const ids = formData.getAll('employeeId').map(String);
   if (ids.length === 0) {
-    return { kind: 'error', message: 'No guards to fill — assign at least one guard first.' };
+    return { kind: 'error', message: 'No employees to fill — assign at least one employee first.' };
   }
 
   let totalRecorded = 0;
@@ -90,7 +90,7 @@ export async function fillAllAction(
     kind: 'success',
     message: `Recorded ${totalRecorded} new day${
       totalRecorded === 1 ? '' : 's'
-    } across ${ids.length} guard${ids.length === 1 ? '' : 's'}${
+    } across ${ids.length} employee${ids.length === 1 ? '' : 's'}${
       totalSkipped > 0 ? `; ${totalSkipped} day${totalSkipped === 1 ? '' : 's'} already had entries.` : '.'
     }`,
   };

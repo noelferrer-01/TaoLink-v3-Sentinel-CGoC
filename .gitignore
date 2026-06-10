@@ -31,6 +31,11 @@ Thumbs.db
 # Per-session resume file (created on demand by /getres)
 memory/resume.md
 
+# Drizzle-kit journal/snapshot — this project hand-writes drizzle/migrations/*.sql
+# and discards `db:generate` output, so the meta/ ledger is a stray artifact that
+# falls out of sync with the real migrations. Don't track it. (See reference_migration_workflow.)
+drizzle/migrations/meta/
+
 # Node / TypeScript (when stack is locked, populated)
 node_modules/
 dist/
