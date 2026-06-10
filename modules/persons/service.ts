@@ -379,6 +379,18 @@ export async function updatePerson(
     delete safePatch[field];
   }
 
+  // Name is NOT NULL and is the minimum identity a Person must carry — never let
+  // an edit blank it out (the DB would reject a true NULL, but '' / whitespace
+  // would slip through and leave an unnamed person). Reject before writing.
+  for (const nameField of ['firstName', 'lastName'] as const) {
+    if (nameField in safePatch) {
+      const v = safePatch[nameField];
+      if (typeof v === 'string' && v.trim() === '') {
+        throw new Error('First name and last name cannot be blank.');
+      }
+    }
+  }
+
   const [updated] = await db
     .update(persons)
     .set({ ...safePatch, updatedAt: new Date() })

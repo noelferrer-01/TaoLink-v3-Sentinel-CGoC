@@ -18,7 +18,7 @@ import {
   type ApplicantDocument,
   type BlacklistEntry,
 } from './schema';
-import { ALLOWED_TRANSITIONS, requiredDocsFor, type DocType, type DocStatus, type Stage } from './labels';
+import { ALLOWED_TRANSITIONS, requiredDocsFor, type DocType, type DocStatus, type Stage, type MatchKind } from './labels';
 import {
   createPerson, assertAnchored, getPerson, findPersonByAnyId, findPossibleDuplicates,
   persons, type Person, ID_TYPE_LADDER,
@@ -39,6 +39,12 @@ export type ApplicantIdentity = {
   middleName:  Person['middleName'];
   dateOfBirth: Person['dateOfBirth'];
   sssNumber:   Person['sssNumber'];
+  // Anchor identity — the recruiter may have anchored on any ID type, not just
+  // SSS. anchorIdType is the canonical anchor ('none' = provisional); the three
+  // unique-ID numbers let the detail page show whichever one is on file.
+  anchorIdType:  Person['anchorIdType'];
+  philsysNumber: Person['philsysNumber'];
+  tinNumber:     Person['tinNumber'];
   phone:       Person['phone'];
   email:       Person['email'];
   addressLine1: Person['addressLine1'];
@@ -55,6 +61,11 @@ export type CreateApplicantInput = {
   middleName?: string | null;
   dateOfBirth?: string | null;
   sssNumber?: string | null;
+  philsysNumber?: string | null;
+  tinNumber?: string | null;
+  passportNumber?: string | null;
+  umidNumber?: string | null;
+  driversLicenseNumber?: string | null;
   phone?: string | null;
   email?: string | null;
   addressLine1?: string | null;
@@ -78,8 +89,19 @@ export async function createApplicant(input: CreateApplicantInput): Promise<Appl
   // minted Person — no orphaned Person rows. Audit/events run after commit.
   // Identity input fields exist ONLY to feed createPerson — since 0024 the
   // applicant row has no identity columns.
+  // Pick the anchor by the ID ladder (philsys > sss > tin > passport > umid > dl):
+  // the first provided ID wins. No ID → 'none' (provisional intake is allowed;
+  // the hard requirement is at hire, via assertAnchored).
+  const idByType: Record<typeof ID_TYPE_LADDER[number], string | null | undefined> = {
+    philsys:         input.philsysNumber,
+    sss:             input.sssNumber,
+    tin:             input.tinNumber,
+    passport:        input.passportNumber,
+    umid:            input.umidNumber,
+    drivers_license: input.driversLicenseNumber,
+  };
   const anchorIdType: typeof ID_TYPE_LADDER[number] | 'none' =
-    input.sssNumber ? 'sss' : 'none';
+    ID_TYPE_LADDER.find((t) => idByType[t]?.trim()) ?? 'none';
 
   let created: Applicant;
   try {
@@ -90,6 +112,11 @@ export async function createApplicant(input: CreateApplicantInput): Promise<Appl
         middleName: input.middleName ?? null,
         dateOfBirth: input.dateOfBirth ?? null,
         sssNumber: input.sssNumber ?? null,
+        philsysNumber: input.philsysNumber ?? null,
+        tinNumber: input.tinNumber ?? null,
+        passportNumber: input.passportNumber ?? null,
+        umidNumber: input.umidNumber ?? null,
+        driversLicenseNumber: input.driversLicenseNumber ?? null,
         phone: input.phone ?? null,
         email: input.email ?? null,
         addressLine1: input.addressLine1 ?? null,
@@ -109,6 +136,9 @@ export async function createApplicant(input: CreateApplicantInput): Promise<Appl
           appliedOn: input.appliedOn,
           notes: input.notes ?? null,
           personId: person.id,
+          // "ID still needed" nudge — true at creation when no anchor ID was
+          // captured. Recomputed by advanceStage; never blocks (hire gate does).
+          idPending: anchorIdType === 'none',
         })
         .returning();
       if (!applicant) throw new Error('[recruitment/createApplicant] insert returned no row');
@@ -161,6 +191,9 @@ export async function getApplicant(
     middleName:   p.middleName,
     dateOfBirth:  p.dateOfBirth,
     sssNumber:    p.sssNumber,
+    anchorIdType:  p.anchorIdType,
+    philsysNumber: p.philsysNumber,
+    tinNumber:     p.tinNumber,
     phone:        p.phone,
     email:        p.email,
     addressLine1: p.addressLine1,
@@ -356,11 +389,9 @@ export const withdrawApplicant = (id: string, reason: string, opts: { actorUserI
 //  + blacklist personId; active employee → 'double-hire', in-flight applicant →
 //  'concurrent application'; normalized fuzzy backstop."
 
-export type MatchKind =
-  | 'terminated_employee'
-  | 'active_employee'
-  | 'concurrent_applicant'
-  | 'blacklist';
+// MatchKind now lives in ./labels (client-safe, shared with the intake form);
+// re-exported here so existing `import { MatchKind } from './service'` paths hold.
+export type { MatchKind } from './labels';
 
 export type Match = { kind: MatchKind; confidence: 'exact' | 'possible'; label: string; refId: string };
 
@@ -385,6 +416,8 @@ export async function checkMatches(input: {
   lastName: string;
   dateOfBirth?: string | null;
   sssNumber?: string | null;
+  philsysNumber?: string | null;
+  tinNumber?: string | null;
   excludeApplicantId?: string | null;
 }): Promise<Match[]> {
   const db = getDb();
@@ -400,11 +433,18 @@ export async function checkMatches(input: {
     exactPersonIds.add(input.personId);
   }
 
-  // Channel 2: any person sharing a gov ID number (SSS is the only field
-  // available in the current input shape; extend when philsys/tin are added)
-  if (input.sssNumber) {
-    const found = await findPersonByAnyId('sss', input.sssNumber);
-    if (found) exactPersonIds.add(found.id);
+  // Channel 2: any person sharing a unique gov ID (PhilSys / SSS / TIN). Each is
+  // looked up via findPersonByAnyId, which also surfaces quarantined values.
+  const govIdLookups: Array<['sss' | 'philsys' | 'tin', string | null | undefined]> = [
+    ['sss', input.sssNumber],
+    ['philsys', input.philsysNumber],
+    ['tin', input.tinNumber],
+  ];
+  for (const [type, value] of govIdLookups) {
+    if (value) {
+      const found = await findPersonByAnyId(type, value);
+      if (found) exactPersonIds.add(found.id);
+    }
   }
 
   // ── Exact: employees ──────────────────────────────────────────────────────

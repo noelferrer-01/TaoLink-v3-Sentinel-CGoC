@@ -4,7 +4,8 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
 import { recruitment } from '@/modules/recruitment';
-import type { DocStatus, DocType, Stage } from '@/modules/recruitment';
+import type { DocStatus, DocType, Stage, MatchKind } from '@/modules/recruitment';
+import { findPersonByAnyId, findPossibleDuplicates, ANCHOR_ID_LABELS, type AnchorIdType } from '@/modules/persons';
 import { getSessionFromCookie } from '@/modules/auth';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -29,6 +30,17 @@ export type FormState = { kind: 'idle' } | { kind: 'error'; message: string };
 
 const SOURCES = ['walk_in', 'referral', 'agency', 'job_board', 'social_media', 'provincial', 'training_school', 'other'] as const;
 const POSITIONS = ['GUARD', 'OFFICE_STAFF', 'SUPERVISOR', 'DRIVER', 'JANITOR', 'OTHER'] as const;
+const ID_TYPES = ['philsys', 'sss', 'tin', 'passport', 'umid', 'drivers_license'] as const;
+
+// Maps the intake form's chosen ID type to the matching createApplicant field.
+const ID_FIELD = {
+  philsys:         'philsysNumber',
+  sss:             'sssNumber',
+  tin:             'tinNumber',
+  passport:        'passportNumber',
+  umid:            'umidNumber',
+  drivers_license: 'driversLicenseNumber',
+} as const satisfies Record<(typeof ID_TYPES)[number], string>;
 
 const createSchema = z.object({
   firstName: z.string().trim().min(1, 'Please enter the first name.'),
@@ -38,8 +50,11 @@ const createSchema = z.object({
   positionAppliedFor: z.enum(POSITIONS).default('GUARD'),
   isArmedPost: z.boolean().default(false),
   appliedOn: z.string().trim().regex(DATE_RE, 'Date applied must be in YYYY-MM-DD format.'),
-  dateOfBirth: z.string().trim().optional().or(z.literal('')).refine((v) => !v || DATE_RE.test(v), 'Date of birth must be YYYY-MM-DD.'),
-  sssNumber: z.string().trim().optional().or(z.literal('')),
+  // DOB is required at intake — it powers duplicate + blacklist matching. The
+  // government ID stays optional (provisional intake; required only at hire).
+  dateOfBirth: z.string().trim().regex(DATE_RE, 'Please enter the date of birth (YYYY-MM-DD) — it powers duplicate and blacklist matching.'),
+  idType: z.enum(ID_TYPES).optional().or(z.literal('')),
+  idValue: z.string().trim().optional().or(z.literal('')),
   phone: z.string().trim().optional().or(z.literal('')),
   email: z.string().trim().email('That email looks wrong.').optional().or(z.literal('')),
   city: z.string().trim().optional().or(z.literal('')),
@@ -60,7 +75,8 @@ export async function createApplicantAction(_prev: FormState, formData: FormData
     isArmedPost: formData.get('isArmedPost') === 'on',
     appliedOn: formData.get('appliedOn') ?? '',
     dateOfBirth: formData.get('dateOfBirth') ?? '',
-    sssNumber: formData.get('sssNumber') ?? '',
+    idType: formData.get('idType') ?? '',
+    idValue: formData.get('idValue') ?? '',
     phone: formData.get('phone') ?? '',
     email: formData.get('email') ?? '',
     city: formData.get('city') ?? '',
@@ -69,6 +85,17 @@ export async function createApplicantAction(_prev: FormState, formData: FormData
   });
   if (!parsed.success) return { kind: 'error', message: parsed.error.issues[0]?.message ?? 'Please check the form.' };
   const d = parsed.data;
+
+  // Map the (optional) chosen ID to the matching createApplicant field. A value
+  // without a type is a user slip we can catch plainly; a type without a value
+  // is just provisional intake (no anchor yet).
+  const idValue = blank(d.idValue ?? null);
+  const idType = (d.idType ?? '') as '' | (typeof ID_TYPES)[number];
+  if (idValue && !idType) {
+    return { kind: 'error', message: 'Pick which kind of ID you entered (PhilSys, SSS, TIN, …) — or clear the ID field.' };
+  }
+  const idPatch: Partial<Record<(typeof ID_FIELD)[keyof typeof ID_FIELD], string | null>> = {};
+  if (idValue && idType) idPatch[ID_FIELD[idType]] = idValue;
 
   let createdId: string;
   try {
@@ -81,7 +108,7 @@ export async function createApplicantAction(_prev: FormState, formData: FormData
       isArmedPost: d.isArmedPost,
       appliedOn: d.appliedOn,
       dateOfBirth: blank(d.dateOfBirth ?? null),
-      sssNumber: blank(d.sssNumber ?? null),
+      ...idPatch,
       phone: blank(d.phone ?? null),
       email: blank(d.email ?? null),
       city: blank(d.city ?? null),
@@ -95,6 +122,76 @@ export async function createApplicantAction(_prev: FormState, formData: FormData
   }
   revalidatePath('/recruitment');
   redirect(`/recruitment/${createdId}`);
+}
+
+// ─── Identity lookup (intake "Look up" button) ───────────────────────────────
+
+export type LookupResult = {
+  /** A person already on file with the entered government ID. */
+  knownPerson: { id: string; name: string; anchorLabel: string } | null;
+  /** Persons sharing the entered name + DOB (normalized) — possible duplicates. */
+  possibleDuplicates: Array<{ id: string; name: string; dateOfBirth: string | null }>;
+  /** Blacklist / active-employee / concurrent-applicant flags for this identity. */
+  matches: Array<{ kind: MatchKind; confidence: 'exact' | 'possible'; label: string }>;
+};
+
+/**
+ * Identity-first intake lookup. Given whatever the recruiter has typed so far
+ * (name, DOB, and optionally a government ID), surfaces:
+ *   - a known person on file by that ID,
+ *   - possible duplicate persons by name+DOB,
+ *   - any blacklist / employee / in-flight-applicant matches.
+ * Read-only — never writes. Returns empty on an expired session.
+ */
+export async function lookupPersonAction(input: {
+  idType?: string;
+  idValue?: string;
+  firstName?: string;
+  lastName?: string;
+  dateOfBirth?: string;
+}): Promise<LookupResult> {
+  const empty: LookupResult = { knownPerson: null, possibleDuplicates: [], matches: [] };
+  const session = await getSessionFromCookie();
+  if (!session) return empty;
+
+  const idType = (input.idType ?? '').trim();
+  const idValue = (input.idValue ?? '').trim();
+  const firstName = (input.firstName ?? '').trim();
+  const lastName = (input.lastName ?? '').trim();
+  const dob = (input.dateOfBirth ?? '').trim() || null;
+  const isIdType = (t: string): t is AnchorIdType => (ID_TYPES as readonly string[]).includes(t);
+
+  // Known person by the entered government ID (also surfaces quarantined values).
+  let knownPerson: LookupResult['knownPerson'] = null;
+  if (idValue && isIdType(idType)) {
+    const p = await findPersonByAnyId(idType, idValue);
+    if (p) knownPerson = { id: p.id, name: `${p.firstName} ${p.lastName}`.trim(), anchorLabel: ANCHOR_ID_LABELS[p.anchorIdType] };
+  }
+
+  // Possible duplicates by normalized name + DOB.
+  let possibleDuplicates: LookupResult['possibleDuplicates'] = [];
+  if (firstName && lastName && dob) {
+    const dups = await findPossibleDuplicates({ firstName, lastName, dateOfBirth: dob });
+    possibleDuplicates = dups.map((p) => ({ id: p.id, name: `${p.firstName} ${p.lastName}`.trim(), dateOfBirth: p.dateOfBirth }));
+  }
+
+  // Cross-checks (blacklist / active employee / concurrent applicant).
+  let matches: LookupResult['matches'] = [];
+  if (firstName && lastName) {
+    const govId = (t: string) => (idType === t ? idValue || null : null);
+    const ms = await recruitment.checkMatches({
+      personId: null,
+      firstName,
+      lastName,
+      dateOfBirth: dob,
+      sssNumber: govId('sss'),
+      philsysNumber: govId('philsys'),
+      tinNumber: govId('tin'),
+    });
+    matches = ms.map((m) => ({ kind: m.kind, confidence: m.confidence, label: m.label }));
+  }
+
+  return { knownPerson, possibleDuplicates, matches };
 }
 
 // ─── Detail-page actions (form-action style; revalidate + re-render) ─────────
@@ -183,6 +280,8 @@ export async function hireAction(_prev: HireState, formData: FormData): Promise<
     const raw = e instanceof Error ? e.message : String(e);
     const message = raw.includes('hr_employees_code') || raw.includes('employee_code')
       ? 'That employee code is already used — pick a different one.'
+      : raw.includes('government ID is required')
+      ? 'A government ID is required before hiring. Open this applicant’s record, add a PhilSys, SSS, or TIN number, then hire.'
       : `Couldn't hire: ${raw}`;
     return { kind: 'error', message };
   }

@@ -19,6 +19,7 @@ export {
   SOURCE_LABELS,
   DOC_TYPE_LABELS,
   DOC_STATUS_LABELS,
+  MATCH_KIND_LABELS,
   ALLOWED_TRANSITIONS,
   requiredDocsFor,
   type Stage,

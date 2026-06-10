@@ -13,6 +13,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { sql } from 'drizzle-orm';
 import { closeDb, getDb } from '@/core/db';
 import { persons } from './schema';
 import {
@@ -33,7 +34,12 @@ import {
 
 async function cleanup() {
   const db = getDb();
-  await db.delete(persons);
+  // Since 0022/0024, hr_employees / recruitment_applicants / recruitment_blacklist
+  // reference persons (RESTRICT), so a plain `DELETE persons` fails if any other
+  // suite left role rows behind (test-file order is not guaranteed). TRUNCATE …
+  // CASCADE clears persons and everything that references it, transitively —
+  // an order-independent clean identity slate.
+  await db.execute(sql`TRUNCATE persons CASCADE`);
 }
 
 // ─── Unit: checkIdFormat ──────────────────────────────────────────────────────
@@ -484,6 +490,12 @@ describe('persons service (integration)', () => {
       await expect(
         updatePerson(p.id, { firstName: 'Hacker' }),
       ).rejects.toThrow(/redacted/i);
+    });
+
+    it('rejects a blank first or last name (would leave an unnamed person)', async () => {
+      const p = await createPerson({ firstName: 'Juan', lastName: 'Cruz' });
+      await expect(updatePerson(p.id, { lastName: '   ' })).rejects.toThrow(/cannot be blank/i);
+      await expect(updatePerson(p.id, { firstName: '' })).rejects.toThrow(/cannot be blank/i);
     });
 
     it('throws when person does not exist', async () => {

@@ -7,11 +7,12 @@ import {
   DOC_TYPE_LABELS,
   DOC_STATUS_LABELS,
   requiredDocsFor,
+  MATCH_KIND_LABELS,
   type Stage,
   type DocStatus,
-  type MatchKind,
 } from '@/modules/recruitment';
 import { hr, EMPLOYMENT_TYPE_LABELS } from '@/modules/hr';
+import { ANCHOR_ID_LABELS } from '@/modules/persons';
 import { PageShell } from '@/components/page-shell';
 import { Field, TwoCol, Muted } from '@/components/form';
 import { advanceStageAction, setDocumentAction, rejectApplicantAction, withdrawApplicantAction } from '../actions';
@@ -19,14 +20,6 @@ import { HireModal } from './hire-modal';
 
 const DOC_STATUSES: DocStatus[] = ['pending', 'submitted', 'verified', 'expired'];
 const TERMINAL: Stage[] = ['hired', 'rejected', 'withdrawn'];
-
-/** Compile-time exhaustive label map for every MatchKind. */
-const KIND_LABELS: Record<MatchKind, string> = {
-  blacklist:           'Blacklist',
-  terminated_employee: 'Terminated employee',
-  active_employee:     'Active employee',
-  concurrent_applicant: 'Concurrent application',
-};
 
 export default async function ApplicantDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -44,6 +37,13 @@ export default async function ApplicantDetailPage({ params }: { params: Promise<
     dateOfBirth: ident.dateOfBirth,
     sssNumber: ident.sssNumber,
   });
+
+  // The anchor ID can be any unique type, not just SSS — show whichever is on file.
+  const anchorValue =
+    ident.anchorIdType === 'sss' ? ident.sssNumber
+    : ident.anchorIdType === 'philsys' ? ident.philsysNumber
+    : ident.anchorIdType === 'tin' ? ident.tinNumber
+    : null;
 
   const isActive = !TERMINAL.includes(a.pipelineStage);
   const requiredSet = new Set(requiredDocsFor(a.isArmedPost));
@@ -80,11 +80,25 @@ export default async function ApplicantDetailPage({ params }: { params: Promise<
           <ul style={{ margin: 0, paddingLeft: '1.125rem', color: 'var(--ink-soft)', fontSize: '0.875rem' }}>
             {matches.map((m) => (
               <li key={`${m.kind}-${m.refId}`} style={{ marginBottom: '0.25rem' }}>
-                {KIND_LABELS[m.kind]}
+                {MATCH_KIND_LABELS[m.kind]}
                 {' '}({m.confidence === 'exact' ? 'exact match' : 'possible match'}): {m.label}
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {/* "ID still needed" nudge — provisional applicants can move through the
+          pipeline, but a government ID is required before hiring. Never blocks. */}
+      {isActive && a.idPending && (
+        <div style={{
+          border: '1px solid var(--ochre)', background: 'rgba(184, 134, 47, 0.10)',
+          borderRadius: 'var(--radius)', padding: '0.75rem 1rem', marginBottom: '1rem',
+          color: 'var(--ochre)', fontSize: '0.875rem',
+        }}>
+          <strong>Government ID still needed.</strong>{' '}
+          You can keep screening this applicant, but a PhilSys, SSS, or TIN number must be on file before they can be hired.
+          {' '}Add it with <strong>Edit</strong> on their identity record.
         </div>
       )}
 
@@ -96,7 +110,11 @@ export default async function ApplicantDetailPage({ params }: { params: Promise<
             <Field label="Source">{SOURCE_LABELS[a.source]}</Field>
             <Field label="Date applied">{a.appliedOn}</Field>
             <Field label="Date of birth">{ident.dateOfBirth ?? <Muted>Not set</Muted>}</Field>
-            <Field label="SSS number">{ident.sssNumber ?? <Muted>Not set</Muted>}</Field>
+            <Field label="Government ID">
+              {ident.anchorIdType !== 'none' && anchorValue
+                ? `${ANCHOR_ID_LABELS[ident.anchorIdType]}: ${anchorValue}`
+                : <Muted>Not set — provisional</Muted>}
+            </Field>
             <Field label="Phone">{ident.phone ?? <Muted>Not set</Muted>}</Field>
             <Field label="Email">{ident.email ?? <Muted>Not set</Muted>}</Field>
             <Field label="Location">{[ident.city, ident.province].filter(Boolean).join(', ') || <Muted>Not set</Muted>}</Field>

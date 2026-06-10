@@ -116,6 +116,36 @@ describe('recruitment service', () => {
     expect(clean.length).toBe(0);
   });
 
+  // ─── identity-first intake (T13) ────────────────────────────────────────────
+  it('createApplicant with a PhilSys ID anchors the person and clears the ID-pending nudge', async () => {
+    const a = await recruitment.createApplicant({
+      firstName: 'Ramon', lastName: 'Magsaysay', source: 'walk_in', appliedOn: '2026-05-29',
+      dateOfBirth: '1990-01-01', philsysNumber: '1234-5678-9012',
+    });
+    expect(a.idPending).toBe(false);
+    const got = await recruitment.getApplicant(a.id);
+    expect(got?.identity.anchorIdType).toBe('philsys');
+    expect(got?.identity.philsysNumber).toBe('1234-5678-9012');
+  });
+
+  it('createApplicant with no government ID is provisional (idPending true, anchor none)', async () => {
+    const a = await recruitment.createApplicant({
+      firstName: 'Diego', lastName: 'Silang', source: 'walk_in', appliedOn: '2026-05-29', dateOfBirth: '1985-02-02',
+    });
+    expect(a.idPending).toBe(true);
+    const got = await recruitment.getApplicant(a.id);
+    expect(got?.identity.anchorIdType).toBe('none');
+  });
+
+  it('checkMatches flags a concurrent applicant by PhilSys number (widened gov-ID channel)', async () => {
+    await recruitment.createApplicant({
+      firstName: 'Apolinario', lastName: 'Mabini', source: 'walk_in', appliedOn: '2026-05-29',
+      dateOfBirth: '1990-03-03', philsysNumber: '1111-2222-3333',
+    });
+    const m = await recruitment.checkMatches({ personId: null, firstName: 'Z', lastName: 'Q', philsysNumber: '1111-2222-3333' });
+    expect(m.some((x) => x.kind === 'concurrent_applicant')).toBe(true);
+  });
+
   // ─── listApplicantsPage (search + paginate) ─────────────────────────────────
   describe('listApplicantsPage', () => {
     async function seedTrio() {

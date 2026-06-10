@@ -12,6 +12,24 @@ export type Source = Applicant['source'];
 export type DocType = ApplicantDocument['docType'];
 export type DocStatus = ApplicantDocument['status'];
 
+/**
+ * The kinds of match `checkMatches` can return. Defined here (client-safe) so
+ * both the applicant detail page and the intake form can label them without
+ * pulling server-only service code into the client bundle.
+ */
+export type MatchKind =
+  | 'terminated_employee'
+  | 'active_employee'
+  | 'concurrent_applicant'
+  | 'blacklist';
+
+export const MATCH_KIND_LABELS: Record<MatchKind, string> = {
+  blacklist:            'Blacklist',
+  terminated_employee:  'Terminated employee',
+  active_employee:      'Active employee',
+  concurrent_applicant: 'Concurrent application',
+};
+
 export const STAGE_LABELS: Record<Stage, string> = {
   applied: 'Applied',
   contacted: 'Contacted',
