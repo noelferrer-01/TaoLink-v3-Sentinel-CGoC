@@ -4,7 +4,7 @@
  * event, mirroring modules/hr and modules/assignments.
  */
 
-import { and, desc, eq, ilike, or, sql } from 'drizzle-orm';
+import { and, desc, eq, ilike, or, sql, inArray, ne } from 'drizzle-orm';
 import { getDb } from '@/core/db';
 import { audit } from '@/modules/audit';
 import { events } from '@/modules/events';
@@ -19,8 +19,8 @@ import {
   type BlacklistEntry,
 } from './schema';
 import { ALLOWED_TRANSITIONS, requiredDocsFor, type DocType, type DocStatus, type Stage } from './labels';
-import { createPerson } from '@/modules/persons/service';
-import { ID_TYPE_LADDER } from '@/modules/persons/labels';
+import { createPerson, assertAnchored, findPersonByAnyId, findPossibleDuplicates } from '@/modules/persons/service';
+import { ID_TYPE_LADDER, normalizeNameKey } from '@/modules/persons/labels';
 import { persons, type Person } from '@/modules/persons/schema';
 
 // ─── ApplicantWithPerson ──────────────────────────────────────────────────────
@@ -208,6 +208,21 @@ export async function listApplicantsPage(opts: {
 
 // ─── advanceStage ───────────────────────────────────────────────────────────────
 
+/**
+ * Computes the idPending nudge flag from the linked Person.
+ * Returns true when the person has no anchor ID (anchorIdType='none') or when
+ * there is no linked Person at all (personId=null). Never throws.
+ */
+async function computeIdPending(personId: string | null): Promise<boolean> {
+  if (!personId) return true;
+  const db = getDb();
+  const [row] = await db.select({ anchorIdType: persons.anchorIdType })
+    .from(persons)
+    .where(eq(persons.id, personId));
+  if (!row) return true;
+  return row.anchorIdType === 'none';
+}
+
 export async function advanceStage(
   id: string,
   next: Stage,
@@ -219,16 +234,21 @@ export async function advanceStage(
   if (!ALLOWED_TRANSITIONS[current.pipelineStage].includes(next)) {
     throw new Error(`Cannot move an applicant from ${current.pipelineStage} to ${next}.`);
   }
+
+  // T11: recompute idPending from the linked Person.
+  // This is a NUDGE — never blocks the stage advance.
+  const idPending = await computeIdPending(current.personId ?? null);
+
   const [updated] = await db
     .update(applicants)
-    .set({ pipelineStage: next, updatedAt: new Date() })
+    .set({ pipelineStage: next, idPending, updatedAt: new Date() })
     .where(eq(applicants.id, id))
     .returning();
   await audit.record({
     actor: opts.actorUserId ?? null,
     action: 'recruitment.applicant.stage_changed',
     target: { kind: 'recruitment_applicant', id },
-    payload: { from: current.pipelineStage, to: next },
+    payload: { from: current.pipelineStage, to: next, idPending },
   });
   await events.publish('recruitment.applicant.stage_changed', { id, from: current.pipelineStage, to: next });
   return updated!;
@@ -289,40 +309,216 @@ export const rejectApplicant = (id: string, reason: string, opts: { actorUserId?
 export const withdrawApplicant = (id: string, reason: string, opts: { actorUserId?: string | null } = {}) =>
   endApplicant(id, 'withdrawn', reason, opts.actorUserId);
 
-// ─── checkMatches (blacklist + terminated auto-flag) ────────────────────────────
+// ─── checkMatches (all-Person matcher) ─────────────────────────────────────────
+//
+// Canonical spec: wiki/slices/3-identity-and-credentials.md §5c + §9 (round-2)
+// "exact across ALL persons (applicants of any stage + employees of any status)
+//  + blacklist personId; active employee → 'double-hire', in-flight applicant →
+//  'concurrent application'; normalized fuzzy backstop."
 
-export type MatchKind = 'terminated_employee' | 'blacklist';
+export type MatchKind =
+  | 'terminated_employee'
+  | 'active_employee'
+  | 'concurrent_applicant'
+  | 'blacklist';
+
 export type Match = { kind: MatchKind; confidence: 'exact' | 'possible'; label: string; refId: string };
 
+/** Terminal stages — an applicant in one of these is NOT "in-flight". */
+const TERMINAL_STAGES: Stage[] = ['hired', 'rejected', 'withdrawn'];
+
+/**
+ * Checks for matches across ALL persons (employees of any status, applicants of
+ * any stage, and the blacklist). Returns the full match array.
+ *
+ * Input:
+ *   personId         — the subject's personId (nullable); used for exact same-
+ *                      Person lookup across role rows.
+ *   excludeApplicantId — the applicant row being viewed (exclude it from results
+ *                        so the subject doesn't match itself).
+ *   firstName/lastName/dateOfBirth/sssNumber — identity fields for fuzzy backstop
+ *                        and blacklist snapshot matching.
+ */
 export async function checkMatches(input: {
+  personId: string | null;
   firstName: string;
   lastName: string;
   dateOfBirth?: string | null;
   sssNumber?: string | null;
+  excludeApplicantId?: string | null;
 }): Promise<Match[]> {
   const db = getDb();
   const matches: Match[] = [];
-  const sameName = (last: string) => last.trim().toLowerCase() === input.lastName.trim().toLowerCase();
 
-  const terminated = await db.select().from(employees).where(eq(employees.status, 'terminated'));
-  for (const e of terminated) {
-    if (input.sssNumber && e.sssNumber && e.sssNumber === input.sssNumber) {
-      matches.push({ kind: 'terminated_employee', confidence: 'exact',
-        label: `${e.lastName}, ${e.firstName} (${e.employeeCode}) — terminated`, refId: e.id });
-    } else if (input.dateOfBirth && e.dateOfBirth === input.dateOfBirth && sameName(e.lastName)) {
-      matches.push({ kind: 'terminated_employee', confidence: 'possible',
-        label: `${e.lastName}, ${e.firstName} (${e.employeeCode}) — terminated`, refId: e.id });
+  // ── Collect all Persons that could be an exact match ─────────────────────
+  // Strategy: gather matching personIds via three channels, then load the
+  // role rows for each.
+  const exactPersonIds = new Set<string>();
+
+  // Channel 1: same personId directly
+  if (input.personId) {
+    exactPersonIds.add(input.personId);
+  }
+
+  // Channel 2: any person sharing a gov ID number (SSS is the only field
+  // available in the current input shape; extend when philsys/tin are added)
+  if (input.sssNumber) {
+    const found = await findPersonByAnyId('sss', input.sssNumber);
+    if (found) exactPersonIds.add(found.id);
+  }
+
+  // ── Exact: employees ──────────────────────────────────────────────────────
+  if (exactPersonIds.size > 0) {
+    const empRows = await db
+      .select({
+        id: employees.id,
+        employeeCode: employees.employeeCode,
+        status: employees.status,
+        personId: employees.personId,
+        // Legacy name columns for label — will be null post-T12; safe until then.
+        firstName: employees.firstName,
+        lastName: employees.lastName,
+      })
+      .from(employees)
+      .where(inArray(employees.personId, [...exactPersonIds]));
+
+    for (const e of empRows) {
+      const isActive = e.status !== 'terminated';
+      const kind: MatchKind = isActive ? 'active_employee' : 'terminated_employee';
+      const statusLabel = isActive
+        ? `Currently active as ${e.employeeCode} — possible double-hire`
+        : `${e.lastName ?? ''}, ${e.firstName ?? ''} (${e.employeeCode}) — terminated`;
+      matches.push({
+        kind,
+        confidence: 'exact',
+        label: statusLabel,
+        refId: e.id,
+      });
     }
   }
 
-  const bl = await db.select().from(blacklist).where(eq(blacklist.active, true));
-  for (const b of bl) {
-    if (input.sssNumber && b.sssNumber && b.sssNumber === input.sssNumber) {
-      matches.push({ kind: 'blacklist', confidence: 'exact', label: `${b.lastName}, ${b.firstName} — ${b.reason}`, refId: b.id });
-    } else if (input.dateOfBirth && b.dateOfBirth === input.dateOfBirth && sameName(b.lastName)) {
-      matches.push({ kind: 'blacklist', confidence: 'possible', label: `${b.lastName}, ${b.firstName} — ${b.reason}`, refId: b.id });
+  // ── Exact: applicants (in-flight only, excluding the subject) ────────────
+  if (exactPersonIds.size > 0) {
+    const appQuery = db
+      .select({
+        id: applicants.id,
+        pipelineStage: applicants.pipelineStage,
+        personId: applicants.personId,
+        firstName: applicants.firstName,
+        lastName: applicants.lastName,
+      })
+      .from(applicants)
+      .where(
+        and(
+          inArray(applicants.personId, [...exactPersonIds]),
+          // Only in-flight stages count as "concurrent"
+          sql`${applicants.pipelineStage} NOT IN ('hired', 'rejected', 'withdrawn')`,
+          ...(input.excludeApplicantId ? [ne(applicants.id, input.excludeApplicantId)] : []),
+        ),
+      );
+    const appRows = await appQuery;
+
+    for (const a of appRows) {
+      matches.push({
+        kind: 'concurrent_applicant',
+        confidence: 'exact',
+        label: `${a.lastName ?? ''}, ${a.firstName ?? ''} — also applying (${a.pipelineStage})`,
+        refId: a.id,
+      });
     }
   }
+
+  // ── Exact: blacklist (by personId OR snapshot SSS) ────────────────────────
+  const blRows = await db.select().from(blacklist).where(eq(blacklist.active, true));
+  const sameName = (last: string | null) =>
+    (last ?? '').trim().toLowerCase() === input.lastName.trim().toLowerCase();
+
+  for (const b of blRows) {
+    // Exact via personId
+    if (input.personId && b.personId && b.personId === input.personId) {
+      matches.push({
+        kind: 'blacklist', confidence: 'exact',
+        label: `${b.lastName}, ${b.firstName} — ${b.reason}`,
+        refId: b.id,
+      });
+    }
+    // Exact via snapshot SSS number
+    else if (input.sssNumber && b.sssNumber && b.sssNumber === input.sssNumber) {
+      matches.push({
+        kind: 'blacklist', confidence: 'exact',
+        label: `${b.lastName}, ${b.firstName} — ${b.reason}`,
+        refId: b.id,
+      });
+    }
+    // Possible via snapshot DOB + name
+    else if (input.dateOfBirth && b.dateOfBirth === input.dateOfBirth && sameName(b.lastName)) {
+      matches.push({
+        kind: 'blacklist', confidence: 'possible',
+        label: `${b.lastName}, ${b.firstName} — ${b.reason}`,
+        refId: b.id,
+      });
+    }
+  }
+
+  // ── Fuzzy backstop: normalized name+DOB across all persons ───────────────
+  if (input.firstName && input.lastName && input.dateOfBirth) {
+    const fuzzyPersons = await findPossibleDuplicates({
+      firstName: input.firstName,
+      lastName: input.lastName,
+      dateOfBirth: input.dateOfBirth,
+    });
+
+    for (const fp of fuzzyPersons) {
+      // Skip if this person is already covered by exact matches
+      if (exactPersonIds.has(fp.id)) continue;
+      // Skip if this is the subject's own Person
+      if (input.personId && fp.id === input.personId) continue;
+
+      // Find role rows for this fuzzy Person (employees and in-flight applicants)
+      const [fuzzyEmps, fuzzyApps] = await Promise.all([
+        db.select({
+          id: employees.id,
+          employeeCode: employees.employeeCode,
+          status: employees.status,
+          firstName: employees.firstName,
+          lastName: employees.lastName,
+        })
+          .from(employees)
+          .where(eq(employees.personId, fp.id)),
+        db.select({
+          id: applicants.id,
+          pipelineStage: applicants.pipelineStage,
+          firstName: applicants.firstName,
+          lastName: applicants.lastName,
+        })
+          .from(applicants)
+          .where(
+            and(
+              eq(applicants.personId, fp.id),
+              sql`${applicants.pipelineStage} NOT IN ('hired', 'rejected', 'withdrawn')`,
+              ...(input.excludeApplicantId ? [ne(applicants.id, input.excludeApplicantId)] : []),
+            ),
+          ),
+      ]);
+
+      for (const e of fuzzyEmps) {
+        const isActive = e.status !== 'terminated';
+        const kind: MatchKind = isActive ? 'active_employee' : 'terminated_employee';
+        const statusLabel = isActive
+          ? `Currently active as ${e.employeeCode} — possible double-hire`
+          : `${e.lastName ?? ''}, ${e.firstName ?? ''} (${e.employeeCode}) — terminated`;
+        matches.push({ kind, confidence: 'possible', label: statusLabel, refId: e.id });
+      }
+      for (const a of fuzzyApps) {
+        matches.push({
+          kind: 'concurrent_applicant', confidence: 'possible',
+          label: `${a.lastName ?? ''}, ${a.firstName ?? ''} — also applying (${a.pipelineStage})`,
+          refId: a.id,
+        });
+      }
+    }
+  }
+
   return matches;
 }
 
@@ -392,6 +588,16 @@ export async function hireApplicant(applicantId: string, meta: HireMeta) {
   if (a.pipelineStage !== 'documents') {
     throw new Error('Only applicants with completed documents can be hired.');
   }
+
+  // ── T11 hard gate: the applicant must have a linked Person with an anchor ID ──
+  // No Person linked at all (pre-backfill row) → plainly blocked.
+  if (!a.personId) {
+    throw new Error(
+      "This applicant's identity record hasn't been migrated yet — run the identity backfill first, then retry.",
+    );
+  }
+  // Person exists but has no anchor ID → blocked.
+  await assertAnchored(a.personId);
 
   const employeeCode = meta.employeeCode ?? (await hr.generateNextEmployeeCode('CG-'));
 

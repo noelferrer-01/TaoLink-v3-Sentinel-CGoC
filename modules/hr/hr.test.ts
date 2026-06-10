@@ -8,7 +8,7 @@ import { assignments as assignmentsTable } from '@/modules/assignments/schema';
 import { dtrEntries, dtrPeriodCloses } from '@/modules/dtr/schema';
 import { payslips, payRuns } from '@/modules/payroll/schema';
 import { hr } from './index';
-import { createPerson } from '@/modules/persons';
+import { createPerson, getPerson } from '@/modules/persons';
 import { _resetEventsForTests } from '@/modules/events';
 
 // FK-ordered cleanup helper reused across describe blocks.
@@ -191,20 +191,24 @@ describe('hr.updateEmployee', () => {
   beforeEach(cleanupEmployees);
   afterAll(async () => { await closeDb(); });
 
-  it('updates editable fields and emits audit', async () => {
+  it('updates employment fields and emits audit', async () => {
     const e = await hr.createEmployee({
       firstName: 'Juan', lastName: 'Cruz', employeeCode: 'CG-U-0001',
       basicSalary: '20000', payFrequency: 'SEMI_MONTHLY', hiredOn: '2026-01-01',
     });
+    // T11: identity fields (lastName) are stripped; employment fields are updated.
     const updated = await hr.updateEmployee(e.id, {
-      lastName: 'Cruzal',
       employmentType: 'OFFICE_STAFF',
+      basicSalary: '22000',
     });
-    expect(updated.lastName).toBe('Cruzal');
     expect(updated.employmentType).toBe('OFFICE_STAFF');
+    expect(Number(updated.basicSalary)).toBe(22000);
     // Immutable fields cannot be changed
     expect(updated.employeeCode).toBe('CG-U-0001');
     expect(updated.id).toBe(e.id);
+    // Legacy columns on the row are not touched by updateEmployee now, but they
+    // still hold the original value from createEmployee (legacy dual-write).
+    expect(updated.lastName).toBe('Cruz');
   });
 
   it('rejects changes to employeeCode, id, createdAt (silently ignored)', async () => {
@@ -218,7 +222,7 @@ describe('hr.updateEmployee', () => {
 
   it('throws on missing id', async () => {
     await expect(
-      hr.updateEmployee('00000000-0000-0000-0000-000000000000', { lastName: 'x' }),
+      hr.updateEmployee('00000000-0000-0000-0000-000000000000', { rdoCode: '044' }),
     ).rejects.toThrow(/not found/);
   });
 });
@@ -395,7 +399,7 @@ describe('hr.updateEmployee event emission', () => {
       firstName: 'A', lastName: 'B', employeeCode: 'CG-EV-0001',
       basicSalary: '1', payFrequency: 'MONTHLY', hiredOn: '2026-01-01',
     });
-    await hr.updateEmployee(e.id, { lastName: 'Changed' });
+    await hr.updateEmployee(e.id, { employmentType: 'OFFICE_STAFF' });
 
     // setImmediate fires after current tick; wait a tick for delivery
     await new Promise((resolve) => setImmediate(resolve));
@@ -1040,5 +1044,94 @@ describe('hr.getEmployeesWithIdentityPage — T10: 0.2-threshold band', () => {
 
     const r = await hr.getEmployeesWithIdentityPage({ query: 'stillo' });
     expect(r.rows.some((e) => e.employeeCode === 'CG-IP10-BAND-001')).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Slice 3a Task 11 — updateEmployee is employment-only (identity keys stripped)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('hr.updateEmployee — T11: identity fields stripped, employment fields updated', () => {
+  beforeEach(cleanupPersons);
+  afterAll(async () => { await closeDb(); });
+
+  it('identity keys in patch do NOT change the Person (silent strip)', async () => {
+    const e = await hr.createEmployee({
+      employeeCode: 'CG-T11-001',
+      firstName: 'Identity', lastName: 'Test',
+      sssNumber: '34-T11-0001',
+      email: 'identity.test@t11.com',
+      basicSalary: 20000, hiredOn: '2026-01-01',
+    });
+    expect(e.personId).not.toBeNull();
+
+    // Fetch Person state before update
+    const personBefore = await getPerson(e.personId!);
+    expect(personBefore?.firstName).toBe('Identity');
+
+    // Pass identity fields in the patch — they must be silently stripped
+    await hr.updateEmployee(e.id, {
+      firstName: 'CHANGED' as any,
+      lastName: 'CHANGED' as any,
+      email: 'changed@hacked.com' as any,
+      sssNumber: '00-000000-0' as any,
+      // also update a real employment field to confirm the call works
+      employmentType: 'OFFICE_STAFF',
+    } as any);
+
+    // Person identity must be unchanged
+    const personAfter = await getPerson(e.personId!);
+    expect(personAfter?.firstName).toBe('Identity');
+    expect(personAfter?.lastName).toBe('Test');
+    expect(personAfter?.email).toBe('identity.test@t11.com');
+    expect(personAfter?.sssNumber).toBe('34-T11-0001');
+
+    // Employment field must be updated
+    const emp = await hr.getEmployee(e.id);
+    expect(emp?.employmentType).toBe('OFFICE_STAFF');
+  });
+
+  it('identity fields do NOT appear in changedFields of the audit record', async () => {
+    const e = await hr.createEmployee({
+      employeeCode: 'CG-T11-002',
+      firstName: 'AuditTest', lastName: 'Guard',
+      basicSalary: 18000, hiredOn: '2026-01-01',
+    });
+
+    await hr.updateEmployee(e.id, {
+      firstName: 'HACKED' as any,
+      lastName: 'HACKED' as any,
+      basicSalary: '25000',
+    } as any);
+
+    // Check audit log: changedFields should only contain employment fields
+    const rows = await getDb()
+      .select()
+      .from(auditLog)
+      .where(sql`target_kind = 'hr_employee' AND target_id = ${e.id} AND action = 'hr.employee.updated'`);
+    expect(rows.length).toBeGreaterThanOrEqual(1);
+    const last = rows[rows.length - 1]!;
+    const payload = last.payload as { changedFields: string[] };
+    expect(payload.changedFields).not.toContain('firstName');
+    expect(payload.changedFields).not.toContain('lastName');
+    expect(payload.changedFields).toContain('basicSalary');
+  });
+
+  it('employment-only patch on a person-less employee still works', async () => {
+    // Insert directly with no personId (pre-backfill row)
+    const [e] = await getDb()
+      .insert(employees)
+      .values({
+        employeeCode: 'CG-T11-003',
+        firstName: 'NoPerson', lastName: 'Row',
+        basicSalary: '15000.00',
+        hiredOn: '2026-01-01',
+        personId: null,
+      })
+      .returning();
+    expect(e).toBeDefined();
+
+    // Employment-only patch on a person-less row succeeds
+    const updated = await hr.updateEmployee(e!.id, { employmentType: 'DRIVER' });
+    expect(updated.employmentType).toBe('DRIVER');
   });
 });

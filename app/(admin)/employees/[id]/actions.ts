@@ -2,7 +2,11 @@
 
 import { revalidatePath } from 'next/cache';
 import { hr } from '@/modules/hr';
+import { updatePerson } from '@/modules/persons';
 import { getSessionFromCookie } from '@/modules/auth';
+import { getDb } from '@/core/db';
+import { employees } from '@/modules/hr/schema';
+import { eq } from 'drizzle-orm';
 
 /**
  * Editable patch shape — only the fields the detail/edit form is allowed to
@@ -10,6 +14,10 @@ import { getSessionFromCookie } from '@/modules/auth';
  * via `changeStatusAction`. Immutable fields (id, employeeCode, createdAt) are
  * stripped server-side by `hr.updateEmployee` anyway, but we don't accept them
  * at the action boundary either.
+ *
+ * T11: the action splits the patch server-side — identity fields (name, contact,
+ * IDs, address) → `persons.updatePerson`; employment fields → `hr.updateEmployee`.
+ * No form or component changes are needed (that's T13).
  */
 export interface EmployeePatchInput {
   firstName?: string;
@@ -28,6 +36,14 @@ export interface EmployeePatchInput {
   postalCode?: string | null;
 }
 
+/** Identity keys that belong on the Person (not on the employee row). */
+const IDENTITY_KEYS: ReadonlyArray<keyof EmployeePatchInput> = [
+  'firstName', 'lastName',
+  'email',
+  'dateOfBirth',
+  'addressLine1', 'addressLine2', 'city', 'province', 'postalCode',
+];
+
 export type UpdateResult =
   | { kind: 'ok' }
   | { kind: 'error'; message: string };
@@ -44,8 +60,39 @@ export async function updateEmployeeAction(
     };
   }
 
+  // Split the patch into identity keys (→ Person) and employment keys (→ Employee).
+  const identityPatch: Record<string, unknown> = {};
+  const employmentPatch: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (IDENTITY_KEYS.includes(key as keyof EmployeePatchInput)) {
+      identityPatch[key] = value;
+    } else {
+      employmentPatch[key] = value;
+    }
+  }
+
   try {
-    await hr.updateEmployee(id, patch, session.user.id);
+    // If the patch contains identity keys, look up the personId and route to persons.updatePerson.
+    if (Object.keys(identityPatch).length > 0) {
+      const db = getDb();
+      const [row] = await db.select({ personId: employees.personId }).from(employees).where(eq(employees.id, id));
+      if (!row) {
+        return { kind: 'error', message: "We couldn't find that employee — they may have been removed. Try refreshing the list." };
+      }
+      if (!row.personId) {
+        return {
+          kind: 'error',
+          message: "This employee's identity record hasn't been migrated yet — run the identity backfill first.",
+        };
+      }
+      await updatePerson(row.personId, identityPatch, session.user.id);
+    }
+
+    // Route employment fields to hr.updateEmployee (identity keys are stripped there too, as a safety belt).
+    if (Object.keys(employmentPatch).length > 0) {
+      await hr.updateEmployee(id, employmentPatch as Parameters<typeof hr.updateEmployee>[1], session.user.id);
+    }
+
     revalidatePath(`/employees/${id}`);
     revalidatePath('/employees');
     return { kind: 'ok' };

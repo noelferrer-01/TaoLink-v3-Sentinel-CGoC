@@ -14,8 +14,10 @@ import { applicants, applicantDocuments, blacklist } from './schema';
 import { employees } from '@/modules/hr/schema';
 import { persons } from '@/modules/persons/schema';
 import { payslips, payRuns } from '@/modules/payroll/schema';
-import { dtrEntries } from '@/modules/dtr/schema';
+import { dtrEntries, dtrPeriodCloses } from '@/modules/dtr/schema';
+import { assignments as assignmentsTable } from '@/modules/assignments/schema';
 import { hr } from '@/modules/hr';
+import { createPerson } from '@/modules/persons';
 import { runPayroll, listPayslips } from '@/modules/payroll';
 import { recruitment } from './index';
 
@@ -27,6 +29,8 @@ async function cleanup() {
   await db.delete(payslips);
   await db.delete(payRuns);
   await db.delete(dtrEntries);
+  await db.delete(dtrPeriodCloses);
+  await db.delete(assignmentsTable);
   await db.delete(applicantDocuments);
   await db.delete(applicants);
   await db.delete(blacklist);
@@ -95,18 +99,20 @@ describe('recruitment service', () => {
     });
     await hr.changeStatus(emp.id, 'terminated', 'AWOL');
 
-    const bySss = await recruitment.checkMatches({ firstName: 'X', lastName: 'Y', sssNumber: '34-1234567-8' });
+    // T11: matcher now routes through persons; exact SSS match via findPersonByAnyId
+    const bySss = await recruitment.checkMatches({ personId: null, firstName: 'X', lastName: 'Y', sssNumber: '34-1234567-8' });
     expect(bySss.some((m) => m.kind === 'terminated_employee' && m.confidence === 'exact')).toBe(true);
 
-    const byName = await recruitment.checkMatches({ firstName: 'Juan', lastName: 'Dela Cruz', dateOfBirth: '1990-01-01' });
+    // T11: fuzzy name+DOB match via findPossibleDuplicates → persons
+    const byName = await recruitment.checkMatches({ personId: null, firstName: 'Juan', lastName: 'Dela Cruz', dateOfBirth: '1990-01-01' });
     expect(byName.some((m) => m.kind === 'terminated_employee' && m.confidence === 'possible')).toBe(true);
   });
 
   it('checkMatches flags an active blacklist entry and returns nothing for a clean applicant', async () => {
     await recruitment.addToBlacklist({ firstName: 'Bad', lastName: 'Guy', dateOfBirth: '1985-05-05', reason: 'theft' });
-    const hit = await recruitment.checkMatches({ firstName: 'Bad', lastName: 'Guy', dateOfBirth: '1985-05-05' });
+    const hit = await recruitment.checkMatches({ personId: null, firstName: 'Bad', lastName: 'Guy', dateOfBirth: '1985-05-05' });
     expect(hit.some((m) => m.kind === 'blacklist')).toBe(true);
-    const clean = await recruitment.checkMatches({ firstName: 'Fresh', lastName: 'Face', dateOfBirth: '2000-01-01' });
+    const clean = await recruitment.checkMatches({ personId: null, firstName: 'Fresh', lastName: 'Face', dateOfBirth: '2000-01-01' });
     expect(clean.length).toBe(0);
   });
 
@@ -135,7 +141,8 @@ describe('recruitment service', () => {
   });
 
   it('a freshly-hired (undeployed) employee produces NO payslip', async () => {
-    const a = await recruitment.createApplicant({ firstName: 'Z', lastName: 'Q', source: 'walk_in', appliedOn: '2026-05-29' });
+    // T11: hireApplicant requires a gov ID — add sssNumber so assertAnchored passes.
+    const a = await recruitment.createApplicant({ firstName: 'Z', lastName: 'Q', source: 'walk_in', appliedOn: '2026-05-29', sssNumber: '34-NOPAY-001' });
     await recruitment.advanceStage(a.id, 'contacted');
     await recruitment.advanceStage(a.id, 'documents');
     const emp = await recruitment.hireApplicant(a.id, { basicSalary: 18000, hiredOn: '2026-06-01' });
@@ -199,5 +206,346 @@ describe('recruitment.hireApplicant — reuses applicant personId (T7)', () => {
     expect(countAfter).toBe(countBefore);
     // Employee links to the applicant's existing Person
     expect(emp.personId).toBe(applicantPersonId);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Slice 3a Task 11 — hireApplicant: ID gate (assertAnchored)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('recruitment.hireApplicant — T11: hire gate', () => {
+  beforeEach(cleanup);
+  afterAll(async () => { await cleanup(); await closeDb(); });
+
+  it('throws a plain-language error when the applicant has no anchor ID (anchorIdType=none)', async () => {
+    // Create applicant with no SSS (Person will have anchorIdType='none')
+    const a = await recruitment.createApplicant({
+      firstName: 'NoId', lastName: 'Guard',
+      source: 'walk_in', appliedOn: '2026-06-01',
+      // no sssNumber → anchorIdType will be 'none'
+    });
+    await recruitment.advanceStage(a.id, 'contacted');
+    await recruitment.advanceStage(a.id, 'documents');
+
+    await expect(
+      recruitment.hireApplicant(a.id, { basicSalary: 18000, hiredOn: '2026-06-10' }),
+    ).rejects.toThrow(/government id.*required|required.*government id|add.*id.*before|id.*required/i);
+  });
+
+  it('throws when the applicant has no personId at all (pre-backfill row)', async () => {
+    // Insert applicant row directly with personId=null to simulate pre-backfill
+    const [a] = await getDb()
+      .insert(applicants)
+      .values({
+        firstName: 'NoPerson', lastName: 'Guard',
+        source: 'walk_in', appliedOn: '2026-06-01',
+        pipelineStage: 'documents',
+        positionAppliedFor: 'GUARD',
+        isArmedPost: false,
+        personId: null,
+      })
+      .returning();
+    expect(a).toBeDefined();
+
+    await expect(
+      recruitment.hireApplicant(a!.id, { basicSalary: 18000, hiredOn: '2026-06-10' }),
+    ).rejects.toThrow(/identity.*not.*migrated|not.*migrated|backfill/i);
+  });
+
+  it('succeeds when the applicant has an anchor ID', async () => {
+    const a = await recruitment.createApplicant({
+      firstName: 'WithId', lastName: 'Guard',
+      source: 'walk_in', appliedOn: '2026-06-01',
+      sssNumber: '34-T11H-001',
+    });
+    await recruitment.advanceStage(a.id, 'contacted');
+    await recruitment.advanceStage(a.id, 'documents');
+
+    const emp = await recruitment.hireApplicant(a.id, { basicSalary: 18000, hiredOn: '2026-06-10' });
+    expect(emp.status).toBe('hired');
+    // Employee shares the applicant's Person
+    expect(emp.personId).toBe(a.personId);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Slice 3a Task 11 — advanceStage: sets idPending from Person's anchorIdType
+// ─────────────────────────────────────────────────────────────────────────────
+describe('recruitment.advanceStage — T11: idPending nudge', () => {
+  beforeEach(cleanup);
+  afterAll(async () => { await cleanup(); await closeDb(); });
+
+  it('sets idPending=true when Person has anchorIdType=none', async () => {
+    const a = await recruitment.createApplicant({
+      firstName: 'NeedsId', lastName: 'Guard',
+      source: 'walk_in', appliedOn: '2026-06-01',
+      // no SSS → anchorIdType = 'none'
+    });
+    const updated = await recruitment.advanceStage(a.id, 'contacted');
+    expect(updated.idPending).toBe(true);
+  });
+
+  it('sets idPending=false when Person has an anchor ID', async () => {
+    const a = await recruitment.createApplicant({
+      firstName: 'HasId', lastName: 'Guard',
+      source: 'walk_in', appliedOn: '2026-06-01',
+      sssNumber: '34-T11AS-001',
+    });
+    const updated = await recruitment.advanceStage(a.id, 'contacted');
+    expect(updated.idPending).toBe(false);
+  });
+
+  it('never throws for missing anchor ID — always advances', async () => {
+    const a = await recruitment.createApplicant({
+      firstName: 'NoBlock', lastName: 'Guard',
+      source: 'walk_in', appliedOn: '2026-06-01',
+    });
+    // Should NOT throw even with no ID
+    await expect(recruitment.advanceStage(a.id, 'contacted')).resolves.toBeDefined();
+  });
+
+  it('idPending=true when applicant has no personId at all (pre-backfill row)', async () => {
+    const [a] = await getDb()
+      .insert(applicants)
+      .values({
+        firstName: 'NoPerson', lastName: 'Guard',
+        source: 'walk_in', appliedOn: '2026-06-01',
+        pipelineStage: 'applied',
+        positionAppliedFor: 'GUARD',
+        isArmedPost: false,
+        personId: null,
+      })
+      .returning();
+    expect(a).toBeDefined();
+
+    const updated = await recruitment.advanceStage(a!.id, 'contacted');
+    expect(updated.idPending).toBe(true);
+  });
+
+  it('includes idPending in the audit payload', async () => {
+    const a = await recruitment.createApplicant({
+      firstName: 'AuditId', lastName: 'Check',
+      source: 'walk_in', appliedOn: '2026-06-01',
+      // no SSS → Person will have anchorIdType='none' → idPending=true
+    });
+    const updated = await recruitment.advanceStage(a.id, 'contacted');
+
+    // idPending is returned on the updated applicant row
+    expect(updated.idPending).toBe(true);
+
+    // Confirm the DB row has the value persisted
+    const [dbRow] = await getDb()
+      .select({ idPending: applicants.idPending })
+      .from(applicants)
+      .where(sql`id = ${a.id}`);
+    expect(dbRow).toBeDefined();
+    expect(dbRow!.idPending).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Slice 3a Task 11 — checkMatches: all-Person matcher
+// ─────────────────────────────────────────────────────────────────────────────
+describe('recruitment.checkMatches — T11: all-Person matcher', () => {
+  beforeEach(cleanup);
+  afterAll(async () => { await cleanup(); await closeDb(); });
+
+  it('same Person already an ACTIVE employee → exact + active_employee kind (double-hire)', async () => {
+    // Create a person and link them as an active employee
+    const person = await createPerson({
+      firstName: 'Active', lastName: 'Employee',
+      sssNumber: '34-ACT-0001', anchorIdType: 'sss',
+    });
+    await hr.createEmployee({
+      employeeCode: 'CG-T11M-001',
+      firstName: 'Active', lastName: 'Employee',
+      basicSalary: 18000, hiredOn: '2026-01-01',
+      sssNumber: '34-ACT-0001',
+      personId: person.id,
+    });
+    // status is 'hired' (active) by default
+
+    const matches = await recruitment.checkMatches({
+      personId: person.id,
+      firstName: 'Active', lastName: 'Employee',
+      sssNumber: '34-ACT-0001',
+    });
+    const activeMatch = matches.find((m) => m.kind === 'active_employee');
+    expect(activeMatch).toBeDefined();
+    expect(activeMatch?.confidence).toBe('exact');
+    expect(activeMatch?.label).toMatch(/CG-T11M-001/);
+  });
+
+  it('same Person is a terminated employee → exact + terminated_employee kind', async () => {
+    const person = await createPerson({
+      firstName: 'Terminated', lastName: 'Guard',
+      sssNumber: '34-TER-0001', anchorIdType: 'sss',
+    });
+    const emp = await hr.createEmployee({
+      employeeCode: 'CG-T11M-002',
+      firstName: 'Terminated', lastName: 'Guard',
+      basicSalary: 18000, hiredOn: '2026-01-01',
+      sssNumber: '34-TER-0001',
+      personId: person.id,
+    });
+    await hr.changeStatus(emp.id, 'terminated', 'AWOL');
+
+    const matches = await recruitment.checkMatches({
+      personId: person.id,
+      firstName: 'Terminated', lastName: 'Guard',
+      sssNumber: '34-TER-0001',
+    });
+    const termMatch = matches.find((m) => m.kind === 'terminated_employee');
+    expect(termMatch).toBeDefined();
+    expect(termMatch?.confidence).toBe('exact');
+    expect(termMatch?.label).toMatch(/CG-T11M-002/);
+  });
+
+  it('same Person has a second in-flight application → exact + concurrent_applicant (subject applicant NOT returned)', async () => {
+    const person = await createPerson({
+      firstName: 'Concurrent', lastName: 'Applicant',
+      sssNumber: '34-CON-0001', anchorIdType: 'sss',
+    });
+    // Create the "other" in-flight applicant linked to same person (direct insert)
+    const [otherApp] = await getDb()
+      .insert(applicants)
+      .values({
+        firstName: 'Concurrent', lastName: 'Applicant',
+        source: 'walk_in', appliedOn: '2026-06-01',
+        pipelineStage: 'contacted', // in-flight
+        positionAppliedFor: 'GUARD',
+        isArmedPost: false,
+        sssNumber: '34-CON-0001',
+        personId: person.id,
+      })
+      .returning();
+
+    // The subject applicant (the one we are viewing) also linked to same person
+    const [subjectApp] = await getDb()
+      .insert(applicants)
+      .values({
+        firstName: 'Concurrent', lastName: 'Applicant',
+        source: 'walk_in', appliedOn: '2026-06-02',
+        pipelineStage: 'applied',
+        positionAppliedFor: 'GUARD',
+        isArmedPost: false,
+        sssNumber: '34-CON-0001',
+        personId: person.id,
+      })
+      .returning();
+
+    const matches = await recruitment.checkMatches({
+      personId: person.id,
+      firstName: 'Concurrent', lastName: 'Applicant',
+      sssNumber: '34-CON-0001',
+      excludeApplicantId: subjectApp!.id, // exclude the subject applicant
+    });
+
+    // The other in-flight applicant should show as concurrent
+    const concurrentMatch = matches.find((m) => m.kind === 'concurrent_applicant');
+    expect(concurrentMatch).toBeDefined();
+    expect(concurrentMatch?.confidence).toBe('exact');
+    // The subject applicant must NOT be in results
+    expect(matches.some((m) => m.refId === subjectApp!.id)).toBe(false);
+    // The other applicant IS in results
+    expect(matches.some((m) => m.refId === otherApp!.id)).toBe(true);
+  });
+
+  it('blacklist entry with matching personId → exact + blacklist kind', async () => {
+    const person = await createPerson({
+      firstName: 'Blacklisted', lastName: 'Person',
+      sssNumber: '34-BL-0001', anchorIdType: 'sss',
+    });
+
+    // Insert blacklist entry with personId
+    await getDb()
+      .insert(blacklist)
+      .values({
+        firstName: 'Blacklisted', lastName: 'Person',
+        sssNumber: '34-BL-0001',
+        reason: 'violence',
+        personId: person.id,
+      });
+
+    const matches = await recruitment.checkMatches({
+      personId: person.id,
+      firstName: 'Blacklisted', lastName: 'Person',
+      sssNumber: '34-BL-0001',
+    });
+    const blMatch = matches.find((m) => m.kind === 'blacklist' && m.confidence === 'exact');
+    expect(blMatch).toBeDefined();
+  });
+
+  it('blacklist snapshot SSS match (no personId) → exact + blacklist kind', async () => {
+    await getDb()
+      .insert(blacklist)
+      .values({
+        firstName: 'Snapshot', lastName: 'Bl',
+        sssNumber: '34-BL-0002',
+        reason: 'theft',
+        // personId is null — snapshot match
+      });
+
+    const matches = await recruitment.checkMatches({
+      personId: null,
+      firstName: 'Snapshot', lastName: 'Bl',
+      sssNumber: '34-BL-0002',
+    });
+    const blMatch = matches.find((m) => m.kind === 'blacklist' && m.confidence === 'exact');
+    expect(blMatch).toBeDefined();
+  });
+
+  it('fuzzy name+DOB match via persons → possible confidence', async () => {
+    const person = await createPerson({
+      firstName: 'Fuzzy', lastName: 'Match',
+      dateOfBirth: '1990-03-15',
+      anchorIdType: 'none',
+    });
+    // Link to an employee so the person has a role
+    await hr.createEmployee({
+      employeeCode: 'CG-T11M-FUZ',
+      firstName: 'Fuzzy', lastName: 'Match',
+      basicSalary: 18000, hiredOn: '2026-01-01',
+      personId: person.id,
+    });
+
+    const matches = await recruitment.checkMatches({
+      personId: null,
+      firstName: 'Fuzzy', lastName: 'Match',
+      dateOfBirth: '1990-03-15',
+    });
+    expect(matches.some((m) => m.confidence === 'possible')).toBe(true);
+  });
+
+  it('person-less subject with no IDs → no crash, returns whatever matches it can', async () => {
+    // Should not throw even with null personId and no IDs
+    await expect(
+      recruitment.checkMatches({
+        personId: null,
+        firstName: 'Ghost', lastName: 'Nobody',
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  it('terminated employee still matched via persons (regression guard)', async () => {
+    const person = await createPerson({
+      firstName: 'Rehire', lastName: 'Check',
+      sssNumber: '34-RH-T11-001', anchorIdType: 'sss',
+    });
+    const emp = await hr.createEmployee({
+      employeeCode: 'CG-T11-RH-001',
+      firstName: 'Rehire', lastName: 'Check',
+      basicSalary: 18000, hiredOn: '2026-01-01',
+      sssNumber: '34-RH-T11-001',
+      personId: person.id,
+    });
+    await hr.changeStatus(emp.id, 'terminated', 'AWOL');
+
+    // Match via SSS (now routed through Person)
+    const matches = await recruitment.checkMatches({
+      personId: null,
+      firstName: 'X', lastName: 'Y',
+      sssNumber: '34-RH-T11-001',
+    });
+    expect(matches.some((m) => m.kind === 'terminated_employee')).toBe(true);
   });
 });

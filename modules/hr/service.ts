@@ -471,7 +471,41 @@ export async function undoTermination(
 /** Fields that must never change after creation. The patch is sanitised by deleting these keys. */
 const IMMUTABLE_FIELDS = ['id', 'employeeCode', 'createdAt'] as const;
 
-type UpdateEmployeePatch = Partial<Omit<Employee, 'id' | 'employeeCode' | 'createdAt'>>;
+/**
+ * Identity columns that have moved to the `persons` table (Slice 3a, T11).
+ * These are silently stripped from any `updateEmployee` patch — identity edits
+ * MUST go through `persons.updatePerson` instead. The strip is silent (no error)
+ * so legacy callers that still pass mixed patches don't break at the API level;
+ * they just won't see identity changes until they call `persons.updatePerson`.
+ *
+ * `rdoCode` is intentionally NOT here — it is a BIR compliance field that stays
+ * on the employee row (per T8 design decision).
+ */
+const IDENTITY_FIELDS = [
+  'firstName', 'middleName', 'lastName',
+  'email', 'phone',
+  'dateOfBirth',
+  'sssNumber', 'philhealthNumber', 'pagibigNumber', 'tinNumber',
+  'addressLine1', 'addressLine2', 'city', 'province', 'postalCode',
+] as const;
+
+/** All fields stripped from an update patch: immutable + identity. */
+const ALL_STRIP_FIELDS = [...IMMUTABLE_FIELDS, ...IDENTITY_FIELDS] as const;
+
+/**
+ * Employment-only patch type: excludes identity fields (name, contact, IDs,
+ * address — all on the Person) and immutable fields.
+ *
+ * Identity edits go through `persons.updatePerson`.
+ */
+type UpdateEmployeePatch = Partial<Omit<Employee,
+  | 'id' | 'employeeCode' | 'createdAt'
+  | 'firstName' | 'middleName' | 'lastName'
+  | 'email' | 'phone'
+  | 'dateOfBirth'
+  | 'sssNumber' | 'philhealthNumber' | 'pagibigNumber' | 'tinNumber'
+  | 'addressLine1' | 'addressLine2' | 'city' | 'province' | 'postalCode'
+>>;
 
 export async function updateEmployee(
   id: string,
@@ -479,9 +513,9 @@ export async function updateEmployee(
   actorUserId?: string | null,
 ): Promise<Employee> {
   const db = getDb();
-  // Sanitise: strip immutable keys the caller should not touch
+  // Sanitise: strip immutable keys AND identity keys the caller should not touch
   const safePatch = { ...patch } as Record<string, unknown>;
-  for (const field of IMMUTABLE_FIELDS) {
+  for (const field of ALL_STRIP_FIELDS) {
     delete safePatch[field];
   }
 

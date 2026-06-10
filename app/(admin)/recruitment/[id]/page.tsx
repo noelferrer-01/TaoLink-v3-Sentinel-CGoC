@@ -27,6 +27,8 @@ export default async function ApplicantDetailPage({ params }: { params: Promise<
   const { applicant: a, identity: ident, documents } = got;
 
   const matches = await recruitment.checkMatches({
+    personId: a.personId ?? null,
+    excludeApplicantId: a.id,
     firstName: ident.firstName ?? a.firstName,
     lastName: ident.lastName ?? a.lastName,
     dateOfBirth: ident.dateOfBirth ?? a.dateOfBirth,
@@ -68,7 +70,11 @@ export default async function ApplicantDetailPage({ params }: { params: Promise<
           <ul style={{ margin: 0, paddingLeft: '1.125rem', color: 'var(--ink-soft)', fontSize: '0.875rem' }}>
             {matches.map((m) => (
               <li key={`${m.kind}-${m.refId}`} style={{ marginBottom: '0.25rem' }}>
-                {m.kind === 'blacklist' ? 'Blacklist' : 'Terminated employee'} ({m.confidence === 'exact' ? 'exact SSS match' : 'possible name match'}): {m.label}
+                {m.kind === 'blacklist' && 'Blacklist'}
+                {m.kind === 'terminated_employee' && 'Terminated employee'}
+                {m.kind === 'active_employee' && 'Active employee'}
+                {m.kind === 'concurrent_applicant' && 'Concurrent application'}
+                {' '}({m.confidence === 'exact' ? 'exact match' : 'possible match'}): {m.label}
               </li>
             ))}
           </ul>
