@@ -25,6 +25,26 @@ from runtime code (the one schema-level exception is documented below).
 | `updatePerson` | `(id: string, patch: UpdatePersonPatch, actorUserId?) => Promise<Person>` | The **only** identity-edit path. Refuses redacted rows; silently strips immutable/dedup-derived fields; rejects blank first/last name. Catches Postgres `23505` and re-throws a plain-language "already on file" message. Audits + emits an event. |
 | `redactPerson` | `(id: string, actorUserId?) => Promise<Person>` | Tombstone (the soft-delete path): sets `redactedAt`, nulls all identity, names → `'[redacted]'`, `anchorIdType` → `'none'`. A referenced Person can't be hard-deleted (RESTRICT FK), so redaction is how PII is removed. |
 
+### Credentials wallet (Slice 3b — ADR 0018)
+
+The Person owns a durable licence/clearance wallet. Credentials are audited
+against the owning Person (the aggregate root) with a `person.credential.*` action.
+
+| Function | Signature | What it does |
+|---|---|---|
+| `addCredential` | `(input: AddCredentialInput, opts?: AddCredentialOptions) => Promise<PersonCredential>` | Adds a credential. `status` defaults to `'valid'`. Pass `{ tx }` so `recruitment.hireApplicant` can carry verified clearances forward atomically. |
+| `updateCredential` | `(id, patch, actorUserId?) => Promise<PersonCredential>` | Updates a credential (changed-field audit). Throws a plain-language not-found error. |
+| `listCredentials` | `(personId) => Promise<PersonCredential[]>` | One Person's credentials, ordered by type then soonest expiry (NULLs last). |
+| `listCredentialsForPersons` | `(personIds: string[]) => Promise<PersonCredential[]>` | Batch read (no N+1) for the readiness radar. `[]` for an empty input. |
+
+**Display state is derived, not stored** — `deriveCredState(expiresOn, status, today, windowDays?)` →
+`valid \| expiring \| expired \| revoked \| pending`. `revoked` is kept **distinct** from
+`expired`. `READINESS_CRED_SET(isArmedPost)` is the required *credential* set (licences/
+clearances only — **excludes `resume_biodata`**; armed posts add `ltopf_license`).
+`CRED_WINDOW_DAYS` holds per-credential renewal windows. The readiness radar that
+consumes these lives in **`recruitment`**, not here (persons imports nothing
+downstream — see the deviation note in `wiki/slices/3b-credentials-and-readiness-done-sweep.md`).
+
 ### Search primitives (shared, so hr + recruitment use one definition)
 
 | Export | What it is |
@@ -43,6 +63,10 @@ PH name particles into a `"last|first|dob"` dedup key), `checkIdFormat(type, raw
 (**advisory only — never throws**, returns a hint string or `null`). Types
 `AnchorIdType`, `AnchorIdTypeNonNone`, `Person`, `NewPerson`, `CreatePersonInput`,
 `CreatePersonOptions`. Schema values `persons`, `personSex`, `personAnchorIdType`.
+Credentials (Slice 3b): `CRED_TYPE_LABELS`, `CRED_STATUS_LABELS`, `CRED_WINDOW_DAYS`,
+`deriveCredState`, `READINESS_CRED_SET`; types `CredType`, `CredStatus`, `CredState`,
+`PersonCredential`, `NewPersonCredential`, `AddCredentialInput`, `AddCredentialOptions`;
+schema values `personCredentials`, `personCredType`, `personCredStatus`.
 
 ## Dependencies
 
@@ -53,6 +77,12 @@ PH name particles into a `"last|first|dob"` dedup key), `checkIdFormat(type, raw
   partial-unique indexes `persons_philsys_uq` / `persons_sss_uq` / `persons_tin_uq`
   (created in `0021_persons.sql`); lookup indexes for umid/passport/dl/anchor-type/dob;
   GIN trigram index `persons_fullname_trgm`; extension `pg_trgm` (enabled in 0009).
+  Slice 3b adds table `person_credentials` (cascade FK to `persons`, SET-NULL FK to
+  `users`), enums `person_cred_type` / `person_cred_status`, and index
+  `person_credentials_person_id_idx` (created in `0026_person_credentials.sql`).
+- **Schema-level only:** `schema.ts` imports the `users` table from `@/modules/auth/schema`
+  for the `person_credentials.verified_by_user_id` FK (the same documented FK-declaration
+  exception below — auth has no reverse dependency on persons, so it's acyclic).
 
 ### Architectural exception — role schemas import the `persons` table directly
 
@@ -97,5 +127,7 @@ import `employees` from `hr/schema`. **Runtime/service code still goes through
   Postgres `23503`: you tried to hard-delete a Person referenced by an employee or
   applicant. The FKs are `ON DELETE RESTRICT` by design. Use `redactPerson` (tombstone)
   instead of `DELETE`.
+- **`Credential not found — no credential with id <id>.`** — `updateCredential` against
+  a missing credential id.
 - **`[persons/<fn>] … returned no row`** — an internal invariant tripped (a write
   returned nothing). Indicates a deeper DB problem, not a caller mistake.

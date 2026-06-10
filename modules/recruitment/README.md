@@ -22,19 +22,28 @@ Import from `@/modules/recruitment` (the `recruitment` object or named exports).
 | `rejectApplicant` / `withdrawApplicant` | `(id, reason, opts?) => Promise<Applicant>` | Terminal; records `outcomeReason`. |
 | `checkMatches` | `({ personId, firstName, lastName, dateOfBirth?, sssNumber?, philsysNumber?, tinNumber?, excludeApplicantId? }) => Promise<Match[]>` | Cross-checks a candidate against everyone on file before save/hire. Exact channels: same `personId`; government-ID hit (SSS/PhilSys/TIN, via `persons`); active employees (`active_employee` — possible double-hire); terminated employees (`terminated_employee`); in-flight applicants (`concurrent_applicant`, terminal stages excluded); active blacklist. Possible channel: fuzzy name+DOB. |
 | `addToBlacklist` / `listBlacklist` / `removeFromBlacklist` | see types | `remove` is a soft deactivate (`active=false`). |
-| `hireApplicant` | `(applicantId, HireMeta) => Promise<Employee>` | **ADR 0009 handoff.** Requires stage `documents` **and an anchored government ID** — calls `persons.assertAnchored(personId)`, which throws if the Person's `anchorIdType` is `'none'`. Then calls `hr.createEmployee` **linking the applicant's existing Person** (no new Person minted), auto-generates `CG-#####` unless overridden, back-links `hiredEmployeeId`, sets stage `hired`. Audits + emits `recruitment.applicant.hired`. |
+| `hireApplicant` | `(applicantId, HireMeta) => Promise<Employee>` | **ADR 0009 handoff.** Requires stage `documents` **and an anchored government ID** — calls `persons.assertAnchored(personId)`, which throws if the Person's `anchorIdType` is `'none'`. Then calls `hr.createEmployee` **linking the applicant's existing Person** (no new Person minted), auto-generates `CG-#####` unless overridden, back-links `hiredEmployeeId`, sets stage `hired`. **Slice 3b:** copies every *verified* applicant document into the Person's credential wallet (`DOC_TO_CRED_TYPE`; `resume_biodata`/`other` are skipped). Audits + emits `recruitment.applicant.hired`. |
+| `listReadinessIssues` | `({ windowDays?, armedOnly?, limit?, offset?, today? }) => Promise<{ rows: ReadinessIssue[], total }>` | **Slice 3b licence readiness radar.** Active (non-terminated) guards diffed against the required *credential* set per `isArmedPost` (null → unarmed); emits `missing`/`expiring`/`expired`/`revoked`/`pending` plus the LTOPF `unverified` caveat (a valid LTOPF is never a clean all-clear — ADR 0018). Per-credential windows via `CRED_WINDOW_DAYS`; ordered missing-first then soonest expiry. Computes in-app over all active guards then paginates (see backlog perf note). |
 
 Labels/constants also exported: `STAGE_LABELS`, `SOURCE_LABELS`, `DOC_TYPE_LABELS`,
 `DOC_STATUS_LABELS`, `ALLOWED_TRANSITIONS`, `requiredDocsFor(isArmedPost)`,
-`MATCH_KIND_LABELS` + the `MatchKind` type.
+`MATCH_KIND_LABELS` + the `MatchKind` type. Slice 3b: `READINESS_KIND_LABELS`,
+`DOC_TO_CRED_TYPE` (exhaustive doc→credential map, round-trip tested) + the
+`ReadinessKind`, `ReadinessIssue`, `ReadinessQuery` types.
 
 ## Dependencies
 
 - `@/core/db` — Drizzle handle (`getDb`).
 - `@/modules/persons` — `createPerson`, `assertAnchored`, `getPerson`,
   `findPersonByAnyId`, `findPossibleDuplicates` (identity minting, the hire gate,
-  and the known-person / duplicate lookups behind intake).
-- `@/modules/hr` — `createEmployee`, `generateNextEmployeeCode` (the hire handoff).
+  and the known-person / duplicate lookups behind intake); Slice 3b adds
+  `addCredential` (hire carry-forward), `listCredentialsForPersons`,
+  `READINESS_CRED_SET`, `CRED_WINDOW_DAYS`, `deriveCredState`.
+- `@/modules/hr` — `createEmployee`, `generateNextEmployeeCode` (the hire handoff);
+  Slice 3b also reads the `employees` table (active guards + `isArmedPost`) for the
+  readiness radar. **`listReadinessIssues` lives here, not in persons:** readiness
+  joins hr employees with person credentials, and persons is a strict foundation
+  that imports neither — see `wiki/slices/3b-credentials-and-readiness-done-sweep.md`.
 - `@/modules/audit` — `audit.record` (note: arg is `actor`, not `actorUserId`).
 - `@/modules/events` — `events.publish`.
 - Tables: `recruitment_applicants` (its `person_id` is a `NOT NULL` FK to `persons`,
