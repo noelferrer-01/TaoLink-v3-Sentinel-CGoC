@@ -32,16 +32,17 @@ export default async function ApplicantDetailPage({ params }: { params: Promise<
   const { id } = await params;
   const got = await recruitment.getApplicant(id);
   if (!got) notFound();
-  // T9: identity is sourced from the linked Person (dual-write means values are identical).
+  // Identity is sourced from the linked Person — the applicant row is a role
+  // record only (legacy identity columns retired at 0024).
   const { applicant: a, identity: ident, documents } = got;
 
   const matches = await recruitment.checkMatches({
-    personId: a.personId ?? null,
+    personId: a.personId,
     excludeApplicantId: a.id,
-    firstName: ident.firstName ?? a.firstName,
-    lastName: ident.lastName ?? a.lastName,
-    dateOfBirth: ident.dateOfBirth ?? a.dateOfBirth,
-    sssNumber: ident.sssNumber ?? a.sssNumber,
+    firstName: ident.firstName,
+    lastName: ident.lastName,
+    dateOfBirth: ident.dateOfBirth,
+    sssNumber: ident.sssNumber,
   });
 
   const isActive = !TERMINAL.includes(a.pipelineStage);
@@ -61,8 +62,8 @@ export default async function ApplicantDetailPage({ params }: { params: Promise<
 
   return (
     <PageShell
-      breadcrumb={<><Link href="/recruitment">Applicants</Link> · {ident.lastName ?? a.lastName}, {ident.firstName ?? a.firstName}</>}
-      title={`${ident.firstName ?? a.firstName} ${ident.lastName ?? a.lastName}`}
+      breadcrumb={<><Link href="/recruitment">Applicants</Link> · {ident.lastName}, {ident.firstName}</>}
+      title={`${ident.firstName} ${ident.lastName}`}
       description={`${EMPLOYMENT_TYPE_LABELS[a.positionAppliedFor]}${a.isArmedPost ? ' · armed post' : ''} · ${STAGE_LABELS[a.pipelineStage]}`}
       footerHint={isActive ? 'Tick clearance documents, advance the stage, then Hire to create the employee record.' : undefined}
     >
@@ -94,11 +95,11 @@ export default async function ApplicantDetailPage({ params }: { params: Promise<
             <Field label="Position applied for">{EMPLOYMENT_TYPE_LABELS[a.positionAppliedFor]}</Field>
             <Field label="Source">{SOURCE_LABELS[a.source]}</Field>
             <Field label="Date applied">{a.appliedOn}</Field>
-            <Field label="Date of birth">{(ident.dateOfBirth ?? a.dateOfBirth) ?? <Muted>Not set</Muted>}</Field>
-            <Field label="SSS number">{(ident.sssNumber ?? a.sssNumber) ?? <Muted>Not set</Muted>}</Field>
-            <Field label="Phone">{(ident.phone ?? a.phone) ?? <Muted>Not set</Muted>}</Field>
-            <Field label="Email">{(ident.email ?? a.email) ?? <Muted>Not set</Muted>}</Field>
-            <Field label="Location">{[(ident.city ?? a.city), (ident.province ?? a.province)].filter(Boolean).join(', ') || <Muted>Not set</Muted>}</Field>
+            <Field label="Date of birth">{ident.dateOfBirth ?? <Muted>Not set</Muted>}</Field>
+            <Field label="SSS number">{ident.sssNumber ?? <Muted>Not set</Muted>}</Field>
+            <Field label="Phone">{ident.phone ?? <Muted>Not set</Muted>}</Field>
+            <Field label="Email">{ident.email ?? <Muted>Not set</Muted>}</Field>
+            <Field label="Location">{[ident.city, ident.province].filter(Boolean).join(', ') || <Muted>Not set</Muted>}</Field>
           </TwoCol>
           {a.notes && <div style={{ marginTop: '1rem' }}><Field label="Notes">{a.notes}</Field></div>}
           {a.pipelineStage === 'hired' && a.hiredEmployeeId && (

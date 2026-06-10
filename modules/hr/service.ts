@@ -10,12 +10,40 @@ import { audit } from '@/modules/audit';
 import { events } from '@/modules/events';
 import { ALLOWED_TRANSITIONS, type Status } from './labels';
 
+/**
+ * Identity fields accepted at CREATE time only. They never land on the
+ * hr_employees row (which is a role record since 0024) — they feed
+ * `persons.createPerson` when no `personId` is supplied. When a `personId` IS
+ * supplied (hireApplicant linking the applicant's existing Person), the
+ * identity fields are used only for the audit label; the Person is not touched.
+ */
+type EmployeeIdentityInput = {
+  firstName: string;
+  lastName: string;
+  middleName?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  dateOfBirth?: string | null;
+  sssNumber?: string | null;
+  philhealthNumber?: string | null;
+  pagibigNumber?: string | null;
+  tinNumber?: string | null;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  city?: string | null;
+  province?: string | null;
+  postalCode?: string | null;
+};
+
 // Drizzle types `numeric` columns as `string`, but callers reasonably pass numbers.
 // We widen basicSalary to accept both and stringify before insert.
-type CreateEmployeeInput = Omit<NewEmployee, 'id' | 'createdAt' | 'updatedAt' | 'basicSalary'> & {
-  basicSalary: number | string;
-  actorUserId?: string | null;
-};
+type CreateEmployeeInput = Omit<NewEmployee, 'id' | 'createdAt' | 'updatedAt' | 'basicSalary' | 'personId'> &
+  EmployeeIdentityInput & {
+    basicSalary: number | string;
+    /** Link an existing Person (e.g. the applicant's) instead of minting one. */
+    personId?: string | null;
+    actorUserId?: string | null;
+  };
 
 /**
  * Derives the best anchorIdType for a new Person from the available ID fields,
@@ -36,9 +64,17 @@ function deriveAnchorIdType(input: {
 
 export async function createEmployee(input: CreateEmployeeInput): Promise<Employee> {
   const db = getDb();
-  const { actorUserId, ...row } = input;
+  // Split the input: identity fields feed persons.createPerson; everything else
+  // is the role row. Identity NEVER lands on hr_employees (role record since 0024).
+  const {
+    actorUserId,
+    personId: inputPersonId,
+    firstName, lastName, middleName, email, phone, dateOfBirth,
+    sssNumber, philhealthNumber, pagibigNumber, tinNumber,
+    addressLine1, addressLine2, city, province, postalCode,
+    ...role
+  } = input;
 
-  // ── T7 transitional dual-write: create or link a Person ──────────────────
   // If a personId is passed, link it (no new Person minted — used by hireApplicant
   // to share the applicant's existing Person). Otherwise, mint one from the
   // identity fields in the input, atomically with the employee row.
@@ -48,33 +84,30 @@ export async function createEmployee(input: CreateEmployeeInput): Promise<Employ
   // failure) rolls back the Person in the same transaction — no orphaned Person.
   // Audit/events calls run AFTER the transaction commits so they aren't rolled
   // back on their own failures.
-  let personId: string | null = row.personId ?? null;
   let created: Employee;
 
   try {
     created = await db.transaction(async (tx) => {
+      let personId = inputPersonId ?? null;
       // Only mint a Person when no personId was supplied.
       if (!personId) {
-        const anchorIdType = deriveAnchorIdType({
-          sssNumber: row.sssNumber,
-          tinNumber: row.tinNumber,
-        });
+        const anchorIdType = deriveAnchorIdType({ sssNumber, tinNumber });
         const person = await createPerson({
-          firstName: row.firstName,
-          lastName: row.lastName,
-          middleName: row.middleName ?? null,
-          dateOfBirth: row.dateOfBirth ?? null,
-          sssNumber: row.sssNumber ?? null,
-          philhealthNumber: row.philhealthNumber ?? null,
-          pagibigNumber: row.pagibigNumber ?? null,
-          tinNumber: row.tinNumber ?? null,
-          email: row.email ?? null,
-          phone: row.phone ?? null,
-          addressLine1: row.addressLine1 ?? null,
-          addressLine2: row.addressLine2 ?? null,
-          city: row.city ?? null,
-          province: row.province ?? null,
-          postalCode: row.postalCode ?? null,
+          firstName,
+          lastName,
+          middleName: middleName ?? null,
+          dateOfBirth: dateOfBirth ?? null,
+          sssNumber: sssNumber ?? null,
+          philhealthNumber: philhealthNumber ?? null,
+          pagibigNumber: pagibigNumber ?? null,
+          tinNumber: tinNumber ?? null,
+          email: email ?? null,
+          phone: phone ?? null,
+          addressLine1: addressLine1 ?? null,
+          addressLine2: addressLine2 ?? null,
+          city: city ?? null,
+          province: province ?? null,
+          postalCode: postalCode ?? null,
           anchorIdType,
           actorUserId: actorUserId ?? null,
         }, { tx });
@@ -83,26 +116,24 @@ export async function createEmployee(input: CreateEmployeeInput): Promise<Employ
 
       const [emp] = await tx
         .insert(employees)
-        .values({ ...row, personId, basicSalary: String(row.basicSalary) })
+        .values({ ...role, personId, basicSalary: String(input.basicSalary) })
         .returning();
       if (!emp) throw new Error('[hr/createEmployee] insert returned no row');
       return emp;
     });
   } catch (e: any) {
-    if (e.code === '23505' && /email/.test(e.detail ?? '')) {
-      throw new Error(`Email already in use: ${row.email}`);
-    }
     // Re-throw if it's already a clean error (e.g. from the narrowing guard above)
     if (e.message?.startsWith('[hr/')) throw e;
     throw new Error(`[hr/createEmployee] ${e.message ?? e}`);
   }
 
   // Audit + events run after commit — not inside the transaction.
+  // Name comes from the identity input (the role row no longer carries it).
   await audit.record({
     actor: actorUserId ?? null,
     action: 'hr.employee.created',
     target: { kind: 'hr_employee', id: created.id },
-    payload: { employeeCode: created.employeeCode, name: `${created.firstName} ${created.lastName}` },
+    payload: { employeeCode: created.employeeCode, name: `${firstName} ${lastName}` },
   });
   await events.publish('hr.employee.created', { id: created.id, employeeCode: created.employeeCode });
   return created;
@@ -127,9 +158,10 @@ export async function getEmployeeByCode(code: string): Promise<Employee | null> 
 // match the historic Employee column names exactly — callers switch their data
 // SOURCE (from employees table to persons table), not their field names.
 //
-// LEFT JOIN: if personId is NULL (during the T3→T12 transition), the employee
-// row is still returned; all identity fields come back as null. This avoids
-// breaking any reader during the gradual migration.
+// Since 0024, personId is NOT NULL + ON DELETE RESTRICT, so every employee has
+// a Person. The joins below stay LEFT JOINs (harmless — equivalent to INNER
+// under the constraint) and the merged type keeps nullable identity fields so
+// readers stay defensive.
 
 /**
  * The merged shape: all employment-specific fields from hr_employees, plus all
@@ -470,11 +502,12 @@ export async function undoTermination(
 const IMMUTABLE_FIELDS = ['id', 'employeeCode', 'createdAt'] as const;
 
 /**
- * Identity columns that have moved to the `persons` table (Slice 3a, T11).
- * These are silently stripped from any `updateEmployee` patch — identity edits
- * MUST go through `persons.updatePerson` instead. The strip is silent (no error)
- * so legacy callers that still pass mixed patches don't break at the API level;
- * they just won't see identity changes until they call `persons.updatePerson`.
+ * Identity field names that live on the `persons` table (Slice 3a). Since 0024
+ * these columns no longer exist on hr_employees at all, but the runtime strip
+ * is kept as defense in depth at the action boundary: callers (e.g. the edit
+ * form's EmployeePatchInput) still carry identity keys in their types, and a
+ * stray identity key reaching Drizzle's `.set()` would otherwise throw. Identity
+ * edits MUST go through `persons.updatePerson` instead.
  *
  * `rdoCode` is intentionally NOT here — it is a BIR compliance field that stays
  * on the employee row (per T8 design decision).
@@ -491,19 +524,11 @@ export const IDENTITY_FIELDS = [
 const ALL_STRIP_FIELDS = [...IMMUTABLE_FIELDS, ...IDENTITY_FIELDS] as const;
 
 /**
- * Employment-only patch type: excludes identity fields (name, contact, IDs,
- * address — all on the Person) and immutable fields.
- *
- * Identity edits go through `persons.updatePerson`.
+ * Employment-only patch type: immutable fields excluded. Identity fields are
+ * not on `Employee` anymore (role record since 0024) — identity edits go
+ * through `persons.updatePerson`.
  */
-type UpdateEmployeePatch = Partial<Omit<Employee,
-  | 'id' | 'employeeCode' | 'createdAt'
-  | 'firstName' | 'middleName' | 'lastName'
-  | 'email' | 'phone'
-  | 'dateOfBirth'
-  | 'sssNumber' | 'philhealthNumber' | 'pagibigNumber' | 'tinNumber'
-  | 'addressLine1' | 'addressLine2' | 'city' | 'province' | 'postalCode'
->>;
+type UpdateEmployeePatch = Partial<Omit<Employee, 'id' | 'employeeCode' | 'createdAt'>>;
 
 export async function updateEmployee(
   id: string,
@@ -624,9 +649,8 @@ export type SearchEmployeeResult = {
  * pg_trgm.similarity_threshold is set to 0.2 per-transaction via SET LOCAL so
  * the threshold is pool-safe (reverts automatically at transaction end).
  *
- * An employee with personId = null cannot match by name (similarity against
- * NULL is NULL, so the `%` predicate is false) but is still findable via the
- * employeeCode ILIKE branch — expected transitional behaviour until T12 backfill.
+ * Since 0024 every employee has a Person (NOT NULL FK), so every employee is
+ * reachable by name search; the employeeCode ILIKE branch covers code lookups.
  */
 export async function searchEmployees(
   query: string,
@@ -824,15 +848,10 @@ export async function bulkImportEmployees(
   const errors: BulkImportResult['errors'] = [];
 
   const db = getDb();
-  // Email-dedup block: intentionally retained until T9/T11 while the legacy
-  // hr_employees.email column is still in use. Removed at T12 when email
-  // uniqueness enforcement moves entirely to persons.email.
-  const existingEmailRows = await db.select({ email: employees.email }).from(employees);
-  const existingEmails = new Set<string>(
-    existingEmailRows.map((r) => r.email).filter((e): e is string => typeof e === 'string'),
-  );
+  // NOTE: there is deliberately NO email dedup here. Email uniqueness was
+  // retired at T12 — persons.email is non-unique by design (applicants
+  // re-apply, share emails, or lack one). Never key a Map/Set on employee email.
 
-  const seenInBatch = new Set<string>();
   // Collect validated rows for processing. We process row-by-row so that each
   // Person can be minted individually and SSS dups can be caught as row errors.
   type ValidatedRow = {
@@ -848,24 +867,16 @@ export async function bulkImportEmployees(
       errors.push({ row, reason: parse.error.issues.map((i) => i.message).join('; ') });
       return;
     }
-    const r = parse.data;
-    if (r.email && existingEmails.has(r.email)) {
-      errors.push({ row, reason: `email ${r.email} already exists in HR — pick a different one or remove this row.` });
-      return;
-    }
-    if (r.email && seenInBatch.has(r.email)) {
-      errors.push({ row, reason: `email ${r.email} appears twice in the same file — keep one row.` });
-      return;
-    }
-    if (r.email) seenInBatch.add(r.email);
-    validRows.push({ csvRow: row, data: r });
+    validRows.push({ csvRow: row, data: parse.data });
   });
 
-  // ── T7 transitional dual-write: create a Person per row then the employee ──
+  // ── Create a Person per row, then the employee role row ────────────────────
   // Each row is wrapped in its own transaction so a failed employee insert
   // (e.g. duplicate employeeCode) rolls back the Person that was just minted —
   // no orphaned Person rows. SSS/TIN collisions from createPerson still surface
   // as per-row errors so the rest of the import can continue.
+  // All identity (incl. email) lives on the Person; the employee row is a role
+  // record only (CSV input shape unchanged).
   let imported = 0;
   for (const { csvRow, data: r } of validRows) {
     const sssNumber = blankToNull(r.sss_number);
@@ -878,6 +889,7 @@ export async function bulkImportEmployees(
         const person = await createPerson({
           firstName: r.first_name,
           lastName: r.last_name,
+          email: r.email || null,
           dateOfBirth: blankToNull(r.date_of_birth),
           sssNumber,
           philhealthNumber: blankToNull(r.philhealth_number),
@@ -896,24 +908,11 @@ export async function bulkImportEmployees(
           .insert(employees)
           .values({
             employeeCode: r.employee_code,
-            firstName: r.first_name,
-            lastName: r.last_name,
-            email: r.email || null,
             basicSalary: String(parseFloat(r.basic_salary)),
             payFrequency: r.pay_frequency,
             employmentType: r.employment_type,
             hiredOn: r.hired_on,
-            sssNumber,
-            philhealthNumber: blankToNull(r.philhealth_number),
-            pagibigNumber: blankToNull(r.pagibig_number),
-            tinNumber,
             rdoCode: blankToNull(r.rdo_code),
-            dateOfBirth: blankToNull(r.date_of_birth),
-            addressLine1: blankToNull(r.address_line1),
-            addressLine2: blankToNull(r.address_line2),
-            city: blankToNull(r.city),
-            province: blankToNull(r.province),
-            postalCode: blankToNull(r.postal_code),
             personId: person.id,
           })
           .returning();
@@ -923,11 +922,7 @@ export async function bulkImportEmployees(
     } catch (e: any) {
       // "already on file" from createPerson means duplicate SSS/TIN — the
       // transaction rolled back so no orphaned Person was left behind.
-      if (e.code === '23505' && /email/.test(e.detail ?? '')) {
-        errors.push({ row: csvRow, reason: `email ${r.email} already exists in HR — pick a different one or remove this row.` });
-      } else {
-        errors.push({ row: csvRow, reason: e.message ?? String(e) });
-      }
+      errors.push({ row: csvRow, reason: e.message ?? String(e) });
       continue;
     }
 

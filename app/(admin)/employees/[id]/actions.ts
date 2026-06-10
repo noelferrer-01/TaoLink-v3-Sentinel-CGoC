@@ -154,11 +154,11 @@ export async function updateEmployeeAction(
     return { kind: 'ok' };
   } catch (e) {
     const raw = e instanceof Error ? e.message : String(e);
-    // Plain-language wrapper for common DB errors
+    // Plain-language wrapper for common DB errors.
+    // (No email-uniqueness branch: persons.email is non-unique by design — the
+    // legacy hr_employees email unique index was retired in migration 0024.)
     let message = raw;
-    if (raw.includes('hr_employees_email_uq') || (raw.includes('duplicate key') && raw.includes('email'))) {
-      message = "That email is already used by another employee. Pick a different one or leave it blank.";
-    } else if (raw.startsWith('[hr/updateEmployee]')) {
+    if (raw.startsWith('[hr/updateEmployee]')) {
       message = "We couldn't find that employee — they may have been removed. Try refreshing the list.";
     } else {
       message = `We couldn't save those changes. ${raw}`;

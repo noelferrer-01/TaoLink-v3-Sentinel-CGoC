@@ -4,7 +4,7 @@
  * event, mirroring modules/hr and modules/assignments.
  */
 
-import { and, desc, eq, ilike, or, sql, inArray, ne, notInArray } from 'drizzle-orm';
+import { and, desc, eq, ilike, or, sql, inArray, ne, notInArray, getTableColumns } from 'drizzle-orm';
 import { getDb } from '@/core/db';
 import { audit } from '@/modules/audit';
 import { events } from '@/modules/events';
@@ -19,27 +19,28 @@ import {
   type BlacklistEntry,
 } from './schema';
 import { ALLOWED_TRANSITIONS, requiredDocsFor, type DocType, type DocStatus, type Stage } from './labels';
-import { createPerson, assertAnchored, findPersonByAnyId, findPossibleDuplicates, persons, type Person, ID_TYPE_LADDER } from '@/modules/persons';
+import { createPerson, assertAnchored, getPerson, findPersonByAnyId, findPossibleDuplicates, persons, type Person, ID_TYPE_LADDER } from '@/modules/persons';
 
-// ─── ApplicantWithPerson ──────────────────────────────────────────────────────
-// getApplicant returns this shape: the applicant row plus the linked Person's
-// identity fields (same property names as the legacy applicant columns so the
-// detail page switches its data source without renaming anything).
-// T9: reads identity from Person; dual-write ensures values are identical.
-// T12 will drop the legacy identity columns from the applicant row.
+// ─── ApplicantIdentity ────────────────────────────────────────────────────────
+// getApplicant returns this shape: the applicant role row plus the linked
+// Person's identity fields (same property names the legacy applicant columns
+// had, so callers keep their field names). Since 0024 the applicant row carries
+// NO identity — the Person is the only source. firstName/lastName are
+// non-nullable because persons.first_name/last_name are NOT NULL and the
+// applicant→person FK is NOT NULL + RESTRICT.
 
 export type ApplicantIdentity = {
-  firstName:   Person['firstName']   | null;
-  lastName:    Person['lastName']    | null;
-  middleName:  Person['middleName']  | null;
-  dateOfBirth: Person['dateOfBirth'] | null;
-  sssNumber:   Person['sssNumber']   | null;
-  phone:       Person['phone']       | null;
-  email:       Person['email']       | null;
-  addressLine1: Person['addressLine1'] | null;
-  addressLine2: Person['addressLine2'] | null;
-  city:        Person['city']        | null;
-  province:    Person['province']    | null;
+  firstName:   Person['firstName'];
+  lastName:    Person['lastName'];
+  middleName:  Person['middleName'];
+  dateOfBirth: Person['dateOfBirth'];
+  sssNumber:   Person['sssNumber'];
+  phone:       Person['phone'];
+  email:       Person['email'];
+  addressLine1: Person['addressLine1'];
+  addressLine2: Person['addressLine2'];
+  city:        Person['city'];
+  province:    Person['province'];
 };
 
 // ─── createApplicant ───────────────────────────────────────────────────────────
@@ -67,10 +68,12 @@ export type CreateApplicantInput = {
 export async function createApplicant(input: CreateApplicantInput): Promise<Applicant> {
   const db = getDb();
 
-  // ── T7 transitional dual-write: mint a Person from the applicant's identity ──
+  // ── Mint a Person from the applicant's identity; the applicant is a role row ──
   // Person INSERT + applicant INSERT are wrapped in a single transaction so a
   // failed applicant insert (e.g. any constraint violation) rolls back the newly
   // minted Person — no orphaned Person rows. Audit/events run after commit.
+  // Identity input fields exist ONLY to feed createPerson — since 0024 the
+  // applicant row has no identity columns.
   const anchorIdType: typeof ID_TYPE_LADDER[number] | 'none' =
     input.sssNumber ? 'sss' : 'none';
 
@@ -96,17 +99,6 @@ export async function createApplicant(input: CreateApplicantInput): Promise<Appl
       const [applicant] = await tx
         .insert(applicants)
         .values({
-          firstName: input.firstName.trim(),
-          lastName: input.lastName.trim(),
-          middleName: input.middleName ?? null,
-          dateOfBirth: input.dateOfBirth ?? null,
-          sssNumber: input.sssNumber ?? null,
-          phone: input.phone ?? null,
-          email: input.email ?? null,
-          addressLine1: input.addressLine1 ?? null,
-          addressLine2: input.addressLine2 ?? null,
-          city: input.city ?? null,
-          province: input.province ?? null,
           source: input.source,
           positionAppliedFor: input.positionAppliedFor ?? 'GUARD',
           isArmedPost: input.isArmedPost ?? false,
@@ -132,11 +124,12 @@ export async function createApplicant(input: CreateApplicantInput): Promise<Appl
   }
 
   // Audit + events run after commit — not inside the transaction.
+  // Name comes from the identity input (the role row no longer carries it).
   await audit.record({
     actor: input.actorUserId ?? null,
     action: 'recruitment.applicant.created',
     target: { kind: 'recruitment_applicant', id: created.id },
-    payload: { name: `${created.firstName} ${created.lastName}` },
+    payload: { name: `${input.firstName.trim()} ${input.lastName.trim()}` },
   });
   await events.publish('recruitment.applicant.created', { id: created.id });
   return created;
@@ -151,25 +144,25 @@ export async function getApplicant(
   const [a] = await db.select().from(applicants).where(eq(applicants.id, id));
   if (!a) return null;
 
-  // T9: fetch identity from the linked Person (LEFT JOIN semantics: if personId
-  // is null during the migration window, all identity fields come back as null).
-  const personRows = a.personId
-    ? await db.select().from(persons).where(eq(persons.id, a.personId))
-    : [];
-  const p = personRows[0] ?? null;
+  // Identity lives on the linked Person. personId is NOT NULL + RESTRICT since
+  // 0024, so a missing Person row means the DB is corrupt — fail loudly.
+  const [p] = await db.select().from(persons).where(eq(persons.id, a.personId));
+  if (!p) {
+    throw new Error(`[recruitment/getApplicant] applicant ${id} has no linked person row (FK should make this impossible)`);
+  }
 
   const identity: ApplicantIdentity = {
-    firstName:    p?.firstName   ?? null,
-    lastName:     p?.lastName    ?? null,
-    middleName:   p?.middleName  ?? null,
-    dateOfBirth:  p?.dateOfBirth ?? null,
-    sssNumber:    p?.sssNumber   ?? null,
-    phone:        p?.phone       ?? null,
-    email:        p?.email       ?? null,
-    addressLine1: p?.addressLine1 ?? null,
-    addressLine2: p?.addressLine2 ?? null,
-    city:         p?.city        ?? null,
-    province:     p?.province    ?? null,
+    firstName:    p.firstName,
+    lastName:     p.lastName,
+    middleName:   p.middleName,
+    dateOfBirth:  p.dateOfBirth,
+    sssNumber:    p.sssNumber,
+    phone:        p.phone,
+    email:        p.email,
+    addressLine1: p.addressLine1,
+    addressLine2: p.addressLine2,
+    city:         p.city,
+    province:     p.province,
   };
 
   const documents = await db.select().from(applicantDocuments).where(eq(applicantDocuments.applicantId, id));
@@ -178,29 +171,49 @@ export async function getApplicant(
 
 // ─── listApplicantsPage ───────────────────────────────────────────────────────
 
+/**
+ * Applicant role row merged with the linked Person's name — the shape the
+ * /recruitment list page renders. INNER JOIN is exact: applicants.person_id is
+ * NOT NULL + RESTRICT since 0024.
+ */
+export type ApplicantListItem = Applicant & {
+  firstName: Person['firstName'];
+  lastName:  Person['lastName'];
+};
+
 export async function listApplicantsPage(opts: {
   query?: string;
   stage?: Stage;
   limit: number;
   offset: number;
-}): Promise<{ rows: Applicant[]; total: number }> {
+}): Promise<{ rows: ApplicantListItem[]; total: number }> {
   const db = getDb();
   const filters = [];
   if (opts.query?.trim()) {
     const q = `%${opts.query.trim()}%`;
-    filters.push(or(ilike(applicants.firstName, q), ilike(applicants.lastName, q), ilike(applicants.sssNumber, q)));
+    // Name/SSS search runs on the Person (sole identity source since 0024).
+    filters.push(or(ilike(persons.firstName, q), ilike(persons.lastName, q), ilike(persons.sssNumber, q)));
   }
   if (opts.stage) filters.push(eq(applicants.pipelineStage, opts.stage));
   const where = filters.length ? and(...filters) : undefined;
 
   const rows = await db
-    .select()
+    .select({
+      ...getTableColumns(applicants),
+      firstName: persons.firstName,
+      lastName: persons.lastName,
+    })
     .from(applicants)
+    .innerJoin(persons, eq(applicants.personId, persons.id))
     .where(where)
     .orderBy(desc(applicants.appliedOn))
     .limit(opts.limit)
     .offset(opts.offset);
-  const countRows = await db.select({ count: sql<number>`count(*)::int` }).from(applicants).where(where);
+  const countRows = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(applicants)
+    .innerJoin(persons, eq(applicants.personId, persons.id))
+    .where(where);
   return { rows, total: countRows[0]?.count ?? 0 };
 }
 
@@ -374,11 +387,12 @@ export async function checkMatches(input: {
         employeeCode: employees.employeeCode,
         status: employees.status,
         personId: employees.personId,
-        // Legacy name columns for label — will be null post-T12; safe until then.
-        firstName: employees.firstName,
-        lastName: employees.lastName,
+        // Names for the label come from the Person (sole identity source).
+        firstName: persons.firstName,
+        lastName: persons.lastName,
       })
       .from(employees)
+      .innerJoin(persons, eq(employees.personId, persons.id))
       .where(inArray(employees.personId, [...exactPersonIds]));
 
     for (const e of empRows) {
@@ -386,7 +400,7 @@ export async function checkMatches(input: {
       const kind: MatchKind = isActive ? 'active_employee' : 'terminated_employee';
       const statusLabel = isActive
         ? `Currently active as ${e.employeeCode} — may be a double-hire`
-        : `${e.lastName ?? ''}, ${e.firstName ?? ''} (${e.employeeCode}) — terminated`;
+        : `${e.lastName}, ${e.firstName} (${e.employeeCode}) — terminated`;
       matches.push({
         kind,
         confidence: 'exact',
@@ -403,10 +417,11 @@ export async function checkMatches(input: {
         id: applicants.id,
         pipelineStage: applicants.pipelineStage,
         personId: applicants.personId,
-        firstName: applicants.firstName,
-        lastName: applicants.lastName,
+        firstName: persons.firstName,
+        lastName: persons.lastName,
       })
       .from(applicants)
+      .innerJoin(persons, eq(applicants.personId, persons.id))
       .where(
         and(
           inArray(applicants.personId, [...exactPersonIds]),
@@ -421,7 +436,7 @@ export async function checkMatches(input: {
       matches.push({
         kind: 'concurrent_applicant',
         confidence: 'exact',
-        label: `${a.lastName ?? ''}, ${a.firstName ?? ''} — also applying (${a.pipelineStage})`,
+        label: `${a.lastName}, ${a.firstName} — also applying (${a.pipelineStage})`,
         refId: a.id,
       });
     }
@@ -473,22 +488,19 @@ export async function checkMatches(input: {
       // Skip if this is the subject's own Person
       if (input.personId && fp.id === input.personId) continue;
 
-      // Find role rows for this fuzzy Person (employees and in-flight applicants)
+      // Find role rows for this fuzzy Person (employees and in-flight applicants).
+      // Labels use fp's name — the role rows belong to that same Person.
       const [fuzzyEmps, fuzzyApps] = await Promise.all([
         db.select({
           id: employees.id,
           employeeCode: employees.employeeCode,
           status: employees.status,
-          firstName: employees.firstName,
-          lastName: employees.lastName,
         })
           .from(employees)
           .where(eq(employees.personId, fp.id)),
         db.select({
           id: applicants.id,
           pipelineStage: applicants.pipelineStage,
-          firstName: applicants.firstName,
-          lastName: applicants.lastName,
         })
           .from(applicants)
           .where(
@@ -505,13 +517,13 @@ export async function checkMatches(input: {
         const kind: MatchKind = isActive ? 'active_employee' : 'terminated_employee';
         const statusLabel = isActive
           ? `Currently active as ${e.employeeCode} — may be a double-hire`
-          : `${e.lastName ?? ''}, ${e.firstName ?? ''} (${e.employeeCode}) — terminated`;
+          : `${fp.lastName}, ${fp.firstName} (${e.employeeCode}) — terminated`;
         matches.push({ kind, confidence: 'possible', label: statusLabel, refId: e.id });
       }
       for (const a of fuzzyApps) {
         matches.push({
           kind: 'concurrent_applicant', confidence: 'possible',
-          label: `${a.lastName ?? ''}, ${a.firstName ?? ''} — also applying (${a.pipelineStage})`,
+          label: `${fp.lastName}, ${fp.firstName} — also applying (${a.pipelineStage})`,
           refId: a.id,
         });
       }
@@ -588,38 +600,32 @@ export async function hireApplicant(applicantId: string, meta: HireMeta) {
     throw new Error('Only applicants with completed documents can be hired.');
   }
 
-  // ── T11 hard gate: the applicant must have a linked Person with an anchor ID ──
-  // No Person linked at all (pre-backfill row) → plainly blocked.
-  if (!a.personId) {
-    throw new Error(
-      "This applicant's identity record hasn't been migrated yet — run the identity backfill first, then retry.",
-    );
-  }
-  // Person exists but has no anchor ID → blocked.
+  // ── T11 hard gate: the applicant's Person must have an anchor ID ──────────
+  // (personId itself is NOT NULL + RESTRICT since 0024 — the DB guarantees a
+  // linked Person exists.) Person with no anchor ID → blocked.
   await assertAnchored(a.personId);
+
+  // Identity for the handoff comes from the Person (sole source since 0024).
+  const person = await getPerson(a.personId);
+  if (!person) {
+    throw new Error(`[recruitment/hireApplicant] applicant ${applicantId} has no linked person row (FK should make this impossible)`);
+  }
 
   const employeeCode = meta.employeeCode ?? (await hr.generateNextEmployeeCode('CG-'));
 
   // Handoff per ADR 0009: Recruitment.hireApplicant → HR.createEmployee.
-  // T7 dual-write: pass the applicant's existing personId so the SAME Person is
-  // linked to the new employee — no duplicate human is minted at hire time.
+  // Pass the applicant's existing personId so the SAME Person is linked to the
+  // new employee — no duplicate human is minted at hire time. The name fields
+  // are used only for the audit label (createEmployee never touches the Person
+  // when personId is supplied).
   const employee = await hr.createEmployee({
     employeeCode,
-    firstName: a.firstName,
-    middleName: a.middleName,
-    lastName: a.lastName,
+    firstName: person.firstName,
+    lastName: person.lastName,
     basicSalary: meta.basicSalary,
     hiredOn: meta.hiredOn,
     employmentType: a.positionAppliedFor,
-    email: a.email,
-    phone: a.phone,
-    dateOfBirth: a.dateOfBirth,
-    addressLine1: a.addressLine1,
-    addressLine2: a.addressLine2,
-    city: a.city,
-    province: a.province,
-    sssNumber: a.sssNumber,
-    personId: a.personId ?? undefined, // pass the applicant's Person so no duplicate is minted
+    personId: a.personId,
     actorUserId: meta.actorUserId ?? null,
   });
 

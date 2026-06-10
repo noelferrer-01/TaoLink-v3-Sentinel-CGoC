@@ -24,14 +24,65 @@
  */
 
 import { sql, eq, isNull, and, gt } from 'drizzle-orm';
+import { pgTable, uuid, text, varchar, date, boolean } from 'drizzle-orm/pg-core';
 import postgres from 'postgres';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { getActiveDatabaseUrl } from '@/core/env';
 import { persons }    from '@/modules/persons/schema';
-import { employees }  from '@/modules/hr/schema';
-import { applicants, blacklist } from '@/modules/recruitment/schema';
+import { blacklist } from '@/modules/recruitment/schema';
 import { normalizeNameKey, ID_TYPE_LADDER } from '@/modules/persons/labels';
 import type { AnchorIdType } from '@/modules/persons/labels';
+
+// ─── FROZEN pre-0024 schema snapshot ──────────────────────────────────────────
+//
+// This backfill only ever runs against a database that has NOT yet applied
+// migration 0024 (the 0024 SQL gate physically enforces that ordering: it
+// refuses to run while any person_id is NULL, and this script is what fills
+// them). 0024 renamed the identity columns below to legacy_* and removed them
+// from the live module schemas, so this script keeps its own point-in-time
+// view of the tables it reads. Do NOT import employees/applicants from
+// modules/* here — the live schemas no longer declare these columns.
+// (persons and blacklist are unchanged by 0024 and stay imported.)
+
+const employees = pgTable('hr_employees', {
+  id:               uuid('id').primaryKey(),
+  employeeCode:     text('employee_code').notNull(),
+  firstName:        text('first_name').notNull(),
+  lastName:         text('last_name').notNull(),
+  middleName:       text('middle_name'),
+  email:            text('email'),
+  phone:            text('phone'),
+  dateOfBirth:      date('date_of_birth'),
+  sssNumber:        text('sss_number'),
+  philhealthNumber: text('philhealth_number'),
+  pagibigNumber:    text('pagibig_number'),
+  tinNumber:        text('tin_number'),
+  addressLine1:     text('address_line1'),
+  addressLine2:     text('address_line2'),
+  city:             text('city'),
+  province:         text('province'),
+  postalCode:       varchar('postal_code', { length: 4 }),
+  personId:         uuid('person_id'),
+  isArmedPost:      boolean('is_armed_post'),
+});
+
+const applicants = pgTable('recruitment_applicants', {
+  id:              uuid('id').primaryKey(),
+  firstName:       text('first_name').notNull(),
+  middleName:      text('middle_name'),
+  lastName:        text('last_name').notNull(),
+  dateOfBirth:     date('date_of_birth'),
+  sssNumber:       text('sss_number'),
+  phone:           text('phone'),
+  email:           text('email'),
+  addressLine1:    text('address_line1'),
+  addressLine2:    text('address_line2'),
+  city:            text('city'),
+  province:        text('province'),
+  isArmedPost:     boolean('is_armed_post').notNull(),
+  hiredEmployeeId: uuid('hired_employee_id'),
+  personId:        uuid('person_id'),
+});
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 

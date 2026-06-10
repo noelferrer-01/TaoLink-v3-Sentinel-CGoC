@@ -35,6 +35,7 @@
 
 ## Runbooks
 - [runbooks/README.md](runbooks/README.md) — convention; populated as ops procedures emerge.
+- [runbooks/0024-retire-legacy-identity.md](runbooks/0024-retire-legacy-identity.md) — applying/rolling back the Slice 3a column-retirement migration (backup precondition, restore command, Task 12b note).
 
 ## Manuals
 - [manuals/README.md](manuals/README.md) — convention; end-user manuals populated as features ship.

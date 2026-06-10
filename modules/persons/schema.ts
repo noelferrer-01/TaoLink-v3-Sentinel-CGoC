@@ -139,6 +139,9 @@ export const persons = pgTable('persons', {
   // Support fast anchor-type filtering (e.g. list all `none` persons still needing an ID).
   anchorTypeIdx: index('persons_anchor_type_idx').on(t.anchorIdType),
 
+  // DOB is a matcher hot path (name+DOB duplicate detection) — added in 0024.
+  dobIdx: index('persons_dob_idx').on(t.dateOfBirth),
+
   // GIN trigram index on (first_name || ' ' || last_name) is hand-added in the
   // migration SQL (0021_persons.sql) — Drizzle cannot emit USING gin expressions.
   // Index name: persons_fullname_trgm

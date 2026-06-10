@@ -9,7 +9,7 @@
  * pattern — payroll/dtr/assignments all import `employees` from hr/schema for FKs.
  */
 
-import { pgTable, pgEnum, uuid, text, date, boolean, timestamp } from 'drizzle-orm/pg-core';
+import { pgTable, pgEnum, uuid, text, date, boolean, timestamp, index } from 'drizzle-orm/pg-core';
 import { employees, employmentType } from '@/modules/hr/schema';
 import { users } from '@/modules/auth/schema';
 import { persons } from '@/modules/persons/schema';
@@ -37,19 +37,12 @@ export const recruitmentDocStatus = pgEnum('recruitment_doc_status', [
 
 // ─── Tables ────────────────────────────────────────────────────────────────────
 
+// Role record ONLY (ADR 0017 / Slice 3a Task 12): all personal identity —
+// name, contact, DOB, SSS, address — lives on the linked Person. The legacy
+// identity columns were renamed to legacy_* by migration 0024 and are
+// deliberately NOT declared here (physically dropped later by Task 12b).
 export const applicants = pgTable('recruitment_applicants', {
   id: uuid('id').primaryKey().defaultRandom(),
-  firstName: text('first_name').notNull(),
-  middleName: text('middle_name'),
-  lastName: text('last_name').notNull(),
-  dateOfBirth: date('date_of_birth'),
-  sssNumber: text('sss_number'),               // stable ID for blacklist/rehire matching (spec §5)
-  phone: text('phone'),
-  email: text('email'),
-  addressLine1: text('address_line1'),
-  addressLine2: text('address_line2'),
-  city: text('city'),
-  province: text('province'),
   source: recruitmentSource('source').notNull().default('walk_in'),
   positionAppliedFor: employmentType('position_applied_for').notNull().default('GUARD'),
   isArmedPost: boolean('is_armed_post').notNull().default(false),
@@ -61,15 +54,18 @@ export const applicants = pgTable('recruitment_applicants', {
   hiredEmployeeId: uuid('hired_employee_id').references(() => employees.id, { onDelete: 'set null' }),
   outcomeReason: text('outcome_reason'),       // reject / withdraw reason
   notes: text('notes'),
-  // Person-centric identity spine (Slice 3a, Task 3).
-  // Nullable now; backfill (Task 4) populates, Task 12 enforces NOT NULL.
-  personId: uuid('person_id').references(() => persons.id, { onDelete: 'set null' }),
+  // Person-centric identity spine. NOT NULL + RESTRICT since 0024: every
+  // applicant row must point at a Person, and a referenced Person can't be deleted.
+  personId: uuid('person_id').notNull().references(() => persons.id, { onDelete: 'restrict' }),
   // "ID still needed" nudge flag — set/cleared by advanceStage (Task 11).
   // NOT NULL DEFAULT false so the nudge is safe to read at any point.
   idPending: boolean('id_pending').notNull().default(false),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
-});
+}, (t) => ({
+  // FK/join + matcher hot path (applicant ⋈ person) — Postgres doesn't auto-index FKs.
+  personIdIdx: index('recruitment_applicants_person_id_idx').on(t.personId),
+}));
 
 export const applicantDocuments = pgTable('recruitment_applicant_documents', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -100,7 +96,10 @@ export const blacklist = pgTable('recruitment_blacklist', {
   personId: uuid('person_id').references(() => persons.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
-});
+}, (t) => ({
+  // Matcher hot path (blacklist person link) — Postgres doesn't auto-index FKs.
+  personIdIdx: index('recruitment_blacklist_person_id_idx').on(t.personId),
+}));
 
 // ─── Inferred types ──────────────────────────────────────────────────────────
 

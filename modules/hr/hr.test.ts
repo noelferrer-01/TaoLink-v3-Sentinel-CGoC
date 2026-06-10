@@ -52,10 +52,14 @@ describe('hr.createEmployee + state machine', () => {
     expect(Number(e.basicSalary)).toBe(18000);
   });
 
-  it('rejects duplicate email', async () => {
-    await hr.createEmployee({ employeeCode: 'CG-1', firstName: 'A', lastName: 'B', basicSalary: 18000, hiredOn: '2026-05-01', email: 'a@x.com' });
-    await expect(hr.createEmployee({ employeeCode: 'CG-2', firstName: 'C', lastName: 'D', basicSalary: 18000, hiredOn: '2026-05-01', email: 'a@x.com' }))
-      .rejects.toThrow(/email/i);
+  it('allows two employees to share an email (uniqueness retired at T12 — persons.email is non-unique by design)', async () => {
+    const e1 = await hr.createEmployee({ employeeCode: 'CG-1', firstName: 'A', lastName: 'B', basicSalary: 18000, hiredOn: '2026-05-01', email: 'shared@x.com' });
+    const e2 = await hr.createEmployee({ employeeCode: 'CG-2', firstName: 'C', lastName: 'D', basicSalary: 18000, hiredOn: '2026-05-01', email: 'shared@x.com' });
+    expect(e1.id).not.toBe(e2.id);
+    const w1 = await hr.getEmployeeWithIdentity(e1.id);
+    const w2 = await hr.getEmployeeWithIdentity(e2.id);
+    expect(w1?.email).toBe('shared@x.com');
+    expect(w2?.email).toBe('shared@x.com');
   });
 
   it('allows hired → deployed', async () => {
@@ -108,25 +112,13 @@ CG-3,Pedro,Reyes,pedro@x.com,18000,SEMI_MONTHLY,2026-05-01`;
     expect(result.errors).toEqual([]);
   });
 
-  it('flags duplicate email inside the batch (row 2 wins, row 3 errors)', async () => {
+  it('imports rows sharing an email (email dedup retired at T12 — persons.email is non-unique)', async () => {
     const csv = `employee_code,first_name,last_name,email,basic_salary,pay_frequency,hired_on
 CG-1,A,B,dup@x.com,18000,SEMI_MONTHLY,2026-05-01
 CG-2,C,D,dup@x.com,18000,SEMI_MONTHLY,2026-05-01`;
     const result = await hr.bulkImportEmployees(csv);
-    expect(result.imported).toBe(1);
-    expect(result.errors).toHaveLength(1);
-    expect(result.errors[0]).toMatchObject({ row: 2, reason: expect.stringMatching(/dup@x\.com/) });
-  });
-
-  it('flags email that already exists in DB (per-row error, batch continues)', async () => {
-    await hr.createEmployee({ employeeCode: 'CG-1', firstName: 'A', lastName: 'B', basicSalary: 18000, hiredOn: '2026-05-01', email: 'existing@x.com' });
-    const csv = `employee_code,first_name,last_name,email,basic_salary,pay_frequency,hired_on
-CG-2,C,D,existing@x.com,18000,SEMI_MONTHLY,2026-05-01
-CG-3,E,F,new@x.com,18000,SEMI_MONTHLY,2026-05-01`;
-    const result = await hr.bulkImportEmployees(csv);
-    expect(result.imported).toBe(1);
-    expect(result.errors).toHaveLength(1);
-    expect(result.errors[0]).toMatchObject({ row: 1, reason: expect.stringMatching(/existing@x\.com/) });
+    expect(result.imported).toBe(2);
+    expect(result.errors).toEqual([]);
   });
 
   it('flags invalid basic_salary with plain-language error', async () => {
@@ -206,9 +198,6 @@ describe('hr.updateEmployee', () => {
     // Immutable fields cannot be changed
     expect(updated.employeeCode).toBe('CG-U-0001');
     expect(updated.id).toBe(e.id);
-    // Legacy columns on the row are not touched by updateEmployee now, but they
-    // still hold the original value from createEmployee (legacy dual-write).
-    expect(updated.lastName).toBe('Cruz');
   });
 
   it('rejects changes to employeeCode, id, createdAt (silently ignored)', async () => {
@@ -226,42 +215,8 @@ describe('hr.updateEmployee', () => {
     ).rejects.toThrow(/not found/);
   });
 
-  // Guards against bug (a): person-less rows must be updatable for employment
-  // fields without tripping the "identity record hasn't been migrated" error.
-  // The action diffs submitted values against getEmployeeWithIdentity (persons-
-  // sourced baseline). For a person-less row that baseline returns null for all
-  // identity fields. toFormState coerces null → '', toPatch converts '' → null,
-  // normalize() treats both as null — so a salary-only save sees no identity
-  // change and skips updatePerson entirely. This test verifies the service side
-  // of that path: getEmployeeWithIdentity returns null identity fields (correct
-  // baseline), and updateEmployee accepts the employment-only patch.
-  it('person-less row: getEmployeeWithIdentity returns null identity baseline; employment-only update succeeds', async () => {
-    // Insert directly to get a row with personId = null (createEmployee always mints a Person).
-    const [e] = await getDb()
-      .insert(employees)
-      .values({
-        employeeCode: 'CG-U-NOPERSON',
-        firstName: 'Legacy',
-        lastName: 'Name',
-        basicSalary: '18000.00',
-        hiredOn: '2026-01-01',
-        personId: null,
-      })
-      .returning();
-
-    // The persons-sourced baseline should return null for all identity fields.
-    const baseline = await hr.getEmployeeWithIdentity(e!.id);
-    expect(baseline).not.toBeNull();
-    expect(baseline!.personId).toBeNull();
-    expect(baseline!.firstName).toBeNull(); // persons source, not legacy column
-    expect(baseline!.lastName).toBeNull();
-    expect(baseline!.email).toBeNull();
-
-    // Employment-only update must succeed for person-less rows.
-    const updated = await hr.updateEmployee(e!.id, { basicSalary: '22000', employmentType: 'OFFICE_STAFF' });
-    expect(Number(updated.basicSalary)).toBe(22000);
-    expect(updated.employmentType).toBe('OFFICE_STAFF');
-  });
+  // (The former "person-less row" baseline test was removed at T12: rows with
+  // personId = NULL are impossible now — hr_employees.person_id is NOT NULL.)
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -372,17 +327,18 @@ describe('hr.createEmployee + BIR fields', () => {
   beforeEach(cleanupEmployees);
   afterAll(async () => { await closeDb(); });
 
-  it('stores RDO, DOB, address fields', async () => {
+  it('stores RDO on the role row; DOB/address land on the Person', async () => {
     const e = await hr.createEmployee({
       firstName: 'A', lastName: 'B', employeeCode: 'CG-T-0003',
       basicSalary: '1', payFrequency: 'MONTHLY', hiredOn: '2026-01-01',
       rdoCode: '044', dateOfBirth: '1990-03-15',
       addressLine1: '123 Rizal St', city: 'Manila', province: 'Metro Manila', postalCode: '1000',
     });
-    expect(e.rdoCode).toBe('044');
-    expect(e.city).toBe('Manila');
+    expect(e.rdoCode).toBe('044'); // role-owned BIR field stays on hr_employees
+    const merged = await hr.getEmployeeWithIdentity(e.id);
+    expect(merged?.city).toBe('Manila');
     // Drizzle returns date columns as string (YYYY-MM-DD) for pg `date` type
-    expect(e.dateOfBirth).toBe('1990-03-15');
+    expect(merged?.dateOfBirth).toBe('1990-03-15');
   });
 });
 
@@ -402,7 +358,8 @@ Maria,Reyes,CG-B-0002,30000,SEMI_MONTHLY,2026-01-01,OFFICE_STAFF,044,1985-05-15,
     const maria = await hr.getEmployeeByCode('CG-B-0002');
     expect(maria?.employmentType).toBe('OFFICE_STAFF');
     expect(maria?.rdoCode).toBe('044');
-    expect(maria?.city).toBe('Quezon City');
+    const merged = await hr.getEmployeeWithIdentity(maria!.id);
+    expect(merged?.city).toBe('Quezon City'); // address lands on the Person
   });
 
   it('defaults employment_type to GUARD when column missing from CSV', async () => {
@@ -574,7 +531,7 @@ describe('hr.getEmployeeWithIdentity', () => {
 
     const e = await hr.createEmployee({
       employeeCode: 'CG-WI-001',
-      firstName: 'Maria', // legacy columns still written
+      firstName: 'Maria', // used only for the audit label — the Person (passed below) is the identity source
       lastName: 'Santos',
       basicSalary: 20000,
       hiredOn: '2026-01-01',
@@ -606,39 +563,8 @@ describe('hr.getEmployeeWithIdentity', () => {
     expect(result!.email).toBe('maria@test.com');
   });
 
-  it('returns employee with identity fields null when personId is NULL (LEFT JOIN)', async () => {
-    // Insert the employee row directly with personId: null to actually exercise
-    // the LEFT JOIN null-path. Using hr.createEmployee() would mint a Person
-    // automatically (T7 dual-write), so person_id would never be null — that
-    // makes the LEFT JOIN branch untestable via the service layer.
-    const [e] = await getDb()
-      .insert(employees)
-      .values({
-        employeeCode: 'CG-WI-002',
-        firstName: 'No',
-        lastName: 'Person',
-        basicSalary: '15000.00',
-        hiredOn: '2026-01-01',
-        personId: null,
-      })
-      .returning();
-
-    const result = await hr.getEmployeeWithIdentity(e!.id);
-
-    expect(result).not.toBeNull();
-    expect(result!.id).toBe(e!.id);
-    expect(result!.employeeCode).toBe('CG-WI-002');
-    expect(result!.personId).toBeNull(); // confirms LEFT JOIN null-path is exercised
-    // Identity fields should be null when no person is linked
-    expect(result!.firstName).toBeNull();
-    expect(result!.lastName).toBeNull();
-    expect(result!.suffix).toBeNull();
-    expect(result!.sex).toBeNull();
-    expect(result!.philsysNumber).toBeNull();
-    expect(result!.sssNumber).toBeNull();
-    expect(result!.tinNumber).toBeNull();
-    expect(result!.passportNumber).toBeNull();
-  });
+  // (The former "personId is NULL" LEFT-JOIN test was removed at T12: person-less
+  // employee rows are impossible now — hr_employees.person_id is NOT NULL.)
 
   it('returns null when the employee does not exist', async () => {
     const result = await hr.getEmployeeWithIdentity('00000000-0000-0000-0000-000000000000');
@@ -667,10 +593,12 @@ describe('hr.createEmployee — dual-write (T7)', () => {
     expect(e.personId).not.toBeNull();
     const countAfter = (await getDb().select({ id: persons.id }).from(persons)).length;
     expect(countAfter).toBe(countBefore + 1);
-    // legacy columns still populated
-    expect(e.firstName).toBe('Juan');
-    expect(e.lastName).toBe('Dela Cruz');
-    expect(e.sssNumber).toBe('34-1111111-1');
+    // The role row carries NO identity columns (retired at T12); the merged
+    // accessor sources them from the minted Person.
+    const merged = await hr.getEmployeeWithIdentity(e.id);
+    expect(merged?.firstName).toBe('Juan');
+    expect(merged?.lastName).toBe('Dela Cruz');
+    expect(merged?.sssNumber).toBe('34-1111111-1');
   });
 
   it('links the given personId and does NOT mint a new Person', async () => {
@@ -790,21 +718,21 @@ describe('hr.getEmployeesWithIdentityPage', () => {
 
     await hr.createEmployee({ employeeCode: 'CG-PG-001', firstName: 'Ana', lastName: 'Reyes', basicSalary: 10000, hiredOn: '2026-01-01', personId: p1.id });
     await hr.createEmployee({ employeeCode: 'CG-PG-002', firstName: 'Ben', lastName: 'Torres', basicSalary: 10000, hiredOn: '2026-01-01', personId: p2.id });
-    await hr.createEmployee({ employeeCode: 'CG-PG-003', firstName: 'No', lastName: 'Link',   basicSalary: 10000, hiredOn: '2026-01-01' });
+    await hr.createEmployee({ employeeCode: 'CG-PG-003', firstName: 'No', lastName: 'Sss',   basicSalary: 10000, hiredOn: '2026-01-01' });
 
     const result = await hr.getEmployeesWithIdentityPage({ limit: 10, offset: 0 });
 
     expect(result.total).toBe(3);
     expect(result.rows).toHaveLength(3);
-    // Every row has the merged shape: pick one with a linked person
+    // Every row has the merged shape: pick one with a pre-created person
     const ana = result.rows.find((r) => r.employeeCode === 'CG-PG-001');
     expect(ana).toBeDefined();
     expect(ana!.firstName).toBe('Ana');
     expect(ana!.lastName).toBe('Reyes');
-    // The one with no person link returns null identity fields (LEFT JOIN)
-    const noLink = result.rows.find((r) => r.employeeCode === 'CG-PG-003');
-    expect(noLink).toBeDefined();
-    expect(noLink!.sssNumber).toBeNull();
+    // The auto-minted Person (no SSS given) returns null for absent identity fields
+    const noSss = result.rows.find((r) => r.employeeCode === 'CG-PG-003');
+    expect(noSss).toBeDefined();
+    expect(noSss!.sssNumber).toBeNull();
   });
 
   it('paginates correctly — offset/limit respected', async () => {
@@ -865,36 +793,14 @@ describe('hr.searchEmployees — T10: name search via persons', () => {
     expect(match!.lastName).toBe('Santos');
   });
 
-  it('code-search (ILIKE) still finds an employee with no linked Person', async () => {
-    // Insert directly to create a person-less row (createEmployee always mints a Person).
-    await getDb().insert(employees).values({
-      employeeCode: 'CG-T10-NOPERSON',
-      firstName: 'No',
-      lastName: 'Person',
-      basicSalary: '1.00',
-      hiredOn: '2026-01-01',
-      personId: null,
-    });
+  // (The two former "person-less row" search tests were removed at T12: rows
+  // with personId = NULL are impossible now — hr_employees.person_id is NOT
+  // NULL. Code-search with a linked Person is covered above.)
 
-    const r = await hr.searchEmployees('NOPERSON');
-    const codes = r.map((e) => e.employeeCode);
-    expect(codes).toContain('CG-T10-NOPERSON');
-  });
-
-  it('name-search does NOT match a person-less employee (similarity against NULL is NULL)', async () => {
-    await getDb().insert(employees).values({
-      employeeCode: 'CG-T10-NOPERSON2',
-      firstName: 'GhostName',
-      lastName: 'GhostLast',
-      basicSalary: '1.00',
-      hiredOn: '2026-01-01',
-      personId: null,
-    });
-
-    // Searching by the legacy name should NOT find this employee (persons.name is NULL).
-    const r = await hr.searchEmployees('GhostName');
-    const codes = r.map((e) => e.employeeCode);
-    expect(codes).not.toContain('CG-T10-NOPERSON2');
+  it('code-search (ILIKE) finds an employee by code substring', async () => {
+    await hr.createEmployee({ employeeCode: 'CG-T10-CODE', firstName: 'Code', lastName: 'Search', basicSalary: 1, payFrequency: 'MONTHLY', hiredOn: '2026-01-01' });
+    const r = await hr.searchEmployees('T10-CODE');
+    expect(r.map((e) => e.employeeCode)).toContain('CG-T10-CODE');
   });
 
   it('respects employmentType filter (T10 regression guard)', async () => {
@@ -954,18 +860,10 @@ describe('hr.listEmployeesPage — T10: name search via persons', () => {
     expect(match!.lastName).toBe('Torres');
   });
 
-  it('code-search still finds a person-less employee', async () => {
-    await getDb().insert(employees).values({
-      employeeCode: 'CG-LP10-NOPERSON',
-      firstName: 'No',
-      lastName: 'Person',
-      basicSalary: '1.00',
-      hiredOn: '2026-01-01',
-      personId: null,
-    });
-
-    const r = await hr.listEmployeesPage({ query: 'NOPERSON' });
-    expect(r.rows.some((e) => e.employeeCode === 'CG-LP10-NOPERSON')).toBe(true);
+  it('code-search finds an employee by code substring', async () => {
+    await hr.createEmployee({ employeeCode: 'CG-LP10-CODE', firstName: 'Code', lastName: 'Search', basicSalary: 1, payFrequency: 'MONTHLY', hiredOn: '2026-01-01' });
+    const r = await hr.listEmployeesPage({ query: 'LP10-CODE' });
+    expect(r.rows.some((e) => e.employeeCode === 'CG-LP10-CODE')).toBe(true);
   });
 
   it('returns {rows, total} and total counts correctly after T10 switch', async () => {
@@ -995,18 +893,10 @@ describe('hr.getEmployeesWithIdentityPage — T10: name search via persons', () 
     expect(r.rows.every((e) => e.employeeCode !== 'CG-IP10-002')).toBe(true);
   });
 
-  it('code-search still finds a person-less employee (identity page)', async () => {
-    await getDb().insert(employees).values({
-      employeeCode: 'CG-IP10-NOPERSON',
-      firstName: 'No',
-      lastName: 'Person',
-      basicSalary: '1.00',
-      hiredOn: '2026-01-01',
-      personId: null,
-    });
-
-    const r = await hr.getEmployeesWithIdentityPage({ query: 'NOPERSON' });
-    expect(r.rows.some((e) => e.employeeCode === 'CG-IP10-NOPERSON')).toBe(true);
+  it('code-search finds an employee by code substring (identity page)', async () => {
+    await hr.createEmployee({ employeeCode: 'CG-IP10-CODE', firstName: 'Code', lastName: 'Search', basicSalary: 1, payFrequency: 'MONTHLY', hiredOn: '2026-01-01' });
+    const r = await hr.getEmployeesWithIdentityPage({ query: 'IP10-CODE' });
+    expect(r.rows.some((e) => e.employeeCode === 'CG-IP10-CODE')).toBe(true);
   });
 });
 
@@ -1153,22 +1043,6 @@ describe('hr.updateEmployee — T11: identity fields stripped, employment fields
     expect(payload.changedFields).toContain('basicSalary');
   });
 
-  it('employment-only patch on a person-less employee still works', async () => {
-    // Insert directly with no personId (pre-backfill row)
-    const [e] = await getDb()
-      .insert(employees)
-      .values({
-        employeeCode: 'CG-T11-003',
-        firstName: 'NoPerson', lastName: 'Row',
-        basicSalary: '15000.00',
-        hiredOn: '2026-01-01',
-        personId: null,
-      })
-      .returning();
-    expect(e).toBeDefined();
-
-    // Employment-only patch on a person-less row succeeds
-    const updated = await hr.updateEmployee(e!.id, { employmentType: 'DRIVER' });
-    expect(updated.employmentType).toBe('DRIVER');
-  });
+  // (The former "person-less employee" patch test was removed at T12: rows with
+  // personId = NULL are impossible now — hr_employees.person_id is NOT NULL.)
 });

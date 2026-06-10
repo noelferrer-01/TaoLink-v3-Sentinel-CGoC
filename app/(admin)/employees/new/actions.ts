@@ -131,11 +131,10 @@ export async function createEmployeeAction(
       throw e;
     }
     const raw = e instanceof Error ? e.message : String(e);
+    // (No email branch: email uniqueness was retired at T12 — persons.email is
+    // non-unique by design, so createEmployee no longer throws on shared emails.)
     let message: string;
-    if (raw.startsWith('Email already in use:')) {
-      message =
-        'That email is already used by another employee. Pick a different one or leave it blank.';
-    } else if (raw.includes('hr_employees_code_uq')) {
+    if (raw.includes('hr_employees_code_uq')) {
       message =
         'That employee code is already used. Pick a different one — codes must be unique.';
     } else {

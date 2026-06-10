@@ -18,48 +18,38 @@ export const employmentType = pgEnum('hr_employment_type', [
   'OTHER',
 ]);
 
+// Role record ONLY (ADR 0017 / Slice 3a Task 12): all personal identity —
+// name, contact, DOB, statutory IDs, address — lives on the linked Person
+// (modules/persons). The legacy identity columns were renamed to legacy_* by
+// migration 0024 and are deliberately NOT declared here (invisible to code;
+// physically dropped later by Task 12b). Identity reads go through
+// `getEmployeeWithIdentity`; identity edits go through `persons.updatePerson`.
 export const employees = pgTable('hr_employees', {
   id: uuid('id').primaryKey().defaultRandom(),
   employeeCode: text('employee_code').notNull(), // CGoC-facing ID, e.g. "CG-00001"
-  firstName: text('first_name').notNull(),
-  lastName: text('last_name').notNull(),
-  middleName: text('middle_name'),
-  email: text('email'),
-  phone: text('phone'),
   basicSalary: numeric('basic_salary', { precision: 12, scale: 2 }).notNull(),
   payFrequency: payFrequency('pay_frequency').notNull().default('SEMI_MONTHLY'),
   employmentType: employmentType('employment_type').notNull().default('GUARD'),
   status: employeeStatus('status').notNull().default('hired'),
   hiredOn: date('hired_on').notNull(),
   terminatedOn: date('terminated_on'),
-  // Statutory IDs — nullable; populated when on file. Compliance exports treat
-  // a missing value as a per-employee warning, not an export-blocking error.
-  sssNumber: text('sss_number'),
-  philhealthNumber: text('philhealth_number'),
-  pagibigNumber: text('pagibig_number'),
-  tinNumber: text('tin_number'),
-  // BIR 2316 fields — nullable; populated on file. Phase 7 PDF export warns on
-  // missing values rather than blocking the export.
+  // BIR compliance field owned by the employee ROLE (not personal identity) —
+  // stays here per the T8 design decision. Nullable; export warns when missing.
   rdoCode: varchar('rdo_code', { length: 3 }),         // Revenue District Office, e.g. '044'
-  dateOfBirth: date('date_of_birth'),
-  addressLine1: text('address_line1'),
-  addressLine2: text('address_line2'),
-  city: text('city'),
-  province: text('province'),
-  postalCode: varchar('postal_code', { length: 4 }),
-  // Person-centric identity spine (Slice 3a, Task 3).
-  // Nullable now; backfill (Task 4) populates, Task 12 enforces NOT NULL.
-  personId: uuid('person_id').references(() => persons.id, { onDelete: 'set null' }),
+  // Person-centric identity spine. NOT NULL + RESTRICT since 0024: every
+  // employee row must point at a Person, and a referenced Person can't be deleted.
+  personId: uuid('person_id').notNull().references(() => persons.id, { onDelete: 'restrict' }),
   // Armed-post profile: used by Slice 3b readiness radar to determine which
-  // credentials are required. Nullable now; backfilled from detachment post type
+  // credentials are required. Nullable; backfilled from detachment post type
   // in Task 4 and usable once populated.
   isArmedPost: boolean('is_armed_post'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
   empCodeUq: unique('hr_employees_code_uq').on(t.employeeCode),
-  emailUq: unique('hr_employees_email_uq').on(t.email),
   statusIdx: index('hr_employees_status_idx').on(t.status),
+  // FK/join hot path (employee ⋈ person) — Postgres doesn't auto-index FKs.
+  personIdIdx: index('hr_employees_person_id_idx').on(t.personId),
 }));
 
 export type Employee = typeof employees.$inferSelect;

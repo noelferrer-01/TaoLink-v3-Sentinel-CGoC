@@ -128,7 +128,9 @@ describe('recruitment service', () => {
 
     expect(emp.employeeCode).toMatch(/^CG-\d{5}$/);
     expect(emp.status).toBe('hired');
-    expect(emp.firstName).toBe('Ana');
+    // Identity lives on the Person — read it back through the merged accessor.
+    const merged = await hr.getEmployeeWithIdentity(emp.id);
+    expect(merged?.firstName).toBe('Ana');
     const got = await recruitment.getApplicant(a.id);
     expect(got?.applicant.pipelineStage).toBe('hired');
     expect(got?.applicant.hiredEmployeeId).toBe(emp.id);
@@ -170,13 +172,14 @@ describe('recruitment.createApplicant — dual-write (T7)', () => {
       dateOfBirth: '1995-08-15',
     });
     expect(a.personId).not.toBeNull();
-    const ps = await getDb().select().from(persons).where(sql`id = ${a.personId!}`);
+    const ps = await getDb().select().from(persons).where(sql`id = ${a.personId}`);
     expect(ps[0]).toBeDefined();
     expect(ps[0]!.firstName).toBe('Lena');
     expect(ps[0]!.sssNumber).toBe('34-7777777-7');
-    // legacy columns still populated
-    expect(a.firstName).toBe('Lena');
-    expect(a.sssNumber).toBe('34-7777777-7');
+    // The applicant role row carries no identity; getApplicant merges it back in.
+    const got = await recruitment.getApplicant(a.id);
+    expect(got?.identity.firstName).toBe('Lena');
+    expect(got?.identity.sssNumber).toBe('34-7777777-7');
   });
 });
 
@@ -231,25 +234,9 @@ describe('recruitment.hireApplicant — T11: hire gate', () => {
     ).rejects.toThrow(/government id.*required|required.*government id|add.*id.*before|id.*required/i);
   });
 
-  it('throws when the applicant has no personId at all (pre-backfill row)', async () => {
-    // Insert applicant row directly with personId=null to simulate pre-backfill
-    const [a] = await getDb()
-      .insert(applicants)
-      .values({
-        firstName: 'NoPerson', lastName: 'Guard',
-        source: 'walk_in', appliedOn: '2026-06-01',
-        pipelineStage: 'documents',
-        positionAppliedFor: 'GUARD',
-        isArmedPost: false,
-        personId: null,
-      })
-      .returning();
-    expect(a).toBeDefined();
-
-    await expect(
-      recruitment.hireApplicant(a!.id, { basicSalary: 18000, hiredOn: '2026-06-10' }),
-    ).rejects.toThrow(/identity.*not.*migrated|not.*migrated|backfill/i);
-  });
+  // (The former "no personId at all" test was removed at T12: applicant rows
+  // with personId = NULL are impossible now — recruitment_applicants.person_id
+  // is NOT NULL. The anchorIdType='none' gate above is the surviving guard.)
 
   it('succeeds when the applicant has an anchor ID', async () => {
     const a = await recruitment.createApplicant({
@@ -303,23 +290,10 @@ describe('recruitment.advanceStage — T11: idPending nudge', () => {
     await expect(recruitment.advanceStage(a.id, 'contacted')).resolves.toBeDefined();
   });
 
-  it('idPending=true when applicant has no personId at all (pre-backfill row)', async () => {
-    const [a] = await getDb()
-      .insert(applicants)
-      .values({
-        firstName: 'NoPerson', lastName: 'Guard',
-        source: 'walk_in', appliedOn: '2026-06-01',
-        pipelineStage: 'applied',
-        positionAppliedFor: 'GUARD',
-        isArmedPost: false,
-        personId: null,
-      })
-      .returning();
-    expect(a).toBeDefined();
-
-    const updated = await recruitment.advanceStage(a!.id, 'contacted');
-    expect(updated.idPending).toBe(true);
-  });
+  // (The former "no personId at all → idPending" test was removed at T12:
+  // person-less applicant rows are impossible now — person_id is NOT NULL.
+  // The anchorIdType='none' → idPending=true nudge above still covers the
+  // surviving real-world case.)
 
   it('includes idPending in the audit payload', async () => {
     const a = await recruitment.createApplicant({
@@ -405,16 +379,15 @@ describe('recruitment.checkMatches — T11: all-Person matcher', () => {
       firstName: 'Concurrent', lastName: 'Applicant',
       sssNumber: '34-CON-0001', anchorIdType: 'sss',
     });
-    // Create the "other" in-flight applicant linked to same person (direct insert)
+    // Create the "other" in-flight applicant linked to same person (direct
+    // insert — role row only; identity lives on the shared Person)
     const [otherApp] = await getDb()
       .insert(applicants)
       .values({
-        firstName: 'Concurrent', lastName: 'Applicant',
         source: 'walk_in', appliedOn: '2026-06-01',
         pipelineStage: 'contacted', // in-flight
         positionAppliedFor: 'GUARD',
         isArmedPost: false,
-        sssNumber: '34-CON-0001',
         personId: person.id,
       })
       .returning();
@@ -423,12 +396,10 @@ describe('recruitment.checkMatches — T11: all-Person matcher', () => {
     const [subjectApp] = await getDb()
       .insert(applicants)
       .values({
-        firstName: 'Concurrent', lastName: 'Applicant',
         source: 'walk_in', appliedOn: '2026-06-02',
         pipelineStage: 'applied',
         positionAppliedFor: 'GUARD',
         isArmedPost: false,
-        sssNumber: '34-CON-0001',
         personId: person.id,
       })
       .returning();
