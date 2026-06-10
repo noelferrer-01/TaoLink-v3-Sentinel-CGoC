@@ -89,8 +89,9 @@ export default async function ApplicantDetailPage({ params }: { params: Promise<
       )}
 
       {/* "ID still needed" nudge — provisional applicants can move through the
-          pipeline, but a government ID is required before hiring. Never blocks. */}
-      {isActive && a.idPending && (
+          pipeline, but a government ID is required before hiring. Never blocks.
+          Derived from the live Person anchor so it can never go stale. */}
+      {isActive && ident.anchorIdType === 'none' && (
         <div style={{
           border: '1px solid var(--ochre)', background: 'rgba(184, 134, 47, 0.10)',
           borderRadius: 'var(--radius)', padding: '0.75rem 1rem', marginBottom: '1rem',
@@ -98,7 +99,7 @@ export default async function ApplicantDetailPage({ params }: { params: Promise<
         }}>
           <strong>Government ID still needed.</strong>{' '}
           You can keep screening this applicant, but a PhilSys, SSS, or TIN number must be on file before they can be hired.
-          {' '}Add it with <strong>Edit</strong> on their identity record.
+          {' '}You&apos;ll be asked to enter it at the <strong>Hire</strong> step.
         </div>
       )}
 
@@ -180,7 +181,7 @@ export default async function ApplicantDetailPage({ params }: { params: Promise<
             ))}
 
             {a.pipelineStage === 'documents' && (
-              <HireModal applicantId={a.id} defaultCode={defaultCode} today={a.appliedOn} readyToHire={allVerified} />
+              <HireModal applicantId={a.id} defaultCode={defaultCode} today={a.appliedOn} readyToHire={allVerified} needsId={ident.anchorIdType === 'none'} />
             )}
 
             <details style={{ marginLeft: 'auto' }}>
