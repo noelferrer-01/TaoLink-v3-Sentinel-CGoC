@@ -162,17 +162,19 @@ export async function getEmployeeByCode(code: string): Promise<Employee | null> 
 // SOURCE (from employees table to persons table), not their field names.
 //
 // Since 0024, personId is NOT NULL + ON DELETE RESTRICT, so every employee has
-// a Person. The joins below stay LEFT JOINs (harmless — equivalent to INNER
-// under the constraint) and the merged type keeps nullable identity fields so
-// readers stay defensive.
+// a Person. T12b tightened the joins to INNER and the merged type to the
+// Person's own nullability — the constraint, not defensiveness, carries the
+// guarantee now that the legacy columns are physically gone (0025).
 
 /**
  * The merged shape: all employment-specific fields from hr_employees, plus all
  * identity fields from persons (using the same property names as the legacy
  * hr_employees columns so callers need zero rename changes).
  *
- * Identity fields are nullable even where Person has NOT NULL — they become
- * null when personId is NULL (no linked Person yet).
+ * T12b: personId is NOT NULL + ON DELETE RESTRICT (0024), so every employee
+ * HAS a Person and the accessors INNER JOIN. Identity fields carry exactly the
+ * Person's own nullability — firstName/lastName are non-null; the rest are
+ * nullable because they're optional on the Person itself.
  */
 export type EmployeeWithIdentity = {
   // ── Employment fields (hr_employees) ────────────────────────────────────────
@@ -191,27 +193,27 @@ export type EmployeeWithIdentity = {
   updatedAt:      Employee['updatedAt'];
 
   // ── Identity fields (persons) — same names as the legacy hr_employees cols ──
-  firstName:            Person['firstName']            | null;
-  lastName:             Person['lastName']             | null;
-  middleName:           Person['middleName']           | null;
-  suffix:               Person['suffix']               | null;
-  dateOfBirth:          Person['dateOfBirth']          | null;
-  sex:                  Person['sex']                  | null;
-  philsysNumber:        Person['philsysNumber']        | null;
-  sssNumber:            Person['sssNumber']            | null;
-  tinNumber:            Person['tinNumber']            | null;
-  philhealthNumber:     Person['philhealthNumber']     | null;
-  pagibigNumber:        Person['pagibigNumber']        | null;
-  umidNumber:           Person['umidNumber']           | null;
-  passportNumber:       Person['passportNumber']       | null;
-  driversLicenseNumber: Person['driversLicenseNumber'] | null;
-  addressLine1:         Person['addressLine1']         | null;
-  addressLine2:         Person['addressLine2']         | null;
-  city:                 Person['city']                 | null;
-  province:             Person['province']             | null;
-  postalCode:           Person['postalCode']           | null;
-  phone:                Person['phone']                | null;
-  email:                Person['email']                | null;
+  firstName:            Person['firstName'];
+  lastName:             Person['lastName'];
+  middleName:           Person['middleName'];
+  suffix:               Person['suffix'];
+  dateOfBirth:          Person['dateOfBirth'];
+  sex:                  Person['sex'];
+  philsysNumber:        Person['philsysNumber'];
+  sssNumber:            Person['sssNumber'];
+  tinNumber:            Person['tinNumber'];
+  philhealthNumber:     Person['philhealthNumber'];
+  pagibigNumber:        Person['pagibigNumber'];
+  umidNumber:           Person['umidNumber'];
+  passportNumber:       Person['passportNumber'];
+  driversLicenseNumber: Person['driversLicenseNumber'];
+  addressLine1:         Person['addressLine1'];
+  addressLine2:         Person['addressLine2'];
+  city:                 Person['city'];
+  province:             Person['province'];
+  postalCode:           Person['postalCode'];
+  phone:                Person['phone'];
+  email:                Person['email'];
 };
 
 /** Reusable Drizzle column selection object for the merged shape. */
@@ -256,8 +258,7 @@ const employeeWithIdentityColumns = {
 
 /**
  * Returns the employee's employment fields merged with the linked Person's
- * identity. Uses LEFT JOIN so employees without a linked Person are still
- * returned (identity fields will be null during the T3→T12 migration window).
+ * identity (INNER JOIN — personId is NOT NULL since 0024).
  *
  * Returns null when no employee row exists for the given id.
  */
@@ -266,7 +267,7 @@ export async function getEmployeeWithIdentity(id: string): Promise<EmployeeWithI
   const rows = await db
     .select(employeeWithIdentityColumns)
     .from(employees)
-    .leftJoin(persons, eq(employees.personId, persons.id))
+    .innerJoin(persons, eq(employees.personId, persons.id))
     .where(eq(employees.id, id));
   return rows[0] ?? null;
 }
@@ -328,7 +329,7 @@ export async function getEmployeesWithIdentityPage(
       runner
         .select(employeeWithIdentityColumns)
         .from(employees)
-        .leftJoin(persons, eq(employees.personId, persons.id))
+        .innerJoin(persons, eq(employees.personId, persons.id))
         .where(where)
         .orderBy(primaryOrder, employees.id)
         .limit(limit)
@@ -336,7 +337,7 @@ export async function getEmployeesWithIdentityPage(
       runner
         .select({ total: count() })
         .from(employees)
-        .leftJoin(persons, eq(employees.personId, persons.id))
+        .innerJoin(persons, eq(employees.personId, persons.id))
         .where(where),
     ]);
     return { rows, total: countResult[0]?.total ?? 0 };
@@ -352,11 +353,11 @@ export async function getEmployeesWithIdentityPage(
 export type EmployeeListItem = {
   id:             Employee['id'];
   employeeCode:   Employee['employeeCode'];
-  // T9: firstName/lastName come from the linked Person, not the legacy columns.
-  // Nullable because a missing Person (pre-backfill) yields null via LEFT JOIN.
-  firstName:      Person['firstName']  | null;
-  lastName:       Person['lastName']   | null;
-  email:          Person['email']      | null;
+  // firstName/lastName come from the linked Person (INNER JOIN since T12b —
+  // non-null). email keeps the Person's own nullability.
+  firstName:      Person['firstName'];
+  lastName:       Person['lastName'];
+  email:          Person['email'];
   status:         Employee['status'];
   employmentType: Employee['employmentType'];
   payFrequency:   Employee['payFrequency'];
@@ -366,8 +367,8 @@ export type EmployeeListItem = {
 
 export async function listEmployees(): Promise<EmployeeListItem[]> {
   const db = getDb();
-  // T9: name is sourced from persons via LEFT JOIN so employees without a linked
-  // Person (pre-backfill rows) are still returned (firstName/lastName will be null).
+  // Name is sourced from the linked Person (INNER JOIN — guaranteed by the
+  // NOT NULL FK since 0024).
   const rows = await db
     .select({
       id: employees.id,
@@ -382,7 +383,7 @@ export async function listEmployees(): Promise<EmployeeListItem[]> {
       hiredOn: employees.hiredOn,
     })
     .from(employees)
-    .leftJoin(persons, eq(employees.personId, persons.id))
+    .innerJoin(persons, eq(employees.personId, persons.id))
     .orderBy(persons.lastName, persons.firstName);
 
   return rows;
@@ -594,17 +595,15 @@ export type SearchEmployeeOptions = {
 
 /**
  * Result type for searchEmployees.
- * T10: name fields come from the linked Person (nullable — null when no Person
- * is linked yet, i.e. pre-backfill rows). All other fields are employment-role
- * fields from hr_employees.
+ * Name fields come from the linked Person (INNER JOIN since T12b — non-null).
+ * All other fields are employment-role fields from hr_employees.
  */
 export type SearchEmployeeResult = {
   id:             Employee['id'];
   employeeCode:   Employee['employeeCode'];
-  // T10: sourced from persons via LEFT JOIN; null if personId is null.
-  firstName:      Person['firstName']  | null;
-  lastName:       Person['lastName']   | null;
-  email:          Person['email']      | null;
+  firstName:      Person['firstName'];
+  lastName:       Person['lastName'];
+  email:          Person['email'];
   status:         Employee['status'];
   employmentType: Employee['employmentType'];
   payFrequency:   Employee['payFrequency'];
@@ -668,7 +667,7 @@ export async function searchEmployees(
     return runner
       .select(selectColumns)
       .from(employees)
-      .leftJoin(persons, eq(employees.personId, persons.id))
+      .innerJoin(persons, eq(employees.personId, persons.id))
       .where(where)
       .orderBy(primaryOrder, employees.id)
       .limit(limit);
@@ -754,7 +753,7 @@ export async function listEmployeesPage(
       runner
         .select(listColumns)
         .from(employees)
-        .leftJoin(persons, eq(employees.personId, persons.id))
+        .innerJoin(persons, eq(employees.personId, persons.id))
         .where(where)
         .orderBy(primaryOrder, employees.id)
         .limit(limit)
@@ -762,7 +761,7 @@ export async function listEmployeesPage(
       runner
         .select({ total: count() })
         .from(employees)
-        .leftJoin(persons, eq(employees.personId, persons.id))
+        .innerJoin(persons, eq(employees.personId, persons.id))
         .where(where),
     ]);
     return { rows, total: countResult[0]?.total ?? 0 };

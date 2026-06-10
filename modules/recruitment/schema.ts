@@ -38,9 +38,9 @@ export const recruitmentDocStatus = pgEnum('recruitment_doc_status', [
 // ─── Tables ────────────────────────────────────────────────────────────────────
 
 // Role record ONLY (ADR 0017 / Slice 3a Task 12): all personal identity —
-// name, contact, DOB, SSS, address — lives on the linked Person. The legacy
-// identity columns were renamed to legacy_* by migration 0024 and are
-// deliberately NOT declared here (physically dropped later by Task 12b).
+// name, contact, DOB, SSS, address — lives on the linked Person. The
+// duplicated identity columns were renamed to legacy_* by migration 0024 and
+// physically dropped by 0025 (T12b) — persons is the only identity store.
 export const applicants = pgTable('recruitment_applicants', {
   id: uuid('id').primaryKey().defaultRandom(),
   source: recruitmentSource('source').notNull().default('walk_in'),
