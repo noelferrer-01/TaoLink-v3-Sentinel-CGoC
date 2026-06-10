@@ -13,9 +13,8 @@ import { eq, inArray } from 'drizzle-orm';
 import Papa from 'papaparse';
 import { getDb } from '@/core/db';
 import { payRuns, payslips } from '@/modules/payroll/schema';
-import { employees } from '@/modules/hr/schema';
-import { persons } from '@/modules/persons/schema';
-import { type EmployeeWithIdentity } from '@/modules/hr/service';
+import { employees, type EmployeeWithIdentity } from '@/modules/hr';
+import { persons } from '@/modules/persons';
 import { sssBracketForMonthly } from '@/modules/compliance/service';
 import { audit } from '@/modules/audit';
 import { events } from '@/modules/events';
@@ -120,7 +119,7 @@ export async function exportSSS_R3(
         email:                persons.email,
       })
       .from(employees)
-      .leftJoin(persons, eq(employees.personId, persons.id))
+      .innerJoin(persons, eq(employees.personId, persons.id))
       .where(inArray(employees.id, ids));
     for (const e of empRows) empById.set(e.id, e as EmployeeWithIdentity);
   }

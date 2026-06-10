@@ -8,8 +8,7 @@ import { and, desc, eq, ilike, sql, inArray, ne, notInArray, getTableColumns } f
 import { getDb, type DbOrTx } from '@/core/db';
 import { audit } from '@/modules/audit';
 import { events } from '@/modules/events';
-import { hr } from '@/modules/hr';
-import { employees } from '@/modules/hr/schema';
+import { hr, employees } from '@/modules/hr';
 import {
   applicants,
   applicantDocuments,

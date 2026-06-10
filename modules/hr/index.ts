@@ -15,6 +15,13 @@ import {
   generateNextEmployeeCode,
   IDENTITY_FIELDS,
 } from './service';
+
+// The employees table object + row types are public for cross-module JOINs
+// (assignments, payroll, compliance-exports) and typed UI props. Runtime code
+// must import them from HERE, not from hr/schema — schema.ts deep imports are
+// reserved for FK declarations in other modules' schema files.
+export { employees } from './schema';
+export type { Employee, NewEmployee } from './schema';
 export type {
   BulkImportResult,
   EmployeeListItem,

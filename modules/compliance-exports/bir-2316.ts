@@ -12,7 +12,7 @@
  * Audit action: 'compliance.bir2316.exported'
  */
 
-import { getEmployeeWithIdentity } from '@/modules/hr/service';
+import { getEmployeeWithIdentity } from '@/modules/hr';
 import { audit } from '@/modules/audit';
 import { computeYtd } from './ytd';
 import { renderBir2316Pdf } from './bir-2316.pdf';
