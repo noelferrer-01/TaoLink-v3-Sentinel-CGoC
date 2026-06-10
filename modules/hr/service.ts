@@ -253,8 +253,12 @@ export type GetEmployeesWithIdentityPageResult = {
 
 /**
  * Paginated variant of getEmployeeWithIdentity. Options mirror listEmployeesPage
- * (query/employmentType/status/limit/offset). Name search still operates on the
- * legacy hr_employees columns during the transition; T10 will move it to persons.
+ * (query/employmentType/status/limit/offset).
+ *
+ * T10: name search and ORDER BY now operate on persons.first_name/last_name via
+ * LEFT JOIN. The `%` operator form replaces similarity() > 0.2 so the
+ * persons_fullname_trgm GIN index can accelerate the predicate. Threshold is
+ * set to 0.2 via SET LOCAL inside a transaction (pool-safe — reverts on commit).
  *
  * Returns { rows, total } where total is the count of the full filtered set.
  */
@@ -266,42 +270,58 @@ export async function getEmployeesWithIdentityPage(
   const offset = Math.max(opts.offset ?? 0, 0);
   const trimmedQuery = (opts.query ?? '').trim();
 
-  const conditions: ReturnType<typeof eq>[] = [];
-
-  if (trimmedQuery.length > 0) {
-    conditions.push(
-      sql`(
-        similarity(${employees.firstName} || ' ' || ${employees.lastName}, ${trimmedQuery}) > 0.2
-        OR ${employees.employeeCode} ILIKE ${'%' + trimmedQuery + '%'}
-      )` as unknown as ReturnType<typeof eq>,
-    );
-  }
-  if (opts.employmentType) {
-    conditions.push(eq(employees.employmentType, opts.employmentType));
-  }
-  if (opts.status) {
-    conditions.push(eq(employees.status, opts.status));
-  }
-
-  const where = conditions.length > 0 ? and(...conditions) : undefined;
+  const buildConditions = (): ReturnType<typeof eq>[] => {
+    const conditions: ReturnType<typeof eq>[] = [];
+    if (trimmedQuery.length > 0) {
+      conditions.push(
+        sql`(
+          (${persons.firstName} || ' ' || ${persons.lastName}) % ${trimmedQuery}
+          OR ${employees.employeeCode} ILIKE ${'%' + trimmedQuery + '%'}
+        )` as unknown as ReturnType<typeof eq>,
+      );
+    }
+    if (opts.employmentType) {
+      conditions.push(eq(employees.employmentType, opts.employmentType));
+    }
+    if (opts.status) {
+      conditions.push(eq(employees.status, opts.status));
+    }
+    return conditions;
+  };
 
   const orderBy = trimmedQuery.length > 0
-    ? (sql`similarity(${employees.firstName} || ' ' || ${employees.lastName}, ${trimmedQuery}) DESC NULLS LAST` as unknown as ReturnType<typeof eq>)
-    : employees.lastName;
+    ? (sql`similarity(${persons.firstName} || ' ' || ${persons.lastName}, ${trimmedQuery}) DESC NULLS LAST` as unknown as ReturnType<typeof eq>)
+    : persons.lastName;
 
-  const [rows, countResult] = await Promise.all([
-    db
-      .select(employeeWithIdentityColumns)
-      .from(employees)
-      .leftJoin(persons, eq(employees.personId, persons.id))
-      .where(where)
-      .orderBy(orderBy)
-      .limit(limit)
-      .offset(offset),
-    db.select({ total: count() }).from(employees).where(where),
-  ]);
+  const runQueries = async (runner: typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0]) => {
+    const conditions = buildConditions();
+    const where = conditions.length > 0 ? and(...conditions) : undefined;
+    const [rows, countResult] = await Promise.all([
+      runner
+        .select(employeeWithIdentityColumns)
+        .from(employees)
+        .leftJoin(persons, eq(employees.personId, persons.id))
+        .where(where)
+        .orderBy(orderBy)
+        .limit(limit)
+        .offset(offset),
+      runner
+        .select({ total: count() })
+        .from(employees)
+        .leftJoin(persons, eq(employees.personId, persons.id))
+        .where(where),
+    ]);
+    return { rows: rows as EmployeeWithIdentity[], total: countResult[0]?.total ?? 0 };
+  };
 
-  return { rows: rows as EmployeeWithIdentity[], total: countResult[0]?.total ?? 0 };
+  if (trimmedQuery.length > 0) {
+    return db.transaction(async (tx) => {
+      await tx.execute(sql`SET LOCAL pg_trgm.similarity_threshold = 0.2`);
+      return runQueries(tx);
+    });
+  }
+
+  return runQueries(db);
 }
 
 export type EmployeeListItem = {
@@ -313,6 +333,7 @@ export type EmployeeListItem = {
   lastName:       Person['lastName']   | null;
   email:          Person['email']      | null;
   status:         Employee['status'];
+  employmentType: Employee['employmentType'];
   payFrequency:   Employee['payFrequency'];
   basicSalary:    Employee['basicSalary'];
   hiredOn:        Employee['hiredOn'];
@@ -330,6 +351,7 @@ export async function listEmployees(): Promise<EmployeeListItem[]> {
       lastName: persons.lastName,
       email: persons.email,
       status: employees.status,
+      employmentType: employees.employmentType,
       payFrequency: employees.payFrequency,
       basicSalary: employees.basicSalary,
       hiredOn: employees.hiredOn,
@@ -507,43 +529,106 @@ export type SearchEmployeeOptions = {
   status?: Employee['status'];
 };
 
+/**
+ * Result type for searchEmployees.
+ * T10: name fields come from the linked Person (nullable — null when no Person
+ * is linked yet, i.e. pre-backfill rows). All other fields are employment-role
+ * fields from hr_employees.
+ */
+export type SearchEmployeeResult = {
+  id:             Employee['id'];
+  employeeCode:   Employee['employeeCode'];
+  // T10: sourced from persons via LEFT JOIN; null if personId is null.
+  firstName:      Person['firstName']  | null;
+  lastName:       Person['lastName']   | null;
+  email:          Person['email']      | null;
+  status:         Employee['status'];
+  employmentType: Employee['employmentType'];
+  payFrequency:   Employee['payFrequency'];
+  basicSalary:    Employee['basicSalary'];
+  hiredOn:        Employee['hiredOn'];
+  personId:       Employee['personId'];
+};
+
+/**
+ * T10: name search operates on persons.first_name/last_name via LEFT JOIN.
+ * The `%` operator (GIN-accelerated) replaces the old similarity() > 0.2 form;
+ * pg_trgm.similarity_threshold is set to 0.2 per-transaction via SET LOCAL so
+ * the threshold is pool-safe (reverts automatically at transaction end).
+ *
+ * An employee with personId = null cannot match by name (similarity against
+ * NULL is NULL, so the `%` predicate is false) but is still findable via the
+ * employeeCode ILIKE branch — expected transitional behaviour until T12 backfill.
+ */
 export async function searchEmployees(
   query: string,
   opts: SearchEmployeeOptions = {},
-): Promise<Employee[]> {
+): Promise<SearchEmployeeResult[]> {
   const db = getDb();
   const limit = Math.min(opts.limit ?? 20, 100);
   const trimmedQuery = query.trim();
 
-  const conditions: ReturnType<typeof eq>[] = [];
+  const selectColumns = {
+    id:             employees.id,
+    employeeCode:   employees.employeeCode,
+    firstName:      persons.firstName,
+    lastName:       persons.lastName,
+    email:          persons.email,
+    status:         employees.status,
+    employmentType: employees.employmentType,
+    payFrequency:   employees.payFrequency,
+    basicSalary:    employees.basicSalary,
+    hiredOn:        employees.hiredOn,
+    personId:       employees.personId,
+  };
+
+  const buildConditions = (): ReturnType<typeof eq>[] => {
+    const conditions: ReturnType<typeof eq>[] = [];
+    if (trimmedQuery.length > 0) {
+      conditions.push(
+        sql`(
+          (${persons.firstName} || ' ' || ${persons.lastName}) % ${trimmedQuery}
+          OR ${employees.employeeCode} ILIKE ${'%' + trimmedQuery + '%'}
+        )` as unknown as ReturnType<typeof eq>,
+      );
+    }
+    if (opts.employmentType) {
+      conditions.push(eq(employees.employmentType, opts.employmentType));
+    }
+    if (opts.status) {
+      conditions.push(eq(employees.status, opts.status));
+    }
+    return conditions;
+  };
+
+  const orderBy = trimmedQuery.length > 0
+    ? (sql`similarity(${persons.firstName} || ' ' || ${persons.lastName}, ${trimmedQuery}) DESC NULLS LAST` as unknown as ReturnType<typeof eq>)
+    : persons.lastName;
+
+  const run = async (runner: typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0]) => {
+    const conditions = buildConditions();
+    const where = conditions.length > 0 ? and(...conditions) : undefined;
+    return runner
+      .select(selectColumns)
+      .from(employees)
+      .leftJoin(persons, eq(employees.personId, persons.id))
+      .where(where)
+      .orderBy(orderBy)
+      .limit(limit);
+  };
 
   if (trimmedQuery.length > 0) {
-    conditions.push(
-      sql`(
-        similarity(${employees.firstName} || ' ' || ${employees.lastName}, ${trimmedQuery}) > 0.2
-        OR ${employees.employeeCode} ILIKE ${'%' + trimmedQuery + '%'}
-      )` as unknown as ReturnType<typeof eq>,
-    );
-  }
-  if (opts.employmentType) {
-    conditions.push(eq(employees.employmentType, opts.employmentType));
-  }
-  if (opts.status) {
-    conditions.push(eq(employees.status, opts.status));
+    // SET LOCAL scopes the threshold to this transaction on this connection —
+    // safe with a connection pool: reverts automatically when the transaction ends.
+    const rows = await db.transaction(async (tx) => {
+      await tx.execute(sql`SET LOCAL pg_trgm.similarity_threshold = 0.2`);
+      return run(tx);
+    });
+    return rows as SearchEmployeeResult[];
   }
 
-  const where = conditions.length > 0 ? and(...conditions) : undefined;
-
-  return db
-    .select()
-    .from(employees)
-    .where(where)
-    .orderBy(
-      trimmedQuery.length > 0
-        ? (sql`similarity(${employees.firstName} || ' ' || ${employees.lastName}, ${trimmedQuery}) DESC NULLS LAST` as unknown as ReturnType<typeof eq>)
-        : employees.lastName,
-    )
-    .limit(limit);
+  const rows = await run(db);
+  return rows as SearchEmployeeResult[];
 }
 
 // ─── List employees (paginated, list-page-shaped) ────────────────────────────
@@ -555,6 +640,10 @@ export async function searchEmployees(
 //
 // Same matching rules (similarity + ILIKE code + optional type/status), just
 // adds offset + total count for the page.
+//
+// T10: name search operates on persons (LEFT JOIN). Result rows use EmployeeListItem
+// shape (names nullable, sourced from persons). The /employees page maps nullable
+// names to a display fallback on the way to EmployeeRow.
 
 export type ListEmployeesPageOptions = {
   query?: string;
@@ -565,7 +654,7 @@ export type ListEmployeesPageOptions = {
 };
 
 export type ListEmployeesPageResult = {
-  rows: Employee[];
+  rows: EmployeeListItem[];
   total: number;
 };
 
@@ -577,35 +666,73 @@ export async function listEmployeesPage(
   const offset = Math.max(opts.offset ?? 0, 0);
   const trimmedQuery = (opts.query ?? '').trim();
 
-  const conditions: ReturnType<typeof eq>[] = [];
+  const listColumns = {
+    id:           employees.id,
+    employeeCode: employees.employeeCode,
+    firstName:    persons.firstName,
+    lastName:     persons.lastName,
+    email:        persons.email,
+    status:       employees.status,
+    employmentType: employees.employmentType,
+    payFrequency: employees.payFrequency,
+    basicSalary:  employees.basicSalary,
+    hiredOn:      employees.hiredOn,
+  };
 
-  if (trimmedQuery.length > 0) {
-    conditions.push(
-      sql`(
-        similarity(${employees.firstName} || ' ' || ${employees.lastName}, ${trimmedQuery}) > 0.2
-        OR ${employees.employeeCode} ILIKE ${'%' + trimmedQuery + '%'}
-      )` as unknown as ReturnType<typeof eq>,
-    );
-  }
-  if (opts.employmentType) {
-    conditions.push(eq(employees.employmentType, opts.employmentType));
-  }
-  if (opts.status) {
-    conditions.push(eq(employees.status, opts.status));
-  }
-
-  const where = conditions.length > 0 ? and(...conditions) : undefined;
+  const buildConditions = (): ReturnType<typeof eq>[] => {
+    const conditions: ReturnType<typeof eq>[] = [];
+    if (trimmedQuery.length > 0) {
+      conditions.push(
+        sql`(
+          (${persons.firstName} || ' ' || ${persons.lastName}) % ${trimmedQuery}
+          OR ${employees.employeeCode} ILIKE ${'%' + trimmedQuery + '%'}
+        )` as unknown as ReturnType<typeof eq>,
+      );
+    }
+    if (opts.employmentType) {
+      conditions.push(eq(employees.employmentType, opts.employmentType));
+    }
+    if (opts.status) {
+      conditions.push(eq(employees.status, opts.status));
+    }
+    return conditions;
+  };
 
   const orderBy = trimmedQuery.length > 0
-    ? (sql`similarity(${employees.firstName} || ' ' || ${employees.lastName}, ${trimmedQuery}) DESC NULLS LAST` as unknown as ReturnType<typeof eq>)
-    : employees.lastName;
+    ? (sql`similarity(${persons.firstName} || ' ' || ${persons.lastName}, ${trimmedQuery}) DESC NULLS LAST` as unknown as ReturnType<typeof eq>)
+    : persons.lastName;
 
-  const [rows, countResult] = await Promise.all([
-    db.select().from(employees).where(where).orderBy(orderBy).limit(limit).offset(offset),
-    db.select({ total: count() }).from(employees).where(where),
-  ]);
+  const runQueries = async (runner: typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0]) => {
+    const conditions = buildConditions();
+    const where = conditions.length > 0 ? and(...conditions) : undefined;
+    const [rows, countResult] = await Promise.all([
+      runner
+        .select(listColumns)
+        .from(employees)
+        .leftJoin(persons, eq(employees.personId, persons.id))
+        .where(where)
+        .orderBy(orderBy)
+        .limit(limit)
+        .offset(offset),
+      runner
+        .select({ total: count() })
+        .from(employees)
+        .leftJoin(persons, eq(employees.personId, persons.id))
+        .where(where),
+    ]);
+    return { rows: rows as EmployeeListItem[], total: countResult[0]?.total ?? 0 };
+  };
 
-  return { rows, total: countResult[0]?.total ?? 0 };
+  if (trimmedQuery.length > 0) {
+    // SET LOCAL scopes the threshold to this transaction on this connection —
+    // safe with a connection pool: reverts automatically when the transaction ends.
+    return db.transaction(async (tx) => {
+      await tx.execute(sql`SET LOCAL pg_trgm.similarity_threshold = 0.2`);
+      return runQueries(tx);
+    });
+  }
+
+  return runQueries(db);
 }
 
 // ─── Bulk import ─────────────────────────────────────────────────────────────

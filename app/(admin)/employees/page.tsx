@@ -42,11 +42,13 @@ export default async function EmployeesPage({
     clients.listClientsWithDetachments(),
   ]);
 
+  // T10: firstName/lastName come from the linked Person (nullable during the
+  // T3→T12 migration window). Fall back to employeeCode / em-dash for display.
   const employees: EmployeeRow[] = results.map((e) => ({
     id: e.id,
     employeeCode: e.employeeCode,
-    firstName: e.firstName,
-    lastName: e.lastName,
+    firstName: e.firstName ?? '',
+    lastName: e.lastName ?? e.employeeCode,
     employmentType: e.employmentType,
     status: e.status,
   }));

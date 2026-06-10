@@ -19,6 +19,7 @@ export type {
   EmployeeListItem,
   EmployeeWithIdentity,
   SearchEmployeeOptions,
+  SearchEmployeeResult,
   ListEmployeesPageOptions,
   ListEmployeesPageResult,
   GetEmployeesWithIdentityPageOptions,
