@@ -516,6 +516,15 @@ export async function redactPerson(
     .returning();
   if (!updated) throw new Error(`[persons/redactPerson] update returned no row for ${id}`);
 
+  // Slice 3b: the credential wallet holds PII too (licence numbers, notes such as
+  // an assigned firearm). Redaction must scrub it — delete the rows outright.
+  // The audit history of those credentials lives in `audit_log`, not here, so it
+  // survives. (Returns the deleted count for the audit payload.)
+  const deletedCreds = await db
+    .delete(personCredentials)
+    .where(eq(personCredentials.personId, id))
+    .returning({ id: personCredentials.id });
+
   await audit.record({
     actor:   actorUserId ?? null,
     action:  'person.redacted',
@@ -524,6 +533,7 @@ export async function redactPerson(
       previousAnchorIdType: before.anchorIdType,
       // Types only — actual values are NOT logged (would re-leak PII).
       clearedIdTypes,
+      credentialsDeleted: deletedCreds.length,
     },
   });
   await events.publish('person.redacted', { id });

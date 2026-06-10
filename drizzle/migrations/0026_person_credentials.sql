@@ -12,15 +12,22 @@
 -- credential-bearing recruitment doc-type spellings; it deliberately EXCLUDES
 -- `resume_biodata` and `other` (documents, not credentials).
 
-CREATE TYPE "person_cred_type" AS ENUM (
-  'nbi_clearance', 'police_pnp_clearance', 'barangay_clearance', 'drug_test',
-  'medical_exam', 'neuro_psych', 'training_cert_sbr_rtc', 'sosia_license',
-  'ltopf_license'
-);
+-- Enums are wrapped so a partial re-apply (migration failed AFTER the enum was
+-- created but before it was recorded in _migrations) can resume cleanly —
+-- Postgres has no CREATE TYPE IF NOT EXISTS, so catch duplicate_object.
+DO $$ BEGIN
+  CREATE TYPE "person_cred_type" AS ENUM (
+    'nbi_clearance', 'police_pnp_clearance', 'barangay_clearance', 'drug_test',
+    'medical_exam', 'neuro_psych', 'training_cert_sbr_rtc', 'sosia_license',
+    'ltopf_license'
+  );
+EXCEPTION WHEN duplicate_object THEN null; END $$;
 
-CREATE TYPE "person_cred_status" AS ENUM (
-  'valid', 'expired', 'pending', 'revoked'
-);
+DO $$ BEGIN
+  CREATE TYPE "person_cred_status" AS ENUM (
+    'valid', 'expired', 'pending', 'revoked'
+  );
+EXCEPTION WHEN duplicate_object THEN null; END $$;
 
 CREATE TABLE IF NOT EXISTS "person_credentials" (
   "id"                  uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,

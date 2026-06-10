@@ -809,6 +809,20 @@ describe('credentials service (integration)', () => {
     });
   });
 
+  describe('redactPerson + credentials', () => {
+    it('deletes the person’s credentials on redaction (licence numbers are PII)', async () => {
+      const p = await makePerson();
+      await addCredential({ personId: p.id, credType: 'sosia_license', credNumber: 'SG-887', notes: 'assigned firearm #12' });
+      await addCredential({ personId: p.id, credType: 'ltopf_license', credNumber: 'LT-99102' });
+      expect(await listCredentials(p.id)).toHaveLength(2);
+
+      await redactPerson(p.id);
+
+      // Wallet is gone — no licence numbers / notes left attached to the tombstone.
+      expect(await listCredentials(p.id)).toEqual([]);
+    });
+  });
+
   describe('listCredentialsForPersons', () => {
     it('returns credentials for all given persons in one call', async () => {
       const a = await makePerson();
