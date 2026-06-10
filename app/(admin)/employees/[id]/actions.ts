@@ -2,7 +2,8 @@
 
 import { revalidatePath } from 'next/cache';
 import { hr, IDENTITY_FIELDS } from '@/modules/hr';
-import { updatePerson } from '@/modules/persons';
+import { updatePerson, addCredential, updateCredential, type CredType, type CredStatus } from '@/modules/persons';
+import { todayIso } from '@/core/dates';
 import { getSessionFromCookie } from '@/modules/auth';
 
 /**
@@ -271,4 +272,81 @@ export async function undoTerminationAction(
     }
     return { kind: 'error', message };
   }
+}
+
+// ─── Credential wallet actions (Slice 3b) ────────────────────────────────────
+// Server-rendered FormData actions, mirroring the recruitment document checklist.
+// `employeeId` resolves the Person server-side — the client never passes a
+// personId. Inputs are constrained (selects + date pickers) so these stay simple.
+
+const CRED_TYPES = [
+  'nbi_clearance', 'police_pnp_clearance', 'barangay_clearance', 'drug_test',
+  'medical_exam', 'neuro_psych', 'training_cert_sbr_rtc', 'sosia_license', 'ltopf_license',
+] as const;
+const CRED_STATUSES = ['valid', 'expired', 'pending', 'revoked'] as const;
+
+function isCredType(v: string): v is CredType {
+  return (CRED_TYPES as readonly string[]).includes(v);
+}
+function isCredStatus(v: string): v is CredStatus {
+  return (CRED_STATUSES as readonly string[]).includes(v);
+}
+const blankToNull = (v: FormDataEntryValue | null): string | null => {
+  const s = v == null ? '' : String(v).trim();
+  return s.length === 0 ? null : s;
+};
+
+export async function addCredentialAction(formData: FormData): Promise<void> {
+  const session = await getSessionFromCookie();
+  if (!session) return;
+
+  const employeeId = String(formData.get('employeeId') ?? '');
+  const credType = String(formData.get('credType') ?? '');
+  if (!employeeId || !isCredType(credType)) return;
+
+  const statusRaw = String(formData.get('status') ?? 'valid');
+  const status: CredStatus = isCredStatus(statusRaw) ? statusRaw : 'valid';
+
+  // Resolve the Person from the employee (don't trust a client-supplied personId).
+  const employee = await hr.getEmployeeWithIdentity(employeeId);
+  if (!employee) return;
+
+  await addCredential({
+    personId:    employee.personId,
+    credType,
+    credNumber:  blankToNull(formData.get('credNumber')),
+    issuingBody: blankToNull(formData.get('issuingBody')),
+    issuedOn:    blankToNull(formData.get('issuedOn')),
+    expiresOn:   blankToNull(formData.get('expiresOn')),
+    status,
+    notes:       blankToNull(formData.get('notes')),
+    // A clerk entering a valid credential is asserting it — record them as verifier.
+    verifiedByUserId: status === 'valid' ? session.user.id : null,
+    verifiedOn:       status === 'valid' ? todayIso() : null,
+    actorUserId:      session.user.id,
+  });
+  revalidatePath(`/employees/${employeeId}`);
+}
+
+export async function updateCredentialAction(formData: FormData): Promise<void> {
+  const session = await getSessionFromCookie();
+  if (!session) return;
+
+  const employeeId = String(formData.get('employeeId') ?? '');
+  const credId = String(formData.get('credId') ?? '');
+  if (!employeeId || !credId) return;
+
+  const statusRaw = String(formData.get('status') ?? '');
+  const status = isCredStatus(statusRaw) ? statusRaw : undefined;
+
+  await updateCredential(
+    credId,
+    {
+      ...(status ? { status } : {}),
+      credNumber: blankToNull(formData.get('credNumber')),
+      expiresOn:  blankToNull(formData.get('expiresOn')),
+    },
+    session.user.id,
+  );
+  revalidatePath(`/employees/${employeeId}`);
 }
