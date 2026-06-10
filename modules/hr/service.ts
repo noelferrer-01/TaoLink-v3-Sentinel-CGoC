@@ -1,7 +1,7 @@
 import { eq, and, desc, sql, count } from 'drizzle-orm';
 import Papa from 'papaparse';
 import { z } from 'zod';
-import { getDb } from '@/core/db';
+import { getDb, type DbOrTx } from '@/core/db';
 import { isWithinUndoWindow } from '@/core/time';
 import { employees, type Employee, type NewEmployee } from './schema';
 import { persons, type Person } from '@/modules/persons/schema';
@@ -273,12 +273,7 @@ export async function getEmployeesWithIdentityPage(
   const buildConditions = (): ReturnType<typeof eq>[] => {
     const conditions: ReturnType<typeof eq>[] = [];
     if (trimmedQuery.length > 0) {
-      conditions.push(
-        sql`(
-          (${persons.firstName} || ' ' || ${persons.lastName}) % ${trimmedQuery}
-          OR ${employees.employeeCode} ILIKE ${'%' + trimmedQuery + '%'}
-        )` as unknown as ReturnType<typeof eq>,
-      );
+      conditions.push(personNameMatchesPredicate(trimmedQuery));
     }
     if (opts.employmentType) {
       conditions.push(eq(employees.employmentType, opts.employmentType));
@@ -289,11 +284,11 @@ export async function getEmployeesWithIdentityPage(
     return conditions;
   };
 
-  const orderBy = trimmedQuery.length > 0
-    ? (sql`similarity(${persons.firstName} || ' ' || ${persons.lastName}, ${trimmedQuery}) DESC NULLS LAST` as unknown as ReturnType<typeof eq>)
+  const primaryOrder = trimmedQuery.length > 0
+    ? personNameSimilarityDesc(trimmedQuery)
     : persons.lastName;
 
-  const runQueries = async (runner: typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0]) => {
+  const runQueries = async (runner: DbOrTx): Promise<GetEmployeesWithIdentityPageResult> => {
     const conditions = buildConditions();
     const where = conditions.length > 0 ? and(...conditions) : undefined;
     const [rows, countResult] = await Promise.all([
@@ -302,7 +297,7 @@ export async function getEmployeesWithIdentityPage(
         .from(employees)
         .leftJoin(persons, eq(employees.personId, persons.id))
         .where(where)
-        .orderBy(orderBy)
+        .orderBy(primaryOrder, employees.id)
         .limit(limit)
         .offset(offset),
       runner
@@ -311,14 +306,11 @@ export async function getEmployeesWithIdentityPage(
         .leftJoin(persons, eq(employees.personId, persons.id))
         .where(where),
     ]);
-    return { rows: rows as EmployeeWithIdentity[], total: countResult[0]?.total ?? 0 };
+    return { rows, total: countResult[0]?.total ?? 0 };
   };
 
   if (trimmedQuery.length > 0) {
-    return db.transaction(async (tx) => {
-      await tx.execute(sql`SET LOCAL pg_trgm.similarity_threshold = 0.2`);
-      return runQueries(tx);
-    });
+    return withNameSearchThreshold(db, runQueries);
   }
 
   return runQueries(db);
@@ -360,7 +352,7 @@ export async function listEmployees(): Promise<EmployeeListItem[]> {
     .leftJoin(persons, eq(employees.personId, persons.id))
     .orderBy(persons.lastName, persons.firstName);
 
-  return rows as EmployeeListItem[];
+  return rows;
 }
 
 export async function changeStatus(
@@ -522,6 +514,49 @@ export async function updateEmployee(
 }
 
 // ─── Search employees ─────────────────────────────────────────────────────────
+//
+// Private helpers shared by searchEmployees, listEmployeesPage, and
+// getEmployeesWithIdentityPage. Not exported — module-internal only.
+
+/** pg_trgm similarity threshold applied per-transaction via SET LOCAL. */
+const NAME_SEARCH_THRESHOLD = 0.2;
+
+/**
+ * SQL fragment: true when the persons full name fuzzy-matches `query`
+ * OR the employee code contains `query` (ILIKE). Cast required because
+ * Drizzle's typed condition stack doesn't know about the `%` operator.
+ */
+function personNameMatchesPredicate(query: string) {
+  return sql`(
+    (${persons.firstName} || ' ' || ${persons.lastName}) % ${query}
+    OR ${employees.employeeCode} ILIKE ${'%' + query + '%'}
+  )` as unknown as ReturnType<typeof eq>;
+}
+
+/**
+ * SQL fragment: ORDER BY trigram similarity DESC, NULLs last.
+ * Used as the primary sort key when a name-search query is active.
+ */
+function personNameSimilarityDesc(query: string) {
+  return sql`similarity(${persons.firstName} || ' ' || ${persons.lastName}, ${query}) DESC NULLS LAST` as unknown as ReturnType<typeof eq>;
+}
+
+/**
+ * Wraps `fn` in a transaction with `pg_trgm.similarity_threshold` set to
+ * NAME_SEARCH_THRESHOLD for the duration of that transaction only (SET LOCAL
+ * is pool-safe — reverts automatically on commit/rollback).
+ */
+async function withNameSearchThreshold<T>(
+  db: DbOrTx,
+  fn: (tx: DbOrTx) => Promise<T>,
+): Promise<T> {
+  // db.transaction is only available on the full DB client, not on a tx object.
+  // Cast as needed — the caller always passes the top-level db here.
+  return (db as ReturnType<typeof getDb>).transaction(async (tx) => {
+    await tx.execute(sql`SET LOCAL pg_trgm.similarity_threshold = ${sql.raw(String(NAME_SEARCH_THRESHOLD))}`);
+    return fn(tx);
+  });
+}
 
 export type SearchEmployeeOptions = {
   limit?: number;
@@ -585,12 +620,7 @@ export async function searchEmployees(
   const buildConditions = (): ReturnType<typeof eq>[] => {
     const conditions: ReturnType<typeof eq>[] = [];
     if (trimmedQuery.length > 0) {
-      conditions.push(
-        sql`(
-          (${persons.firstName} || ' ' || ${persons.lastName}) % ${trimmedQuery}
-          OR ${employees.employeeCode} ILIKE ${'%' + trimmedQuery + '%'}
-        )` as unknown as ReturnType<typeof eq>,
-      );
+      conditions.push(personNameMatchesPredicate(trimmedQuery));
     }
     if (opts.employmentType) {
       conditions.push(eq(employees.employmentType, opts.employmentType));
@@ -601,11 +631,11 @@ export async function searchEmployees(
     return conditions;
   };
 
-  const orderBy = trimmedQuery.length > 0
-    ? (sql`similarity(${persons.firstName} || ' ' || ${persons.lastName}, ${trimmedQuery}) DESC NULLS LAST` as unknown as ReturnType<typeof eq>)
+  const primaryOrder = trimmedQuery.length > 0
+    ? personNameSimilarityDesc(trimmedQuery)
     : persons.lastName;
 
-  const run = async (runner: typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0]) => {
+  const run = async (runner: DbOrTx) => {
     const conditions = buildConditions();
     const where = conditions.length > 0 ? and(...conditions) : undefined;
     return runner
@@ -613,22 +643,15 @@ export async function searchEmployees(
       .from(employees)
       .leftJoin(persons, eq(employees.personId, persons.id))
       .where(where)
-      .orderBy(orderBy)
+      .orderBy(primaryOrder, employees.id)
       .limit(limit);
   };
 
   if (trimmedQuery.length > 0) {
-    // SET LOCAL scopes the threshold to this transaction on this connection —
-    // safe with a connection pool: reverts automatically when the transaction ends.
-    const rows = await db.transaction(async (tx) => {
-      await tx.execute(sql`SET LOCAL pg_trgm.similarity_threshold = 0.2`);
-      return run(tx);
-    });
-    return rows as SearchEmployeeResult[];
+    return withNameSearchThreshold(db, run);
   }
 
-  const rows = await run(db);
-  return rows as SearchEmployeeResult[];
+  return run(db);
 }
 
 // ─── List employees (paginated, list-page-shaped) ────────────────────────────
@@ -682,12 +705,7 @@ export async function listEmployeesPage(
   const buildConditions = (): ReturnType<typeof eq>[] => {
     const conditions: ReturnType<typeof eq>[] = [];
     if (trimmedQuery.length > 0) {
-      conditions.push(
-        sql`(
-          (${persons.firstName} || ' ' || ${persons.lastName}) % ${trimmedQuery}
-          OR ${employees.employeeCode} ILIKE ${'%' + trimmedQuery + '%'}
-        )` as unknown as ReturnType<typeof eq>,
-      );
+      conditions.push(personNameMatchesPredicate(trimmedQuery));
     }
     if (opts.employmentType) {
       conditions.push(eq(employees.employmentType, opts.employmentType));
@@ -698,11 +716,11 @@ export async function listEmployeesPage(
     return conditions;
   };
 
-  const orderBy = trimmedQuery.length > 0
-    ? (sql`similarity(${persons.firstName} || ' ' || ${persons.lastName}, ${trimmedQuery}) DESC NULLS LAST` as unknown as ReturnType<typeof eq>)
+  const primaryOrder = trimmedQuery.length > 0
+    ? personNameSimilarityDesc(trimmedQuery)
     : persons.lastName;
 
-  const runQueries = async (runner: typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0]) => {
+  const runQueries = async (runner: DbOrTx): Promise<ListEmployeesPageResult> => {
     const conditions = buildConditions();
     const where = conditions.length > 0 ? and(...conditions) : undefined;
     const [rows, countResult] = await Promise.all([
@@ -711,7 +729,7 @@ export async function listEmployeesPage(
         .from(employees)
         .leftJoin(persons, eq(employees.personId, persons.id))
         .where(where)
-        .orderBy(orderBy)
+        .orderBy(primaryOrder, employees.id)
         .limit(limit)
         .offset(offset),
       runner
@@ -720,16 +738,11 @@ export async function listEmployeesPage(
         .leftJoin(persons, eq(employees.personId, persons.id))
         .where(where),
     ]);
-    return { rows: rows as EmployeeListItem[], total: countResult[0]?.total ?? 0 };
+    return { rows, total: countResult[0]?.total ?? 0 };
   };
 
   if (trimmedQuery.length > 0) {
-    // SET LOCAL scopes the threshold to this transaction on this connection —
-    // safe with a connection pool: reverts automatically when the transaction ends.
-    return db.transaction(async (tx) => {
-      await tx.execute(sql`SET LOCAL pg_trgm.similarity_threshold = 0.2`);
-      return runQueries(tx);
-    });
+    return withNameSearchThreshold(db, runQueries);
   }
 
   return runQueries(db);

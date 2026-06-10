@@ -17,8 +17,9 @@ import { BulkAssignModal } from './bulk-assign-modal';
 export interface EmployeeRow {
   id: string;
   employeeCode: string;
-  firstName: string;
-  lastName: string;
+  /** Pre-computed display name: "Last, First" when a Person is linked, or
+   *  employee code alone for person-less rows (no trailing comma). */
+  displayName: string;
   employmentType: EmploymentType;
   status: Status;
 }
@@ -45,7 +46,7 @@ export function EmployeesListBody({
 
   const [query, setQuery] = useState(initialQuery);
   const [type, setType] = useState<string>(initialType ?? '');
-  const [sort, setSort] = useState<SortState>({ key: 'lastName', dir: 'asc' });
+  const [sort, setSort] = useState<SortState>({ key: 'displayName', dir: 'asc' });
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [bulkAssignOpen, setBulkAssignOpen] = useState(false);
 
@@ -53,7 +54,7 @@ export function EmployeesListBody({
   // "Cruz, Juan: already assigned" instead of echoing UUIDs.
   const employeeNameById = useMemo(() => {
     const m = new Map<string, string>();
-    for (const e of employees) m.set(e.id, `${e.lastName}, ${e.firstName}`);
+    for (const e of employees) m.set(e.id, e.displayName);
     return m;
   }, [employees]);
 
@@ -99,12 +100,12 @@ export function EmployeesListBody({
       ),
     },
     {
-      key: 'lastName',
+      key: 'displayName',
       label: 'Name',
       sortable: true,
       render: (row) => (
         <span className="cell-name">
-          {row.lastName}, {row.firstName}
+          {row.displayName}
         </span>
       ),
     },

@@ -43,12 +43,14 @@ export default async function EmployeesPage({
   ]);
 
   // T10: firstName/lastName come from the linked Person (nullable during the
-  // T3→T12 migration window). Fall back to employeeCode / em-dash for display.
+  // T3→T12 migration window). When no Person is linked yet, display the
+  // employee code alone — no trailing comma in the Name column.
   const employees: EmployeeRow[] = results.map((e) => ({
     id: e.id,
     employeeCode: e.employeeCode,
-    firstName: e.firstName ?? '',
-    lastName: e.lastName ?? e.employeeCode,
+    displayName: e.lastName != null
+      ? `${e.lastName}, ${e.firstName ?? ''}`.trim().replace(/,$/, '').trim()
+      : e.employeeCode,
     employmentType: e.employmentType,
     status: e.status,
   }));
