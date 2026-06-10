@@ -52,12 +52,15 @@ Labels/constants also exported: `STAGE_LABELS`, `SOURCE_LABELS`, `DOC_TYPE_LABEL
   called before the applicant reached the `documents` stage.
 - **`A government ID is required before this person can be hired. Add a PhilSys, SSS, or TIN number to their record first.`**
   — the `assertAnchored` hire gate fired: the applicant was saved provisionally
-  (`anchorIdType: 'none'`, `idPending: true`) and still has no government ID.
-  Clearing it requires `updatePerson(personId, { anchorIdType, <idField> })`
-  (anchor + value together — see the persons README). **Known gap:** there is no
-  applicant-side UI to do this today, and clearing the Person's anchor does **not**
-  by itself reset the applicant's stored `idPending` nudge (only `createApplicant`
-  + `advanceStage` recompute it) — see `wiki/slices/3a-person-identity-done-sweep.md` §5.
+  (`anchorIdType: 'none'`) and still has no government ID. Clearing it requires
+  `updatePerson(personId, { anchorIdType, <idField> })` (anchor + value together —
+  see the persons README). The **Hire modal** captures these fields when the
+  Person is unanchored and the hire action anchors the Person right before
+  `hireApplicant`, so in normal UI flow this error only appears if the ID fields
+  were bypassed. Note the detail-page nudge derives from the live
+  `person.anchorIdType` at render (not the stored `idPending` flag, which only
+  `createApplicant` + `advanceStage` recompute) — see
+  `wiki/slices/3a-person-identity-done-sweep.md` §5.
 - **Applicant created without a Person** — `null value in column "person_id" …
   violates not-null constraint` (Postgres `23502`). Since 0024,
   `recruitment_applicants.person_id` is `NOT NULL`; a writer bypassed

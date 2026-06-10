@@ -114,6 +114,13 @@ action).
 
 **Recommendation:** 3a **fast-follow before tagging slice-3-done**. Land the service-layer prerequisite + the copy stopgap now; build the **HireModal capture** as the SOP-agnostic UI; upgrade to the shared identity editor once Commander confirms when IDs actually arrive.
 
+**✅ RESOLVED — HireModal-minimum shipped** (plan: `3a-hire-anchor-fastfollow-plan.md`):
+
+- `updatePerson` 23505 plain-language wrap (`3d8d213`), anchor-at-hire contract pin (`26569de`), `hireAction` anchors the Person from the modal's ID fields before the hire gate (`35397eb`), HireModal ID capture + truthful nudge (`bb91b13`).
+- The detail-page nudge now derives from the **live** `person.anchorIdType` at render — the stale-`idPending` trap (item 2 above) is moot for the UI; the stored flag remains a service-layer detail.
+- Verified: suite 325/325, typecheck + lint clean, and a full Playwright walk — provisional intake → nudge ("you'll be asked at the Hire step") → advance ×2 → Hire modal shows the Government ID section → no-ID confirm blocked by the browser → SSS entered → hired as CG-10102 with the SSS on the shared Person (screenshots `.playwright-mcp/ff-walk-*.png`, each read). Test rows deleted; dev DB back to baseline.
+- **Still open (unchanged):** the full screening-time identity editor stays gated on the Commander anchor-ID intake SOP answer. New minor UX wart noticed on the walk: a **hired** applicant's own detail page flags their own employee record as "Active employee (exact match) — may be a double-hire" (pre-existing `checkMatches` behavior, now just more visible since provisional hires complete); candidates: suppress the banner on terminal stages or exclude the applicant's own `hiredEmployeeId`. Backlogged for the UX re-walk.
+
 ## 6. Backlog carried out of 3a
 
 - **T12b** — physically drop the `legacy_*` columns (separate gated migration, after the

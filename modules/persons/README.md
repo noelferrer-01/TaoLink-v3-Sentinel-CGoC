@@ -22,7 +22,7 @@ from runtime code (the one schema-level exception is documented below).
 | `getPerson` | `(id: string) => Promise<Person \| null>` | Fetch by id, or `null`. Returns redacted (tombstoned) rows too. |
 | `findPersonByAnyId` | `(idType: AnchorIdType, idValue: string) => Promise<Person \| null>` | Exact match on that ID type's column; also matches a line-anchored hit in `quarantinedIds` (dup IDs parked during backfill). |
 | `findPossibleDuplicates` | `(input: { firstName; lastName; dateOfBirth?: string \| null }) => Promise<Person[]>` | Same-DOB candidates narrowed by normalized name key. Returns `[]` when no DOB is given (the dedup key needs a birthday). |
-| `updatePerson` | `(id: string, patch: UpdatePersonPatch, actorUserId?) => Promise<Person>` | The **only** identity-edit path. Refuses redacted rows; silently strips immutable/dedup-derived fields; rejects blank first/last name. Audits + emits an event. |
+| `updatePerson` | `(id: string, patch: UpdatePersonPatch, actorUserId?) => Promise<Person>` | The **only** identity-edit path. Refuses redacted rows; silently strips immutable/dedup-derived fields; rejects blank first/last name. Catches Postgres `23505` and re-throws a plain-language "already on file" message. Audits + emits an event. |
 | `redactPerson` | `(id: string, actorUserId?) => Promise<Person>` | Tombstone (the soft-delete path): sets `redactedAt`, nulls all identity, names → `'[redacted]'`, `anchorIdType` → `'none'`. A referenced Person can't be hard-deleted (RESTRICT FK), so redaction is how PII is removed. |
 
 ### Search primitives (shared, so hr + recruitment use one definition)
@@ -72,16 +72,18 @@ import `employees` from `hr/schema`. **Runtime/service code still goes through
   `anchorIdType: 'none'` (provisional).
 - **`That <Label> is already on file for another person.`** — Postgres `23505` on
   `persons_philsys_uq` / `persons_sss_uq` / `persons_tin_uq`: a duplicate government
-  ID. Surfaces wherever a Person is minted — `createPerson`, `hr.createEmployee`,
+  ID. Surfaces wherever a Person is minted or edited — `createPerson`,
+  `updatePerson` (e.g. the Hire-modal ID capture), `hr.createEmployee`,
   `hr.bulkImportEmployees` (as a per-row error), `recruitment.createApplicant`.
 - **`A government ID is required before this person can be hired. Add a PhilSys, SSS, or TIN number to their record first.`**
   — `assertAnchored` fired because `anchorIdType === 'none'`. To clear it, call
   `updatePerson` with **`anchorIdType` AND the ID value together** (e.g.
   `{ anchorIdType: 'sss', sssNumber }`) — `updatePerson` is a passthrough that does
   **not** infer the anchor from which column you fill, so setting the number alone
-  leaves `anchorIdType: 'none'` and the gate still fires. (Note: `updatePerson`'s
-  update is not wrapped in the `23505` plain-language handler that `createPerson`
-  has, so a duplicate-ID on this path throws a raw Postgres error today.)
+  leaves `anchorIdType: 'none'` and the gate still fires. In the UI this is handled
+  by the recruitment Hire modal, which captures both fields when the Person is
+  unanchored. (`updatePerson` shares `createPerson`'s `23505` plain-language wrap,
+  so a duplicate ID on this path also throws "already on file".)
 - **`Person not found — a government ID cannot be verified for someone who isn't on file.`**
   — `assertAnchored` against a missing person id.
 - **`This person record has been redacted and cannot be edited. If you need to re-register this person, create a new record.`**
