@@ -5,7 +5,7 @@ import { redirect } from 'next/navigation';
 import { z } from 'zod';
 import { recruitment } from '@/modules/recruitment';
 import type { DocStatus, DocType, Stage, MatchKind } from '@/modules/recruitment';
-import { findPersonByAnyId, findPossibleDuplicates, ANCHOR_ID_LABELS, type AnchorIdType } from '@/modules/persons';
+import { findPersonByAnyId, findPossibleDuplicates, updatePerson, ANCHOR_ID_LABELS, type AnchorIdType } from '@/modules/persons';
 import { getSessionFromCookie } from '@/modules/auth';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -249,6 +249,10 @@ const hireSchema = z.object({
   employeeCode: z.string().trim().min(1, 'Employee code is required.'),
   basicSalary: z.string().trim().refine((v) => Number.isFinite(Number(v)) && Number(v) > 0, 'Monthly basic salary must be a positive number.'),
   hiredOn: z.string().trim().regex(DATE_RE, 'Date hired must be in YYYY-MM-DD format.'),
+  // Optional government ID — the modal shows these fields only when the Person
+  // is unanchored; anchors the Person right before the hire gate.
+  idType: z.enum(ID_TYPES).optional().or(z.literal('')),
+  idValue: z.string().trim().optional().or(z.literal('')),
 });
 
 export async function hireAction(_prev: HireState, formData: FormData): Promise<HireState> {
@@ -260,11 +264,32 @@ export async function hireAction(_prev: HireState, formData: FormData): Promise<
     employeeCode: formData.get('employeeCode') ?? '',
     basicSalary: formData.get('basicSalary') ?? '',
     hiredOn: formData.get('hiredOn') ?? '',
+    idType: formData.get('idType') ?? '',
+    idValue: formData.get('idValue') ?? '',
   });
   if (!parsed.success) return { kind: 'error', message: parsed.error.issues[0]?.message ?? 'Please check the form.' };
   const d = parsed.data;
 
+  const idValue = blank(d.idValue ?? null);
+  const idType = (d.idType ?? '') as '' | (typeof ID_TYPES)[number];
+  if (idValue && !idType) {
+    return { kind: 'error', message: 'Pick which kind of ID you entered (PhilSys, SSS, TIN, …) — or clear the ID field.' };
+  }
+
   try {
+    // Anchor the Person first so the hire gate (assertAnchored) passes.
+    // anchorIdType + the ID value must go TOGETHER — updatePerson never infers
+    // the anchor from a bare ID value (done-sweep §5).
+    if (idType && idValue) {
+      const got = await recruitment.getApplicant(d.applicantId);
+      if (!got) return { kind: 'error', message: 'This applicant no longer exists.' };
+      await updatePerson(
+        got.applicant.personId,
+        { anchorIdType: idType, [ID_FIELD[idType]]: idValue },
+        session.user.id,
+      );
+    }
+
     const emp = await recruitment.hireApplicant(d.applicantId, {
       employeeCode: d.employeeCode,
       basicSalary: d.basicSalary,
@@ -280,8 +305,10 @@ export async function hireAction(_prev: HireState, formData: FormData): Promise<
     const raw = e instanceof Error ? e.message : String(e);
     const message = raw.includes('hr_employees_code') || raw.includes('employee_code')
       ? 'That employee code is already used — pick a different one.'
+      : raw.includes('already on file for another person')
+      ? `${raw} Use Look up on the intake page to find the existing record before hiring.`
       : raw.includes('government ID is required')
-      ? 'A government ID is required before hiring. Open this applicant’s record, add a PhilSys, SSS, or TIN number, then hire.'
+      ? 'A government ID is required before hiring. Enter it in the ID fields above, then confirm again.'
       : `Couldn't hire: ${raw}`;
     return { kind: 'error', message };
   }
