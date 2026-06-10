@@ -14,17 +14,17 @@ import { hr, type BulkImportResult } from '@/modules/hr';
 
 | Function | Signature | What it does |
 |---|---|---|
-| `hr.createEmployee` | `(input: CreateEmployeeInput) => Promise<Employee>` | Insert one employee. Auto-audits + publishes `hr.employee.created`. Throws plain-language error on duplicate email. Accepts `employmentType` (defaults to `'GUARD'`) and all BIR 2316 fields (`rdoCode`, `dateOfBirth`, `addressLine1/2`, `city`, `province`, `postalCode`). |
+| `hr.createEmployee` | `(input: CreateEmployeeInput) => Promise<Employee>` | Insert one employee, atomically **minting** the Person that holds its identity — or **linking** an existing one when `input.personId` is supplied (the `hireApplicant` path). Identity fields (name, contact, DOB, gov-IDs, address) are split out and written to `persons`; they never land on `hr_employees`. `rdoCode` is the exception — a BIR field that stays on the employee row. Auto-audits + publishes `hr.employee.created`. Accepts `employmentType` (defaults to `'GUARD'`). |
 | `hr.getEmployee` | `(id: string) => Promise<Employee \| null>` | Read by id. |
 | `hr.getEmployeeByCode` | `(code: string) => Promise<Employee \| null>` | Read by `employeeCode`. Useful for post-import lookups and tests. |
-| `hr.updateEmployee` | `(id: string, patch: UpdateEmployeePatch, actorUserId?) => Promise<Employee>` | Partial update. Immutable fields (`id`, `employeeCode`, `createdAt`) are silently stripped from the patch. Throws `[hr/updateEmployee] employee <id> not found` if the row doesn't exist. Audits with before/after snapshot + `changedFields` list. Publishes `hr.employee.updated` event. |
-| `hr.searchEmployees` | `(query: string, opts?: SearchEmployeeOptions) => Promise<Employee[]>` | Fuzzy search via `pg_trgm` `similarity()` on full name, with OR fallback to `ILIKE` on `employeeCode`. Supports `employmentType` and `status` filters. Default limit 20, hard cap 100. Returns results ordered by similarity score (descending) when a query is provided, or by `lastName` when no query. |
+| `hr.updateEmployee` | `(id: string, patch: UpdateEmployeePatch, actorUserId?) => Promise<Employee>` | Partial update of **employment** fields only. Immutable fields (`id`, `employeeCode`, `createdAt`) **and every identity field** (`IDENTITY_FIELDS` — name, contact, DOB, gov-IDs, address) are silently stripped from the patch: identity is edited through `persons.updatePerson`, never here. (`rdoCode` is not an identity field and is editable.) Throws `[hr/updateEmployee] employee <id> not found` if the row doesn't exist. Audits with before/after snapshot + `changedFields` list. Publishes `hr.employee.updated` event. |
+| `hr.searchEmployees` | `(query: string, opts?: SearchEmployeeOptions) => Promise<Employee[]>` | Fuzzy search via `pg_trgm` on the Person's full name (joined from `persons`, since names live there now), with OR fallback to `ILIKE` on `employeeCode`. Supports `employmentType` and `status` filters. Default limit 20, hard cap 100. Ordered by similarity score (descending) when a query is given, or by name when no query. |
 | `hr.changeStatus` | `(id, next, reason, opts?) => Promise<Employee>` | Move through the state machine. Sets `terminatedOn` when `next === 'terminated'`. Audits + publishes `hr.employee.status_changed`. Throws on disallowed transitions. |
 | `hr.undoTermination` | `(id, reason, opts?) => Promise<Employee>` | Revert a `terminated → hired` transition within 5 minutes of the termination event. Bypasses `ALLOWED_TRANSITIONS` on purpose. Clears `terminatedOn`. Audits with `{ from: 'terminated', to: 'hired', reason, undo: true }` and publishes `hr.employee.status_changed`. Throws plain-language errors when the employee isn't terminated, the window has passed, or the employee isn't found. |
 | `hr.getLatestTerminationTimestamp` | `(id) => Promise<Date \| null>` | Reads the most recent `to: 'terminated'` audit row's `createdAt` for an employee. Used by `undoTermination` (and the employee detail page) because the `terminated_on` column is day-resolution and can't drive a precise 5-minute window. Returns null when no termination audit row exists. |
 | `hr.bulkImportEmployees` | `(csvText: string, opts?) => Promise<BulkImportResult>` | Parse a CSV, validate per row, insert valid rows in one batch, return `{ imported, errors }`. Per-row failures do NOT abort the batch. Accepts new columns: `employment_type`, `rdo_code`, `date_of_birth`, `address_line1`, `address_line2`, `city`, `province`, `postal_code`. All new columns are optional. |
 
-`Employee`, `NewEmployee`, and `BulkImportResult` types are re-exported from the entry point.
+`Employee`, `NewEmployee`, and `BulkImportResult` types — plus the `IDENTITY_FIELDS` constant (the keys `updateEmployee` strips and routes to `persons`) — are re-exported from the entry point.
 
 ### Status state machine
 
@@ -55,7 +55,7 @@ The bulk-import CSV requires these headers (case-sensitive, in any order):
 | `employee_code` | yes | CGoC-facing ID, e.g. `CG-00001`. Must be unique. |
 | `first_name` | yes | |
 | `last_name` | yes | |
-| `email` | no | Blank allowed (many guards have no email). Must be unique if present. |
+| `email` | no | Blank allowed (many guards have no email). **Non-unique** — email-uniqueness was retired in migration 0024; `persons.email` is non-unique by design (applicants re-apply, share, or lack an email). Only a format check (Zod `.email()`) is applied. |
 | `basic_salary` | yes | Positive number. Stored as `numeric(12,2)`. |
 | `pay_frequency` | no | `MONTHLY` or `SEMI_MONTHLY`. Defaults to `SEMI_MONTHLY` if blank or column missing. |
 | `hired_on` | yes | `YYYY-MM-DD`. |
@@ -71,16 +71,31 @@ The bulk-import CSV requires these headers (case-sensitive, in any order):
 ## Dependencies
 
 - **Env:** `DATABASE_URL`.
-- **Modules:** `@/modules/audit` (writes audit rows on every mutation), `@/modules/events` (publishes `hr.employee.created`, `hr.employee.status_changed`, and `hr.employee.updated`). Both are non-fatal — a failure in audit or events does NOT roll back the HR insert.
-- **External:** `papaparse` (CSV parsing), `zod` (per-row validation), `pg_trgm` Postgres extension (required for `searchEmployees`).
-- **Tables:** `hr_employees`. Enums: `hr_employee_status`, `hr_pay_frequency`, `hr_employment_type`.
+- **Modules:** `@/modules/persons` (mints/links the Person that owns each employee's identity; `searchEmployees` joins `persons` for the name), `@/modules/audit` (writes audit rows on every mutation), `@/modules/events` (publishes `hr.employee.created`, `hr.employee.status_changed`, and `hr.employee.updated`). Audit/events are non-fatal — a failure there does NOT roll back the HR insert; the Person mint, by contrast, is in the same transaction as the employee insert and DOES roll back together.
+- **External:** `papaparse` (CSV parsing), `zod` (per-row validation), `pg_trgm` Postgres extension (required for the `persons` name search behind `searchEmployees`).
+- **Tables:** `hr_employees` (its `person_id` is a `NOT NULL` FK to `persons`, `ON DELETE RESTRICT`). Enums: `hr_employee_status`, `hr_pay_frequency`, `hr_employment_type`. `hr/schema.ts` imports the `persons` table object directly to declare that FK — see the persons README's "Architectural exception."
 
 ## Known failure modes
 
-### Duplicate email on single create
-**Error:** `Email already in use: <email>`
-**Trigger:** `createEmployee` with an `email` already in `hr_employees` (Postgres `23505` on `hr_employees_email_uq`).
-**Fix:** caller chooses a different email or omits it (NULL emails are allowed; uniqueness only kicks in on non-NULL values).
+> **Email uniqueness was retired in migration 0024.** `createEmployee` no longer
+> throws on a duplicate email, and the `hr_employees_email_uq` index is gone —
+> `persons.email` is non-unique by design. If you remember an "Email already in
+> use" error here, it's gone.
+
+### Employee created without a Person (person_id NOT NULL)
+**Error:** `null value in column "person_id" of relation "hr_employees" violates not-null constraint` (Postgres `23502`).
+**Trigger:** an `hr_employees` row was inserted without a `person_id` — a writer bypassed `hr.createEmployee`. Since 0024, `person_id` is `NOT NULL`.
+**Fix:** all employee creation goes through `hr.createEmployee` (or `recruitment.hireApplicant`, which links the applicant's existing Person). Never `INSERT` into `hr_employees` directly.
+
+### Deleting a Person an employee references (FK RESTRICT)
+**Error:** `update or delete on table "persons" violates foreign key constraint "hr_employees_person_id_fkey"` (Postgres `23503`).
+**Trigger:** a hard `DELETE` of a `persons` row still referenced by an employee. The FK is `ON DELETE RESTRICT`.
+**Fix:** don't hard-delete people. Use `persons.redactPerson` (tombstone) to scrub PII while keeping the row and its FK intact.
+
+### Duplicate government ID when minting a Person
+**Error:** `That <PhilSys/SSS/TIN> is already on file for another person.` (Postgres `23505` on `persons_<type>_uq`, re-thrown in plain language by `createPerson`).
+**Trigger:** `createEmployee` / `bulkImportEmployees` supplies a government ID already held by another Person.
+**Fix:** either it's the same human (link the existing Person instead of minting) or a data-entry slip (correct the ID). In bulk import this surfaces as a per-row error and skips only that row.
 
 ### Duplicate employee_code on create or bulk import
 **Error:** `[hr/createEmployee] duplicate key value violates unique constraint "hr_employees_code_uq"` (no plain-language wrapper yet)
@@ -91,16 +106,6 @@ The bulk-import CSV requires these headers (case-sensitive, in any order):
 **Error:** `[hr/changeStatus] disallowed transition <from> → <to>`
 **Trigger:** Any transition not in the matrix above. Most common: trying to move a `terminated` employee back to `deployed`.
 **Fix:** terminated is terminal by design. If the termination was a mistake, the right move is to re-`createEmployee` (or, eventually, a re-hire flow not yet built).
-
-### CSV row with duplicate email already in DB
-**Error per row:** `email <addr> already exists in HR — pick a different one or remove this row.`
-**Trigger:** `bulkImportEmployees` row whose `email` matches a row already in `hr_employees`.
-**Fix:** the row is skipped; other rows continue. Caller surfaces the error to the user.
-
-### CSV row with duplicate email inside the same batch
-**Error per row:** `email <addr> appears twice in the same file — keep one row.`
-**Trigger:** Two rows in the same CSV with the same `email`.
-**Fix:** the first row wins, the second is reported. Caller removes the dup.
 
 ### CSV with malformed parsing (unbalanced quotes etc.)
 **Trigger:** Papa.parse reports errors in `parsed.errors`, which the current implementation ignores. Partial-row data may pass through to Zod and fail with a less-helpful message.

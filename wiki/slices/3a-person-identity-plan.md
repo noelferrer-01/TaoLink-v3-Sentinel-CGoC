@@ -76,6 +76,8 @@ export function checkIdFormat(type: AnchorIdType, raw: string): string | null {
 
 ### Task 5: Create the unique indexes AFTER backfill (migration 0023) — SQL-enforced ordering
 
+> **✅ Shipped — reconciled at 3a-T14:** there is **no standalone migration 0023**. The partial-unique indexes (`persons_philsys_uq` / `persons_sss_uq` / `persons_tin_uq`) were folded into **`0021_persons.sql:73-79`**, created at table-creation time. That's safe because `persons` starts empty and the dedup backfill (T4) never inserts a duplicate gov-ID — a separate post-backfill index migration was unnecessary. The ordering seam this task worried about is still closed by **0024's `RAISE EXCEPTION` gate** (T12). Live migration sequence: **0021 → 0022 → 0024**.
+
 > **The ordering seam (review's kill shot):** the backfill (T4) is a `tsx` script, but `pnpm db:migrate` auto-applies *every* pending `.sql` file in one pass (`drizzle/migrate.ts` wraps each file in `sql.begin`). So 0023/0024 must **physically refuse to run** until the backfill has completed — human discipline is not a safeguard.
 
 **Files:** migration `0023_persons_unique_ids.sql`
@@ -142,6 +144,8 @@ END $$;
 - [ ] **Step 2: fail. Step 3: Implement** the join + similarity on `persons`. **Run `EXPLAIN`** on the joined search query; if the planner does not use `persons_fullname_trgm`, switch the predicate to the `%` operator + `set_limit(0.2)` (the GIN-friendly form) instead of bare `similarity() > 0.2`.
 - [ ] **Step 4: pass + EXPLAIN shows an index scan. Step 5: Commit** — `refactor(hr): employee search via Person name (GIN verified)`
 
+> **✅ Shipped + follow-up — reconciled at 3a-T14:** built with the `%` + `set_limit(0.2)` GIN-friendly form. EXPLAIN on the **joined** query (employees ⋈ persons) left an open question — would the planner engage `persons_fullname_trgm` on a join plan, or is a `UNION` rewrite needed? The **stress harness** (`pnpm db:stress`, commits `15dc24e`/`55fc680`) later confirmed the GIN index **does engage at 50k rows**, resolving the follow-up; the UNION rewrite stays parked as an option only if the join plan regresses. Applicant name search (`listApplicantsPage`) was moved onto the same shared GIN path (`55fc680`), with the primitives extracted to `modules/persons/search.ts`. **Backlog:** terms passed to the `ILIKE` `employeeCode` fallback are not escaped for LIKE metacharacters (`%`, `_`) — low-severity search-hygiene item (the numeric SSS branch and the trigram `%` name path are unaffected).
+
 ---
 
 ### Task 11: Identity edits → Person; recruitment gates + all-Person matcher
@@ -198,6 +202,8 @@ DROP INDEX IF EXISTS hr_employees_fullname_trgm;
 - [ ] **Step 2:** Step-1 form (name+DOB required, ID **optional** with the advisory `checkIdFormat` warning + **Look up** rendering known-person / possible-duplicate panels per §3a); save → `createPerson` (provisional if no ID) then `createApplicant`. Show the **"ID still needed"** nudge on the applicant (no block); the **Hire** action blocks without an anchor ID.
 - [ ] **Step 3:** Split the employee edit form — employment → `hr.updateEmployee`, identity → `persons.updatePerson` (fixes the BIR-readiness remediation path).
 - [ ] **Step 4:** typecheck + component tests green. **Step 5: Commit** — `feat(recruitment-ui,employees-ui): identity-first intake + Person identity editor`
+
+> **✅ Shipped — reconciled at 3a-T14:** intake + lookup + provisional save + "ID still needed" nudge + hire gate landed in **`e72e66c`** (suite 323/323). **Step 3 (employee edit-form identity split) actually shipped earlier, in T11** (`9ce6357`/`4b485f9`) plus a T12 fix (`307e63a`): the action splits the patch server-side via `IDENTITY_FIELDS` and a form-level diff against `getEmployeeWithIdentity`, so `e72e66c` touched no `employees/` files. **Known behavior (audit item 8):** `checkMatches` excludes terminal-stage (`hired`/`rejected`/`withdrawn`) applicants from the in-flight channel **by design** — a re-applying rejected candidate is flagged only via a shared gov-ID (known-person) or a terminated-*employee* hit. Documented in the recruitment README; revisit if recruiters need rejected-history surfacing.
 
 ---
 

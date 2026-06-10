@@ -45,6 +45,14 @@ name/DOB/SSS snapshot columns.
 pnpm db:migrate          # applies 0024 (gate → SET NOT NULL → renames → indexes/FKs, one transaction)
 ```
 
+**Lock window.** 0024 runs as a single transaction that takes `ACCESS EXCLUSIVE`
+locks on `hr_employees` and `recruitment_applicants` — the `SET NOT NULL`
+validation scan, the `DROP INDEX`/`CREATE INDEX` steps, and the new `RESTRICT`
+FK's validation all block reads and writes to those tables until it commits.
+Sub-second on the current dev volume, but at 10k+ employees the scans are not
+instant: run it in a maintenance window and expect a brief write freeze rather
+than applying it against live traffic.
+
 Deploy order across the whole 3a sequence (the gates enforce it):
 `pnpm db:migrate` (0021/0022) → `pnpm db:backfill:persons` → `pnpm db:migrate` (0024).
 

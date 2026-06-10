@@ -14,27 +14,35 @@ Import from `@/modules/recruitment` (the `recruitment` object or named exports).
 
 | Function | Signature | Notes |
 | --- | --- | --- |
-| `createApplicant` | `(CreateApplicantInput) => Promise<Applicant>` | Inserts the applicant (stage `applied`) and seeds the required-doc checklist. Audits + emits `recruitment.applicant.created`. |
+| `createApplicant` | `(CreateApplicantInput) => Promise<Applicant>` | Atomically **mints a Person** (provisional if no government ID) and inserts the applicant (stage `applied`), seeding the required-doc checklist. Accepts the full gov-ID ladder (`sssNumber`, `philsysNumber`, `tinNumber`, `passportNumber`, `umidNumber`, `driversLicenseNumber`); the anchor is the first present by `ID_TYPE_LADDER` preference. Sets the `idPending` nudge when no anchor ID was captured (provisional save — never blocks). Audits + emits `recruitment.applicant.created`. |
 | `getApplicant` | `(id) => Promise<{ applicant, documents } \| null>` | Applicant + its document rows. |
 | `listApplicantsPage` | `({ query?, stage?, limit, offset }) => Promise<{ rows, total }>` | Paginated/searchable across ALL applicants (incl. rejected/withdrawn). |
 | `advanceStage` | `(id, next, opts?) => Promise<Applicant>` | Enforces `ALLOWED_TRANSITIONS`. Audits + emits `recruitment.applicant.stage_changed`. Throws on illegal transitions. |
 | `setDocument` | `(applicantId, docType, { status, expiresOn?, notes?, verifiedByUserId? }) => Promise<void>` | Updates one checklist row; stamps `verifiedOn` when status becomes `verified`. |
 | `rejectApplicant` / `withdrawApplicant` | `(id, reason, opts?) => Promise<Applicant>` | Terminal; records `outcomeReason`. |
-| `checkMatches` | `({ firstName, lastName, dateOfBirth?, sssNumber? }) => Promise<Match[]>` | Terminated employees + active blacklist. SSS-exact first, name+DOB possible. |
+| `checkMatches` | `({ personId, firstName, lastName, dateOfBirth?, sssNumber?, philsysNumber?, tinNumber?, excludeApplicantId? }) => Promise<Match[]>` | Cross-checks a candidate against everyone on file before save/hire. Exact channels: same `personId`; government-ID hit (SSS/PhilSys/TIN, via `persons`); active employees (`active_employee` — possible double-hire); terminated employees (`terminated_employee`); in-flight applicants (`concurrent_applicant`, terminal stages excluded); active blacklist. Possible channel: fuzzy name+DOB. |
 | `addToBlacklist` / `listBlacklist` / `removeFromBlacklist` | see types | `remove` is a soft deactivate (`active=false`). |
-| `hireApplicant` | `(applicantId, HireMeta) => Promise<Employee>` | **ADR 0009 handoff.** Requires stage `documents`. Calls `hr.createEmployee` (auto-generates `CG-#####` unless overridden), back-links `hiredEmployeeId`, sets stage `hired`. Audits + emits `recruitment.applicant.hired`. |
+| `hireApplicant` | `(applicantId, HireMeta) => Promise<Employee>` | **ADR 0009 handoff.** Requires stage `documents` **and an anchored government ID** — calls `persons.assertAnchored(personId)`, which throws if the Person's `anchorIdType` is `'none'`. Then calls `hr.createEmployee` **linking the applicant's existing Person** (no new Person minted), auto-generates `CG-#####` unless overridden, back-links `hiredEmployeeId`, sets stage `hired`. Audits + emits `recruitment.applicant.hired`. |
 
 Labels/constants also exported: `STAGE_LABELS`, `SOURCE_LABELS`, `DOC_TYPE_LABELS`,
-`DOC_STATUS_LABELS`, `ALLOWED_TRANSITIONS`, `requiredDocsFor(isArmedPost)`.
+`DOC_STATUS_LABELS`, `ALLOWED_TRANSITIONS`, `requiredDocsFor(isArmedPost)`,
+`MATCH_KIND_LABELS` + the `MatchKind` type.
 
 ## Dependencies
 
 - `@/core/db` — Drizzle handle (`getDb`).
+- `@/modules/persons` — `createPerson`, `assertAnchored`, `getPerson`,
+  `findPersonByAnyId`, `findPossibleDuplicates` (identity minting, the hire gate,
+  and the known-person / duplicate lookups behind intake).
 - `@/modules/hr` — `createEmployee`, `generateNextEmployeeCode` (the hire handoff).
 - `@/modules/audit` — `audit.record` (note: arg is `actor`, not `actorUserId`).
 - `@/modules/events` — `events.publish`.
-- Tables: `recruitment_applicants`, `recruitment_applicant_documents`,
-  `recruitment_blacklist` (migrations 0019, 0020).
+- Tables: `recruitment_applicants` (its `person_id` is a `NOT NULL` FK to `persons`,
+  `ON DELETE RESTRICT`), `recruitment_applicant_documents`, `recruitment_blacklist`
+  (its `person_id` is a *nullable* FK, `ON DELETE SET NULL`) (migrations 0019, 0020;
+  `person_id` FKs added in 0022 and tightened in 0024). `recruitment/schema.ts`
+  imports the `persons` table object directly to declare those FKs — see the persons
+  README's "Architectural exception."
 
 ## Known failure modes
 
@@ -42,21 +50,40 @@ Labels/constants also exported: `STAGE_LABELS`, `SOURCE_LABELS`, `DOC_TYPE_LABEL
   next stages live in `ALLOWED_TRANSITIONS` (labels.ts).
 - **`Only applicants with completed documents can be hired.`** — `hireApplicant`
   called before the applicant reached the `documents` stage.
+- **`A government ID is required before this person can be hired. Add a PhilSys, SSS, or TIN number to their record first.`**
+  — the `assertAnchored` hire gate fired: the applicant was saved provisionally
+  (`anchorIdType: 'none'`, `idPending: true`) and still has no government ID.
+  Clearing it requires `updatePerson(personId, { anchorIdType, <idField> })`
+  (anchor + value together — see the persons README). **Known gap:** there is no
+  applicant-side UI to do this today, and clearing the Person's anchor does **not**
+  by itself reset the applicant's stored `idPending` nudge (only `createApplicant`
+  + `advanceStage` recompute it) — see `wiki/slices/3a-person-identity-done-sweep.md` §5.
+- **Applicant created without a Person** — `null value in column "person_id" …
+  violates not-null constraint` (Postgres `23502`). Since 0024,
+  `recruitment_applicants.person_id` is `NOT NULL`; a writer bypassed
+  `createApplicant`. Always go through `createApplicant`, which mints the Person.
+- **Deleting a Person an applicant references** — `update or delete on table
+  "persons" violates foreign key constraint "recruitment_applicants_person_id_fkey"`
+  (Postgres `23503`, `ON DELETE RESTRICT`). Use `persons.redactPerson`, not
+  `DELETE`. (The blacklist's `person_id` is the exception — `ON DELETE SET NULL`.)
+- **`That <PhilSys/SSS/TIN> is already on file for another person.`** — Postgres
+  `23505` on a `persons_<type>_uq` index when `createApplicant` supplies a gov ID
+  already held by someone else. Same human → reconcile the duplicate; otherwise a
+  data-entry slip.
+- **Re-applying rejected/withdrawn applicants don't re-flag** — `checkMatches`
+  excludes `TERMINAL_STAGES` (`hired`/`rejected`/`withdrawn`) from the
+  in-flight-applicant channel **by design** (it surfaces *active* concurrency, not
+  history). A returning candidate is flagged only if they share a government ID
+  (→ known-person via `findPersonByAnyId`) or were a *terminated employee*
+  (→ `terminated_employee`). A plain rejected re-applicant with no ID hit raises
+  nothing. Intentional; revisit if recruiters need rejected-history surfacing.
 - **FK violation deleting `hr_employees` in a test** — a recruitment row
   referenced the employee. The recruitment→employee FKs are `ON DELETE SET NULL`
   (migration 0020) so this should not happen; if it reappears, a NEW reference
   column was added without `onDelete: 'set null'`.
-- **Blacklist false positives** — name+DOB matching (no stable national ID yet)
-  can flag two different people with the same name/birthday. SSS-number matching
-  is exact; capture `sssNumber` to reduce noise. See spec §5.
+- **Match / blacklist false positives** — fuzzy name+DOB matching can flag two
+  different people with the same name and birthday (`confidence: 'possible'`).
+  Government-ID channels (PhilSys/SSS/TIN) are exact (`confidence: 'exact'`);
+  capturing an anchor ID at intake is what reduces the noise. See spec §5.
 - **No document file storage** — `setDocument` tracks status only; scanned PDFs
   are a deferred fast-follow (no blob storage configured).
-- **Duplicate Person minted for legacy applicant hired before T4 backfill** — A
-  pre-T7 applicant whose `person_id` is `NULL` (i.e., created before the T7
-  dual-write landed) will have a fresh Person minted at hire time via
-  `createEmployee`, because `hireApplicant` passes `personId: a.personId ?? undefined`
-  and `undefined` is treated as "no personId supplied — mint one." The
-  `db:backfill:persons` script (Task 4) should be run **before** hiring any
-  legacy applicants so their `person_id` is populated and the hire path skips
-  minting. Mitigation: run `pnpm db:backfill:persons` before the first hire
-  wave after deploying T7.
