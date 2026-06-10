@@ -3,12 +3,18 @@
 import { useActionState, useState } from 'react';
 import Link from 'next/link';
 import { ModalShell } from '@/components/modal-shell';
+import { TextField, SelectField } from '@/components/form';
 // Import labels from the /labels subpath (pure constants) — NOT the module
 // index, which pulls server-only DB code into the client bundle.
 import { ANCHOR_ID_LABELS, ID_TYPE_LADDER, checkIdFormat, type AnchorIdType } from '@/modules/persons/labels';
 import { hireAction, type HireState } from '../actions';
 
 const initial: HireState = { kind: 'idle' };
+
+const ID_TYPE_OPTIONS: Array<[string, string]> = [
+  ['', '— pick an ID type —'],
+  ...ID_TYPE_LADDER.map((t) => [t, ANCHOR_ID_LABELS[t]] as [string, string]),
+];
 
 export function HireModal({
   applicantId,
@@ -81,24 +87,15 @@ export function HireModal({
                       This applicant has no government ID on file yet. Enter one here — it&apos;s saved to their identity record as part of the hire.
                     </p>
                   </div>
-                  <div className="field">
-                    <label className="field-label" htmlFor="h-idtype">ID type</label>
-                    <select
-                      id="h-idtype" name="idType" className="input" required
-                      value={idType} onChange={(e) => setIdType(e.target.value as '' | AnchorIdType)}
-                    >
-                      <option value="">— pick an ID type —</option>
-                      {ID_TYPE_LADDER.map((t) => <option key={t} value={t}>{ANCHOR_ID_LABELS[t]}</option>)}
-                    </select>
-                  </div>
-                  <div className="field">
-                    <label className="field-label" htmlFor="h-idvalue">ID number</label>
-                    <input
-                      id="h-idvalue" name="idValue" className="input" required
-                      disabled={idType === ''} value={idValue} onChange={(e) => setIdValue(e.target.value)}
-                    />
-                    {idType === '' && <span className="field-hint">Pick an ID type first.</span>}
-                  </div>
+                  <SelectField
+                    label="ID type" name="idType" required options={ID_TYPE_OPTIONS}
+                    value={idType} onChange={(v) => setIdType(v as '' | AnchorIdType)}
+                  />
+                  <TextField
+                    label="ID number" name="idValue" required disabled={idType === ''}
+                    value={idValue} onChange={setIdValue}
+                    hint={idType === '' ? 'Pick an ID type first.' : undefined}
+                  />
                   {idWarning && <p className="field-hint" style={{ color: 'var(--ochre)', margin: 0 }}>⚠ {idWarning}</p>}
                 </div>
               )}

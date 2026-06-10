@@ -42,6 +42,20 @@ const ID_FIELD = {
   drivers_license: 'driversLicenseNumber',
 } as const satisfies Record<(typeof ID_TYPES)[number], string>;
 
+// Reads the optional government-ID pair from a parsed form (intake + hire). A
+// value without a type is a user slip we can catch plainly; a type without a
+// value just means "no ID provided" (provisional intake / nothing to anchor).
+function readIdPair(d: { idType?: string; idValue?: string }):
+  | { ok: true; idType: '' | (typeof ID_TYPES)[number]; idValue: string | null }
+  | { ok: false; message: string } {
+  const idValue = blank(d.idValue ?? null);
+  const idType = (d.idType ?? '') as '' | (typeof ID_TYPES)[number];
+  if (idValue && !idType) {
+    return { ok: false, message: 'Pick which kind of ID you entered (PhilSys, SSS, TIN, …) — or clear the ID field.' };
+  }
+  return { ok: true, idType, idValue };
+}
+
 const createSchema = z.object({
   firstName: z.string().trim().min(1, 'Please enter the first name.'),
   lastName: z.string().trim().min(1, 'Please enter the last name.'),
@@ -86,16 +100,11 @@ export async function createApplicantAction(_prev: FormState, formData: FormData
   if (!parsed.success) return { kind: 'error', message: parsed.error.issues[0]?.message ?? 'Please check the form.' };
   const d = parsed.data;
 
-  // Map the (optional) chosen ID to the matching createApplicant field. A value
-  // without a type is a user slip we can catch plainly; a type without a value
-  // is just provisional intake (no anchor yet).
-  const idValue = blank(d.idValue ?? null);
-  const idType = (d.idType ?? '') as '' | (typeof ID_TYPES)[number];
-  if (idValue && !idType) {
-    return { kind: 'error', message: 'Pick which kind of ID you entered (PhilSys, SSS, TIN, …) — or clear the ID field.' };
-  }
+  // Map the (optional) chosen ID to the matching createApplicant field.
+  const idPair = readIdPair(d);
+  if (!idPair.ok) return { kind: 'error', message: idPair.message };
   const idPatch: Partial<Record<(typeof ID_FIELD)[keyof typeof ID_FIELD], string | null>> = {};
-  if (idValue && idType) idPatch[ID_FIELD[idType]] = idValue;
+  if (idPair.idValue && idPair.idType) idPatch[ID_FIELD[idPair.idType]] = idPair.idValue;
 
   let createdId: string;
   try {
@@ -270,22 +279,19 @@ export async function hireAction(_prev: HireState, formData: FormData): Promise<
   if (!parsed.success) return { kind: 'error', message: parsed.error.issues[0]?.message ?? 'Please check the form.' };
   const d = parsed.data;
 
-  const idValue = blank(d.idValue ?? null);
-  const idType = (d.idType ?? '') as '' | (typeof ID_TYPES)[number];
-  if (idValue && !idType) {
-    return { kind: 'error', message: 'Pick which kind of ID you entered (PhilSys, SSS, TIN, …) — or clear the ID field.' };
-  }
+  const idPair = readIdPair(d);
+  if (!idPair.ok) return { kind: 'error', message: idPair.message };
 
   try {
     // Anchor the Person first so the hire gate (assertAnchored) passes.
     // anchorIdType + the ID value must go TOGETHER — updatePerson never infers
     // the anchor from a bare ID value (done-sweep §5).
-    if (idType && idValue) {
+    if (idPair.idType && idPair.idValue) {
       const got = await recruitment.getApplicant(d.applicantId);
       if (!got) return { kind: 'error', message: 'This applicant no longer exists.' };
       await updatePerson(
         got.applicant.personId,
-        { anchorIdType: idType, [ID_FIELD[idType]]: idValue },
+        { anchorIdType: idPair.idType, [ID_FIELD[idPair.idType]]: idPair.idValue },
         session.user.id,
       );
     }

@@ -7,7 +7,7 @@ import Link from 'next/link';
 import { SOURCE_LABELS, MATCH_KIND_LABELS } from '@/modules/recruitment/labels';
 import { EMPLOYMENT_TYPE_LABELS } from '@/modules/hr/labels';
 import { ANCHOR_ID_LABELS, ID_TYPE_LADDER, checkIdFormat, type AnchorIdType } from '@/modules/persons/labels';
-import { TwoCol } from '@/components/form';
+import { TwoCol, TextField, SelectField } from '@/components/form';
 import { createApplicantAction, lookupPersonAction, type FormState, type LookupResult } from '../actions';
 
 const SOURCE_OPTIONS = Object.entries(SOURCE_LABELS);
@@ -191,50 +191,3 @@ function Panel({ tone, children }: { tone: 'info' | 'warn' | 'danger'; children:
   );
 }
 
-interface TextFieldProps {
-  label: string; name: string; type?: string; required?: boolean; disabled?: boolean; hint?: string;
-  defaultValue?: string;
-  // Controlled flavour: pass both to make the field controlled (so its value is
-  // readable for the "Look up" button). Omit for native uncontrolled behaviour.
-  value?: string;
-  onChange?: (v: string) => void;
-}
-
-function TextField({ label, name, type = 'text', required, disabled, hint, defaultValue, value, onChange }: TextFieldProps) {
-  const controlled = value !== undefined && onChange !== undefined;
-  return (
-    <div className="field">
-      <label className="field-label" htmlFor={`f-${name}`}>
-        {label}
-        {required && <span aria-hidden style={{ color: 'var(--ochre)', marginLeft: '0.25rem' }}>*</span>}
-      </label>
-      <input
-        id={`f-${name}`} className="input" name={name} type={type} required={required} disabled={disabled}
-        autoComplete="off"
-        {...(controlled ? { value, onChange: (e) => onChange!(e.target.value) } : { defaultValue })}
-      />
-      {hint && <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>{hint}</span>}
-    </div>
-  );
-}
-
-interface SelectFieldProps {
-  label: string; name: string; value?: string; defaultValue?: string; options: Array<[string, string]>;
-  disabled?: boolean; onChange?: (v: string) => void; uncontrolled?: boolean;
-}
-
-function SelectField({ label, name, value, defaultValue, options, disabled, onChange, uncontrolled }: SelectFieldProps) {
-  return (
-    <div className="field">
-      <label className="field-label" htmlFor={`f-${name}`}>{label}</label>
-      <select
-        id={`f-${name}`} className="input" name={name} disabled={disabled}
-        {...(uncontrolled ? { defaultValue } : { value, onChange: (e) => onChange?.(e.target.value) })}
-      >
-        {options.map(([v, l]) => (
-          <option key={v} value={v}>{l}</option>
-        ))}
-      </select>
-    </div>
-  );
-}
