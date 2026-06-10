@@ -609,19 +609,37 @@ type UpdateCredentialPatch = Partial<
 >;
 
 /**
+ * Options for `updateCredential`. Pass `{ expectedPersonId }` to scope the edit
+ * to a known owner — the call is refused (as not-found, to avoid leaking
+ * existence) if the credential belongs to anyone else. The employee detail
+ * action uses this so a request can't edit an unrelated person's credential by id.
+ */
+export type UpdateCredentialOptions = {
+  expectedPersonId?: string;
+};
+
+/**
  * Updates a credential and returns the updated row. Records the changed fields
  * in a `person.credential.updated` audit row (targeted at the owning Person).
- * Throws a plain-language error if the credential does not exist.
+ * Throws a plain-language error if the credential does not exist (or, when
+ * `expectedPersonId` is given, does not belong to that person).
  */
 export async function updateCredential(
   id: string,
   patch: UpdateCredentialPatch,
   actorUserId?: string | null,
+  opts?: UpdateCredentialOptions,
 ): Promise<PersonCredential> {
   const db = getDb();
 
   const [before] = await db.select().from(personCredentials).where(eq(personCredentials.id, id));
   if (!before) throw new Error(`Credential not found — no credential with id ${id}.`);
+
+  // Ownership scope: a credential id that belongs to a different person is
+  // reported as not-found (same message — don't leak that the id exists).
+  if (opts?.expectedPersonId && before.personId !== opts.expectedPersonId) {
+    throw new Error(`Credential not found — no credential with id ${id}.`);
+  }
 
   // personId / id / timestamps are not caller-editable.
   const IMMUTABLE = ['id', 'personId', 'createdAt'] as const;

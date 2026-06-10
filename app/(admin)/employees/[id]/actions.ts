@@ -295,6 +295,13 @@ const blankToNull = (v: FormDataEntryValue | null): string | null => {
   const s = v == null ? '' : String(v).trim();
   return s.length === 0 ? null : s;
 };
+// Date columns are `date`; the UI uses <input type=date> (always YYYY-MM-DD or
+// blank), but a hand-crafted POST could send garbage. Drop anything that isn't a
+// plain ISO date to null rather than letting Postgres throw on a bad cast.
+const dateOrNull = (v: FormDataEntryValue | null): string | null => {
+  const s = blankToNull(v);
+  return s && /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+};
 
 export async function addCredentialAction(formData: FormData): Promise<void> {
   const session = await getSessionFromCookie();
@@ -307,24 +314,30 @@ export async function addCredentialAction(formData: FormData): Promise<void> {
   const statusRaw = String(formData.get('status') ?? 'valid');
   const status: CredStatus = isCredStatus(statusRaw) ? statusRaw : 'valid';
 
-  // Resolve the Person from the employee (don't trust a client-supplied personId).
-  const employee = await hr.getEmployeeWithIdentity(employeeId);
-  if (!employee) return;
+  try {
+    // Resolve the Person from the employee (don't trust a client-supplied personId).
+    const employee = await hr.getEmployeeWithIdentity(employeeId);
+    if (!employee) return;
 
-  await addCredential({
-    personId:    employee.personId,
-    credType,
-    credNumber:  blankToNull(formData.get('credNumber')),
-    issuingBody: blankToNull(formData.get('issuingBody')),
-    issuedOn:    blankToNull(formData.get('issuedOn')),
-    expiresOn:   blankToNull(formData.get('expiresOn')),
-    status,
-    notes:       blankToNull(formData.get('notes')),
-    // A clerk entering a valid credential is asserting it — record them as verifier.
-    verifiedByUserId: status === 'valid' ? session.user.id : null,
-    verifiedOn:       status === 'valid' ? todayIso() : null,
-    actorUserId:      session.user.id,
-  });
+    await addCredential({
+      personId:    employee.personId,
+      credType,
+      credNumber:  blankToNull(formData.get('credNumber')),
+      issuingBody: blankToNull(formData.get('issuingBody')),
+      issuedOn:    dateOrNull(formData.get('issuedOn')),
+      expiresOn:   dateOrNull(formData.get('expiresOn')),
+      status,
+      notes:       blankToNull(formData.get('notes')),
+      // A clerk entering a valid credential is asserting it — record them as verifier.
+      verifiedByUserId: status === 'valid' ? session.user.id : null,
+      verifiedOn:       status === 'valid' ? todayIso() : null,
+      actorUserId:      session.user.id,
+    });
+  } catch (e) {
+    // Match the house FormData-action pattern: don't crash the page on a save
+    // failure. Log for diagnosis; the page re-renders unchanged so the clerk can retry.
+    console.error('[employees/addCredentialAction]', e);
+  }
   revalidatePath(`/employees/${employeeId}`);
 }
 
@@ -339,14 +352,24 @@ export async function updateCredentialAction(formData: FormData): Promise<void> 
   const statusRaw = String(formData.get('status') ?? '');
   const status = isCredStatus(statusRaw) ? statusRaw : undefined;
 
-  await updateCredential(
-    credId,
-    {
-      ...(status ? { status } : {}),
-      credNumber: blankToNull(formData.get('credNumber')),
-      expiresOn:  blankToNull(formData.get('expiresOn')),
-    },
-    session.user.id,
-  );
+  try {
+    // Scope the edit to THIS employee's Person — a credId for another person is
+    // refused (as not-found). Resolve the person server-side, never from the client.
+    const employee = await hr.getEmployeeWithIdentity(employeeId);
+    if (!employee) return;
+
+    await updateCredential(
+      credId,
+      {
+        ...(status ? { status } : {}),
+        credNumber: blankToNull(formData.get('credNumber')),
+        expiresOn:  dateOrNull(formData.get('expiresOn')),
+      },
+      session.user.id,
+      { expectedPersonId: employee.personId },
+    );
+  } catch (e) {
+    console.error('[employees/updateCredentialAction]', e);
+  }
   revalidatePath(`/employees/${employeeId}`);
 }

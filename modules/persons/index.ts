@@ -57,6 +57,7 @@ export {
   listCredentialsForPersons,
   type AddCredentialInput,
   type AddCredentialOptions,
+  type UpdateCredentialOptions,
 } from './service';
 
 // ─── Name-search primitives (shared by hr + recruitment) ───────────────────────

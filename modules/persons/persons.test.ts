@@ -789,6 +789,24 @@ describe('credentials service (integration)', () => {
         updateCredential('00000000-0000-0000-0000-000000000000', { status: 'expired' }),
       ).rejects.toThrow(/not found/i);
     });
+
+    it('refuses to update a credential that belongs to a different person (expectedPersonId scope)', async () => {
+      const a = await makePerson();
+      const b = await createPerson({ firstName: 'Other', lastName: 'Person', dateOfBirth: '1991-01-01' });
+      const cred = await addCredential({ personId: a.id, credType: 'sosia_license', status: 'valid' });
+
+      // Scoped to the WRONG person → not-found (no cross-person edit, no existence leak).
+      await expect(
+        updateCredential(cred.id, { status: 'revoked' }, null, { expectedPersonId: b.id }),
+      ).rejects.toThrow(/not found/i);
+
+      // The credential is untouched.
+      expect((await listCredentials(a.id))[0]!.status).toBe('valid');
+
+      // Scoped to the RIGHT person → succeeds.
+      const ok = await updateCredential(cred.id, { status: 'revoked' }, null, { expectedPersonId: a.id });
+      expect(ok.status).toBe('revoked');
+    });
   });
 
   describe('listCredentialsForPersons', () => {
