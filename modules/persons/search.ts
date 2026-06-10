@@ -21,6 +21,15 @@ import { persons } from './schema';
 export const NAME_SEARCH_THRESHOLD = 0.2;
 
 /**
+ * Escapes `%`, `_`, and `\` in a user-typed term before it is embedded in a
+ * LIKE/ILIKE pattern, so "S_0002" matches that literal text instead of using
+ * `_` as a one-character wildcard. Postgres's default LIKE escape char is `\`.
+ */
+export function escapeLike(term: string): string {
+  return term.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
+/**
  * SQL fragment: the persons full name (first + ' ' + last) fuzzy-matches `query`
  * via the trigram `%` operator. This is the GIN-accelerated form — at scale the
  * planner uses `persons_fullname_trgm` for it (verified by the stress harness).

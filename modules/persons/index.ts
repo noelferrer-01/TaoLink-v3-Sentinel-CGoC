@@ -43,6 +43,7 @@ export {
 
 export {
   NAME_SEARCH_THRESHOLD,
+  escapeLike,
   personFullNameMatches,
   personFullNameSimilarityDesc,
   withNameSearchThreshold,

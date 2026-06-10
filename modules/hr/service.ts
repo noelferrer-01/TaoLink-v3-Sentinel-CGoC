@@ -6,7 +6,7 @@ import { isWithinUndoWindow } from '@/core/time';
 import { employees, type Employee, type NewEmployee } from './schema';
 import {
   persons, type Person, createPerson, ID_TYPE_LADDER,
-  personFullNameMatches, personFullNameSimilarityDesc, withNameSearchThreshold,
+  escapeLike, personFullNameMatches, personFullNameSimilarityDesc, withNameSearchThreshold,
 } from '@/modules/persons';
 import { auditLog } from '@/modules/audit/schema';
 import { audit } from '@/modules/audit';
@@ -582,7 +582,7 @@ export async function updateEmployee(
 function personNameMatchesPredicate(query: string) {
   return or(
     personFullNameMatches(query),
-    sql`${employees.employeeCode} ILIKE ${'%' + query + '%'}`,
+    sql`${employees.employeeCode} ILIKE ${'%' + escapeLike(query) + '%'}`,
   ) as unknown as ReturnType<typeof eq>;
 }
 
