@@ -10,7 +10,7 @@
 
 **Reference patterns:** Slice 0's audit module ([modules/audit/](../../modules/audit/)) is the canonical template for module shape — `schema.ts` / `service.ts` / `index.ts` / `<module>.test.ts` / `README.md`. Mirror its structure for every new module unless this plan says otherwise.
 
-**Layman's-terms reminder:** Every UI screen built in Phase 8 must pass the "CGoC payroll clerk could complete this without coaching" test. Use the `frontend-design` skill when building each screen. See [project_ux_quality_bar memory](../../../.claude/projects/-Users-user-Desktop-Aintigravity-Workflows-Taolink-v3---Sentinel/memory/project_ux_quality_bar.md) for the full rule.
+**Layman's-terms reminder:** Every UI screen built in Phase 8 must pass the "CGoC payroll clerk could complete this without coaching" test. Use the `frontend-design` skill when building each screen. See [project_ux_quality_bar memory](../../../.claude/projects/-Volumes-1TB-Antigravity-Workflows-Taolink-v3---Sentinel/memory/project_ux_quality_bar.md) for the full rule.
 
 ---
 
@@ -638,7 +638,7 @@ CG-2,C,D,dup@x.com,18000,SEMI_MONTHLY,2026-05-01`;
 });
 ```
 
-- [ ] **Step 3: Implement** — parse with papaparse (header: true), pre-fetch existing emails into a Set, walk rows, validate with Zod, collect errors, insert valid rows in a transaction. **Plain-language errors** per [UX-quality memory](../../../.claude/projects/-Users-user-Desktop-Aintigravity-Workflows-Taolink-v3---Sentinel/memory/project_ux_quality_bar.md) — "Row 3: the email address looks wrong — check for typos" not "Zod validation failed."
+- [ ] **Step 3: Implement** — parse with papaparse (header: true), pre-fetch existing emails into a Set, walk rows, validate with Zod, collect errors, insert valid rows in a transaction. **Plain-language errors** per [UX-quality memory](../../../.claude/projects/-Volumes-1TB-Antigravity-Workflows-Taolink-v3---Sentinel/memory/project_ux_quality_bar.md) — "Row 3: the email address looks wrong — check for typos" not "Zod validation failed."
 
 ```typescript
 import Papa from 'papaparse';
@@ -1272,7 +1272,7 @@ export async function runPayroll(periodStart: string, periodEnd: string, opts: {
 
 ## Phase 8 — UI screens
 
-> **Per [UX-quality memory](../../../.claude/projects/-Users-user-Desktop-Aintigravity-Workflows-Taolink-v3---Sentinel/memory/project_ux_quality_bar.md):** every screen built in this phase must use the `frontend-design` skill. Plain labels. Plain error messages. Sensible defaults. Empty states that teach. Confirm destructive actions ("This will lock the payroll period. You won't be able to edit DTR after this. Continue?").
+> **Per [UX-quality memory](../../../.claude/projects/-Volumes-1TB-Antigravity-Workflows-Taolink-v3---Sentinel/memory/project_ux_quality_bar.md):** every screen built in this phase must use the `frontend-design` skill. Plain labels. Plain error messages. Sensible defaults. Empty states that teach. Confirm destructive actions ("This will lock the payroll period. You won't be able to edit DTR after this. Continue?").
 
 All routes live under `app/(admin)/...` — gated by `auth.requireUser` via a server-component layout. Pattern: each route has a `page.tsx` (server component fetching data) + a client form component for mutations using Next.js server actions.
 
@@ -1393,5 +1393,5 @@ All routes live under `app/(admin)/...` — gated by `auth.requireUser` via a se
 
 1. **SSS R3 format research (Task 7.1) may surface a constraint that ripples back** — e.g. R3 requires fields Slice 1's payroll doesn't yet capture (member SS number, etc.). If so: add a "Step 0" to Phase 2 (HR schema) to include those fields, and update the [Slice 1 contract](1-first-payslip.md) before continuing.
 2. **BIR 2316 partial-year (Task 7.4)** — if the format research shows partial-year exports are *rejected by BIR*, scale back to "internal preview only" for Slice 1 and defer real 2316 filing capability to a later slice. Update the contract.
-3. **`frontend-design` skill is referenced in Phase 8** — confirmed available in the environment ([`/Users/user/.claude/projects/-Users-user-Desktop-Aintigravity-Workflows-Taolink-v3---Sentinel/memory/project_ux_quality_bar.md`](../../../.claude/projects/-Users-user-Desktop-Aintigravity-Workflows-Taolink-v3---Sentinel/memory/project_ux_quality_bar.md)). If invoking it surfaces additional discipline (e.g. component-library setup), absorb that into Phase 8 Task 8.1.
+3. **`frontend-design` skill is referenced in Phase 8** — confirmed available in the environment ([`/Users/user/.claude/projects/-Volumes-1TB-Antigravity-Workflows-Taolink-v3---Sentinel/memory/project_ux_quality_bar.md`](../../../.claude/projects/-Volumes-1TB-Antigravity-Workflows-Taolink-v3---Sentinel/memory/project_ux_quality_bar.md)). If invoking it surfaces additional discipline (e.g. component-library setup), absorb that into Phase 8 Task 8.1.
 4. **Daily-log + memory updates** are NOT individual tasks; the executor adds them after each phase per `AGENTS.md` discipline.

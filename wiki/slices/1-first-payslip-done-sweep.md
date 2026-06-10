@@ -90,7 +90,7 @@ If any criterion below ever flips from ✓ to ✗ on `main`, Slice 1 is no longe
 
 ### 14. UX bar — non-technical user completes demo without coaching
 **Status:** **PENDING MANUAL DEMO.** ⚠
-**Evidence:** no automated coverage possible. Slice 0 + Slice 1 followed the project UX-quality-bar memory ([`project_ux_quality_bar.md`](../../../.claude/projects/-Users-user-Desktop-Aintigravity-Workflows-Taolink-v3---Sentinel/memory/project_ux_quality_bar.md)) — plain-language labels, plain-language errors, no developer jargon, visibly disabled `.btn` state (Phase 8.8 fix). The `frontend-design` skill was used for each Phase-8 screen.
+**Evidence:** no automated coverage possible. Slice 0 + Slice 1 followed the project UX-quality-bar memory ([`project_ux_quality_bar.md`](../../../.claude/projects/-Volumes-1TB-Antigravity-Workflows-Taolink-v3---Sentinel/memory/project_ux_quality_bar.md)) — plain-language labels, plain-language errors, no developer jargon, visibly disabled `.btn` state (Phase 8.8 fix). The `frontend-design` skill was used for each Phase-8 screen.
 **Action to flip to ✓:** Noel (or a CGoC payroll clerk) follows [`directives/slice-1-bootstrap.md`](../../directives/slice-1-bootstrap.md) end-to-end on a clean DB and reports either "passed without coaching" or "got stuck at step N because …". The latter feeds a UX-polish pass before tag.
 
 ---

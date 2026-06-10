@@ -15,7 +15,7 @@
 - Test shape: see [`modules/hr/hr.test.ts`](../../modules/hr/hr.test.ts) — Vitest, real DB via testcontainers (already wired in Slice 0).
 - UI screen pattern: each admin page is read-only by default + `[Edit]` toggle (new in Slice 2, see Phase 8).
 
-**Layman's-terms reminder:** every UI screen must pass the "CGoC payroll clerk could complete this without coaching" test. Use the `frontend-design` skill when building each screen. See [`project_ux_quality_bar` memory](../../../.claude/projects/-Users-user-Desktop-Aintigravity-Workflows-Taolink-v3---Sentinel/memory/project_ux_quality_bar.md).
+**Layman's-terms reminder:** every UI screen must pass the "CGoC payroll clerk could complete this without coaching" test. Use the `frontend-design` skill when building each screen. See [`project_ux_quality_bar` memory](../../../.claude/projects/-Volumes-1TB-Antigravity-Workflows-Taolink-v3---Sentinel/memory/project_ux_quality_bar.md).
 
 ---
 

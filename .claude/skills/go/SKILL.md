@@ -144,7 +144,7 @@ Ask the user one focused question — don't enumerate every possible memory:
 
 > "From this work — anything worth saving as feedback or project memory? I'm thinking [specific candidate based on what happened, e.g. 'the rule that X always needs Y'] but you call it."
 
-If they say yes, write to `~/.claude/projects/-Users-user-Desktop-Aintigravity-Workflows-Taolink-v3---Sentinel/memory/` per the auto-memory format (`Why:` + `How to apply:` lines for feedback/project types). Update `MEMORY.md` index.
+If they say yes, write to `~/.claude/projects/-Volumes-1TB-Antigravity-Workflows-Taolink-v3---Sentinel/memory/` per the auto-memory format (`Why:` + `How to apply:` lines for feedback/project types). Update `MEMORY.md` index.
 
 ### 4b. Slice contract sync (if `SLICE_CONTRACT_SYNC`)
 Implementation diverged from the slice contract. Ask:
