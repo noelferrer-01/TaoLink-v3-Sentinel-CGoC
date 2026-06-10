@@ -33,6 +33,7 @@ from runtime code (the one schema-level exception is documented below).
 | `personFullNameMatches(query)` | `SQL` fragment: `(first \|\| ' ' \|\| last) % query` (trigram match). |
 | `personFullNameSimilarityDesc(query)` | `SQL` fragment: `ORDER BY similarity(...) DESC NULLS LAST`. |
 | `withNameSearchThreshold(db, fn)` | Runs `fn(tx)` inside a transaction with `SET LOCAL pg_trgm.similarity_threshold` so the `%` operator and the row+count read agree on the same threshold. |
+| `escapeLike(term)` | Escapes `%`/`_`/`\` in a user-typed term before it goes into a LIKE/ILIKE pattern, so wildcards match literally. Required form: `ilike(col, `%${escapeLike(term)}%`)` — embedding the raw term lets `_`/`%` act as wildcards. |
 
 ### Labels, enums & types
 

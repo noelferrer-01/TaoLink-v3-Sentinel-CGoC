@@ -289,8 +289,8 @@ export type GetEmployeesWithIdentityPageResult = {
  * Paginated variant of getEmployeeWithIdentity. Options mirror listEmployeesPage
  * (query/employmentType/status/limit/offset).
  *
- * T10: name search and ORDER BY now operate on persons.first_name/last_name via
- * LEFT JOIN. The `%` operator form replaces similarity() > 0.2 so the
+ * T10: name search and ORDER BY operate on persons.first_name/last_name via
+ * INNER JOIN (T12b). The `%` operator form replaces similarity() > 0.2 so the
  * persons_fullname_trgm GIN index can accelerate the predicate. Threshold is
  * set to 0.2 via SET LOCAL inside a transaction (pool-safe — reverts on commit).
  *
@@ -613,8 +613,8 @@ export type SearchEmployeeResult = {
 };
 
 /**
- * T10: name search operates on persons.first_name/last_name via LEFT JOIN.
- * The `%` operator (GIN-accelerated) replaces the old similarity() > 0.2 form;
+ * T10: name search operates on persons.first_name/last_name via INNER JOIN
+ * (T12b). The `%` operator (GIN-accelerated) replaces the old similarity() > 0.2 form;
  * pg_trgm.similarity_threshold is set to 0.2 per-transaction via SET LOCAL so
  * the threshold is pool-safe (reverts automatically at transaction end).
  *
@@ -690,9 +690,8 @@ export async function searchEmployees(
 // Same matching rules (similarity + ILIKE code + optional type/status), just
 // adds offset + total count for the page.
 //
-// T10: name search operates on persons (LEFT JOIN). Result rows use EmployeeListItem
-// shape (names nullable, sourced from persons). The /employees page maps nullable
-// names to a display fallback on the way to EmployeeRow.
+// T10: name search operates on persons (INNER JOIN since T12b). Result rows use
+// the EmployeeListItem shape — names non-null, sourced from persons.
 
 export type ListEmployeesPageOptions = {
   query?: string;

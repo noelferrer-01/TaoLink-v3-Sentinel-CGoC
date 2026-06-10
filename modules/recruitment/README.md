@@ -73,6 +73,11 @@ Labels/constants also exported: `STAGE_LABELS`, `SOURCE_LABELS`, `DOC_TYPE_LABEL
   `23505` on a `persons_<type>_uq` index when `createApplicant` supplies a gov ID
   already held by someone else. Same human → reconcile the duplicate; otherwise a
   data-entry slip.
+- **`[recruitment/createApplicant] <raw Postgres message>`** — any raw database
+  error from the applicant insert (bad date format, constraint violation other
+  than the plain-language cases above) is annotated with this prefix at the
+  module boundary (`core/errors.isPgError`). The message after the prefix is the
+  driver's own — diagnose it as a Postgres error, then check what fed the insert.
 - **Re-applying rejected/withdrawn applicants don't re-flag** — `checkMatches`
   excludes `TERMINAL_STAGES` (`hired`/`rejected`/`withdrawn`) from the
   in-flight-applicant channel **by design** (it surfaces *active* concurrency, not
