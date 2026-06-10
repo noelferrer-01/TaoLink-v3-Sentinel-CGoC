@@ -1,15 +1,8 @@
 import Link from 'next/link';
-import { recruitment, READINESS_KIND_LABELS, type ReadinessKind } from '@/modules/recruitment';
+import { hr, READINESS_KIND_LABELS, type ReadinessKind } from '@/modules/hr';
 import { CRED_TYPE_LABELS } from '@/modules/persons';
 import { PageShell } from '@/components/page-shell';
 import { Pagination, clampPageSize } from '@/components/pagination';
-
-const WINDOWS = [30, 60, 90] as const;
-
-function parseWindow(raw: string | undefined): number {
-  const n = Number.parseInt(raw ?? '60', 10);
-  return (WINDOWS as readonly number[]).includes(n) ? n : 60;
-}
 
 function parsePage(raw: string | undefined): number {
   const n = Number.parseInt(raw ?? '1', 10);
@@ -31,13 +24,11 @@ export default async function ReadinessPage({
   searchParams: Promise<Record<string, string | undefined>>;
 }) {
   const params = await searchParams;
-  const windowDays = parseWindow(params.window);
   const armedOnly = params.armed === 'true';
   const page = parsePage(params.page);
   const pageSize = clampPageSize(params.size);
 
-  const { rows, total } = await recruitment.listReadinessIssues({
-    windowDays,
+  const { rows, total } = await hr.listReadinessIssues({
     armedOnly,
     limit: pageSize,
     offset: (page - 1) * pageSize,
@@ -46,18 +37,12 @@ export default async function ReadinessPage({
   return (
     <PageShell
       title="Licence readiness"
-      description="Guards who are missing or about to lose a licence they are required to keep current. Armed-post guards also need a firearms licence (LTOPF); a present firearms licence still shows a caveat because the firearm-to-guard link isn't tracked yet."
+      description="Guards who are missing or about to lose a licence they are required to keep current. Each licence is flagged on its own renewal lead time — firearms (LTOPF) and SOSIA show 90 days ahead, others sooner. A present firearms licence still shows a caveat because the firearm-to-guard link isn't tracked yet."
       footerHint="Click a guard to open their record and add or renew the licence on their Licences & clearances panel."
     >
       {/* Filter bar — plain GET form, works without client JS */}
       <form method="get" className="card" style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: '1rem' }}>
-        <div className="field" style={{ flex: '0 1 12rem' }}>
-          <label className="field-label" htmlFor="window">Expiring within</label>
-          <select id="window" name="window" className="input" defaultValue={String(windowDays)}>
-            {WINDOWS.map((w) => <option key={w} value={w}>{w} days</option>)}
-          </select>
-        </div>
-        <div className="field" style={{ flex: '0 1 12rem' }}>
+        <div className="field" style={{ flex: '0 1 14rem' }}>
           <label className="field-label" htmlFor="armed">Posts</label>
           <select id="armed" name="armed" className="input" defaultValue={armedOnly ? 'true' : ''}>
             <option value="">All guards</option>
@@ -70,7 +55,7 @@ export default async function ReadinessPage({
 
       {rows.length === 0 ? (
         <div className="empty-state">
-          <p>No licence issues {armedOnly ? 'for armed-post guards ' : ''}within {windowDays} days. Everyone required is current.</p>
+          <p>No licence issues {armedOnly ? 'for armed-post guards' : 'on file'}. Everyone required is current.</p>
         </div>
       ) : (
         <div className="table-wrap"><table className="table">

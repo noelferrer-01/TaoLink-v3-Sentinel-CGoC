@@ -1,17 +1,20 @@
-import { eq, and, or, desc, sql, count } from 'drizzle-orm';
+import { eq, ne, and, or, desc, sql, count } from 'drizzle-orm';
 import Papa from 'papaparse';
 import { z } from 'zod';
 import { getDb, type DbOrTx } from '@/core/db';
 import { isWithinUndoWindow } from '@/core/time';
+import { todayIso } from '@/core/dates';
 import { employees, type Employee, type NewEmployee } from './schema';
 import {
   persons, type Person, createPerson, ID_TYPE_LADDER,
   escapeLike, personFullNameMatches, personFullNameSimilarityDesc, withNameSearchThreshold,
+  listCredentialsForPersons, READINESS_CRED_SET, CRED_WINDOW_DAYS, deriveCredState,
+  type CredType, type PersonCredential,
 } from '@/modules/persons';
 import { auditLog } from '@/modules/audit/schema';
 import { audit } from '@/modules/audit';
 import { events } from '@/modules/events';
-import { ALLOWED_TRANSITIONS, type Status } from './labels';
+import { ALLOWED_TRANSITIONS, type Status, type ReadinessKind } from './labels';
 
 /**
  * Identity fields accepted at CREATE time only. They never land on the
@@ -925,4 +928,155 @@ export async function generateNextEmployeeCode(prefix = 'CG-'): Promise<string> 
     if (Number.isInteger(suffix) && suffix > max) max = suffix;
   }
   return `${prefix}${String(max + 1).padStart(5, '0')}`;
+}
+
+// ─── listReadinessIssues (Slice 3b — licence readiness radar) ────────────────────
+//
+// Readiness is an EMPLOYEE concern: it diffs each active guard's required
+// credential set (derived from isArmedPost) against the licences they actually
+// hold. It lives in hr — which owns `employees` and already imports persons — and
+// uses NO recruitment-domain code. The radar UI page sits under /recruitment by
+// design; the service is hr's. (Moved here from recruitment in the 3b pressure-
+// test fix; the 3b contract had named persons.listReadinessIssues, which would
+// have inverted the foundation layering.)
+
+export type ReadinessIssue = {
+  kind:         ReadinessKind;
+  credType:     CredType;
+  expiresOn:    string | null;
+  personId:     string;
+  employeeId:   string;
+  employeeCode: string;
+  firearmLinkUnverified?: true;
+};
+
+export type ReadinessQuery = {
+  armedOnly?: boolean;   // restrict to armed-post guards
+  limit?:     number;
+  offset?:    number;
+  today?:     string;    // injectable for deterministic tests; defaults to Manila today
+};
+
+// Fallback window (days) for credential types without a CRED_WINDOW_DAYS entry.
+// Per-credential windows are authoritative — the radar deliberately has NO user
+// "window" control that could narrow a firearms warning below its renewal lead time.
+const READINESS_FALLBACK_WINDOW_DAYS = 60;
+
+// When a required credential has no valid/expiring row, report the MOST SEVERE
+// present state: a revocation outranks a lapse outranks an unverified renewal.
+const READINESS_ISSUE_SEVERITY: Record<'revoked' | 'expired' | 'pending', number> = {
+  revoked: 0, expired: 1, pending: 2,
+};
+
+// Radar row ordering — missing first, then worst-to-mildest, then the LTOPF caveat.
+const READINESS_KIND_SEVERITY: Record<ReadinessKind, number> = {
+  missing: 0, revoked: 1, expired: 2, expiring: 3, pending: 4, unverified: 5,
+};
+
+/**
+ * Lists guards who are missing or expiring a *required* credential, against the
+ * credential required-set derived from each guard's `isArmedPost` (so it works
+ * for legacy bulk-imported guards with no applicant row). Terminated guards are
+ * excluded. Per-credential renewal windows come from CRED_WINDOW_DAYS.
+ *
+ * Selection per required type: a held VALID credential clears it (LTOPF still
+ * emits an `unverified` caveat — ADR 0018); else an `expiring` one (soonest);
+ * else the most severe present state (revoked > expired > pending); else `missing`.
+ *
+ * NOTE (perf): computes issues in-app across all active guards, then paginates.
+ * Fine for an admin radar now; at true 10k+ scale push the diff into SQL — and
+ * note `listCredentialsForPersons` sends one bind param per guard, so the batch
+ * read also needs the SQL rewrite before the active-employee count nears the
+ * ~65k Postgres parameter ceiling. See the 3b done-sweep / backlog.
+ */
+export async function listReadinessIssues(query: ReadinessQuery = {}): Promise<{ rows: ReadinessIssue[]; total: number }> {
+  const today = query.today ?? todayIso();
+  const db = getDb();
+
+  // 1. Candidate guards: active (non-terminated) employees, optionally armed only.
+  const conds = [ne(employees.status, 'terminated')];
+  if (query.armedOnly) conds.push(eq(employees.isArmedPost, true));
+  const guards = await db
+    .select({
+      employeeId:   employees.id,
+      employeeCode: employees.employeeCode,
+      personId:     employees.personId,
+      isArmedPost:  employees.isArmedPost,
+    })
+    .from(employees)
+    .where(and(...conds));
+
+  if (guards.length === 0) return { rows: [], total: 0 };
+
+  // 2. Batch-load credentials for those persons; group by personId.
+  const creds = await listCredentialsForPersons(guards.map((g) => g.personId));
+  const byPerson = new Map<string, PersonCredential[]>();
+  for (const c of creds) {
+    const arr = byPerson.get(c.personId);
+    if (arr) arr.push(c); else byPerson.set(c.personId, [c]);
+  }
+
+  // 3. Diff each guard's required set against the credentials they hold.
+  const issues: ReadinessIssue[] = [];
+  for (const g of guards) {
+    const required = READINESS_CRED_SET(g.isArmedPost ?? false);   // null isArmedPost → unarmed
+    const held = byPerson.get(g.personId) ?? [];
+
+    for (const credType of required) {
+      const isLtopf = credType === 'ltopf_license';
+      const base = { credType, personId: g.personId, employeeId: g.employeeId, employeeCode: g.employeeCode };
+      const matching = held.filter((c) => c.credType === credType);
+
+      if (matching.length === 0) {
+        issues.push({ ...base, kind: 'missing', expiresOn: null });
+        continue;
+      }
+
+      const window = CRED_WINDOW_DAYS[credType] ?? READINESS_FALLBACK_WINDOW_DAYS;
+      const scored = matching.map((c) => ({ c, state: deriveCredState(c.expiresOn, c.status, today, window) }));
+
+      // Covered if the guard holds any VALID one — except LTOPF, which never gives
+      // a clean all-clear (firearm linkage deferred — ADR 0018).
+      const valid = scored.find((s) => s.state === 'valid');
+      if (valid) {
+        if (isLtopf) {
+          issues.push({ ...base, kind: 'unverified', expiresOn: valid.c.expiresOn, firearmLinkUnverified: true });
+        }
+        continue;
+      }
+
+      // No valid one — an expiring one is next-best; surface the soonest.
+      const expiring = scored.filter((s) => s.state === 'expiring');
+      if (expiring.length > 0) {
+        const soonest = expiring.reduce((a, b) => ((a.c.expiresOn ?? '9999-12-31') <= (b.c.expiresOn ?? '9999-12-31') ? a : b));
+        issues.push({ ...base, kind: 'expiring', expiresOn: soonest.c.expiresOn, ...(isLtopf ? { firearmLinkUnverified: true as const } : {}) });
+        continue;
+      }
+
+      // No coverage at all — report the MOST SEVERE present state, not the mildest.
+      const worst = scored.reduce((a, b) => {
+        const ra = READINESS_ISSUE_SEVERITY[a.state as 'revoked' | 'expired' | 'pending'] ?? 9;
+        const rb = READINESS_ISSUE_SEVERITY[b.state as 'revoked' | 'expired' | 'pending'] ?? 9;
+        return ra <= rb ? a : b;
+      });
+      issues.push({ ...base, kind: worst.state as ReadinessKind, expiresOn: worst.c.expiresOn, ...(isLtopf ? { firearmLinkUnverified: true as const } : {}) });
+    }
+  }
+
+  // 4. Order: severity (missing first), then soonest expiry (nulls last), then code.
+  issues.sort((a, b) => {
+    if (READINESS_KIND_SEVERITY[a.kind] !== READINESS_KIND_SEVERITY[b.kind]) {
+      return READINESS_KIND_SEVERITY[a.kind] - READINESS_KIND_SEVERITY[b.kind];
+    }
+    const ax = a.expiresOn ?? '9999-12-31';
+    const bx = b.expiresOn ?? '9999-12-31';
+    if (ax !== bx) return ax < bx ? -1 : 1;
+    return a.employeeCode.localeCompare(b.employeeCode);
+  });
+
+  // 5. Paginate the issue list.
+  const total = issues.length;
+  const start = query.offset ?? 0;
+  const rows = query.limit != null ? issues.slice(start, start + query.limit) : issues.slice(start);
+  return { rows, total };
 }

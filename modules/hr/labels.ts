@@ -50,3 +50,26 @@ export const ALLOWED_TRANSITIONS: Record<Status, readonly Status[]> = {
   on_leave: ['hired', 'deployed', 'reliever', 'floating', 'terminated'],
   terminated: [],
 };
+
+// ─── Licence readiness radar (Slice 3b) ───────────────────────────────────────
+// Readiness is an employee concern (a deployed guard's licence health), so it
+// lives in hr. The radar UI page sits under /recruitment by design; the service
+// + these labels are hr's.
+
+/**
+ * The kinds of issue the readiness radar reports for a required credential.
+ * `unverified` is the LTOPF-specific "valid — but firearm linkage unverified"
+ * row (ADR 0018 — the radar never gives a clean all-clear on firearms). The
+ * others map 1:1 to a derived credential state; `missing` means no credential
+ * row of that required type exists at all.
+ */
+export type ReadinessKind = 'missing' | 'expiring' | 'expired' | 'revoked' | 'pending' | 'unverified';
+
+export const READINESS_KIND_LABELS: Record<ReadinessKind, string> = {
+  missing:    'Missing (required)',
+  expiring:   'Expiring',
+  expired:    'Expired',
+  revoked:    'Revoked',
+  pending:    'Pending verification',
+  unverified: 'Valid — firearm link unverified',
+};
