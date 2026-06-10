@@ -19,12 +19,12 @@ import {
   type BlacklistEntry,
 } from './schema';
 import { todayIso } from '@/core/dates';
-import { ALLOWED_TRANSITIONS, requiredDocsFor, type DocType, type DocStatus, type Stage, type MatchKind, type ReadinessKind } from './labels';
+import { ALLOWED_TRANSITIONS, requiredDocsFor, DOC_TO_CRED_TYPE, type DocType, type DocStatus, type Stage, type MatchKind, type ReadinessKind } from './labels';
 import {
   createPerson, assertAnchored, getPerson, findPersonByAnyId, findPossibleDuplicates,
   persons, type Person, ID_TYPE_LADDER,
   escapeLike, personFullNameMatches, personFullNameSimilarityDesc, withNameSearchThreshold,
-  listCredentialsForPersons, READINESS_CRED_SET, CRED_WINDOW_DAYS, deriveCredState,
+  addCredential, listCredentialsForPersons, READINESS_CRED_SET, CRED_WINDOW_DAYS, deriveCredState,
   type CredType, type CredState, type PersonCredential,
 } from '@/modules/persons';
 
@@ -716,6 +716,29 @@ export async function hireApplicant(applicantId: string, meta: HireMeta) {
     .update(applicants)
     .set({ pipelineStage: 'hired', hiredEmployeeId: employee.id, updatedAt: new Date() })
     .where(eq(applicants.id, applicantId));
+
+  // ── Slice 3b: carry the applicant's VERIFIED clearances into the Person's
+  // credential wallet (ADR 0018). Only `verified` documents copy over; the
+  // DOC_TO_CRED_TYPE map skips résumé/other (documents, not credentials).
+  // Credentials hang off the shared personId, so they survive on the employee.
+  const verifiedDocs = await db
+    .select()
+    .from(applicantDocuments)
+    .where(and(eq(applicantDocuments.applicantId, applicantId), eq(applicantDocuments.status, 'verified')));
+
+  for (const doc of verifiedDocs) {
+    const credType = DOC_TO_CRED_TYPE[doc.docType];
+    if (!credType) continue;   // résumé / other — not a credential
+    await addCredential({
+      personId:         a.personId,
+      credType,
+      expiresOn:        doc.expiresOn,
+      verifiedByUserId: doc.verifiedByUserId,
+      verifiedOn:       doc.verifiedOn,
+      status:           'valid',   // display state is derived from expiresOn vs today
+      actorUserId:      meta.actorUserId ?? null,
+    });
+  }
 
   await audit.record({
     actor: meta.actorUserId ?? null,

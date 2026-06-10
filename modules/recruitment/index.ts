@@ -27,6 +27,7 @@ export {
   ALLOWED_TRANSITIONS,
   requiredDocsFor,
   READINESS_KIND_LABELS,
+  DOC_TO_CRED_TYPE,
   type Stage,
   type Source,
   type DocType,

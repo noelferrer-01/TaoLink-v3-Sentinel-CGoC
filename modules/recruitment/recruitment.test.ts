@@ -27,6 +27,7 @@ import {
 } from '@/modules/persons';
 import { runPayroll, listPayslips } from '@/modules/payroll';
 import { recruitment } from './index';
+import { DOC_TO_CRED_TYPE, DOC_TYPE_LABELS, type DocType } from './labels';
 
 // Full cleanup in FK order. Run in beforeEach AND afterAll so this suite never
 // leaves trailing applicant rows that would block other suites' employee
@@ -729,5 +730,59 @@ describe('recruitment.listReadinessIssues (Slice 3b)', () => {
     await makeGuard('CG-TERM-1', true, 'terminated');   // no creds → all-missing IF included
     const { rows } = await recruitment.listReadinessIssues({ today });
     expect(rows.filter((r) => r.employeeCode === 'CG-TERM-1')).toEqual([]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Slice 3b Task 4 — DOC_TO_CRED_TYPE map (round-trip guard, no DB)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('DOC_TO_CRED_TYPE (doc→credential map)', () => {
+  it('maps every clearance doc type to its identically-spelled credential, and only resume_biodata/other to null', () => {
+    for (const docType of Object.keys(DOC_TYPE_LABELS) as DocType[]) {
+      const cred = DOC_TO_CRED_TYPE[docType];
+      if (docType === 'resume_biodata' || docType === 'other') {
+        expect(cred, `${docType} must NOT be a credential`).toBeNull();
+      } else {
+        // Identity spelling preserved — guards against a silent map gap.
+        expect(cred, `${docType} must map to a credential`).toBe(docType);
+      }
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Slice 3b Task 4 — hireApplicant carries verified clearances → credentials
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('recruitment.hireApplicant — carries verified clearances (Slice 3b)', () => {
+  beforeEach(cleanup);
+  afterAll(async () => { await cleanup(); await closeDb(); });
+
+  it('copies verified clearances onto the Person, with expiry, and skips résumé', async () => {
+    const a = await recruitment.createApplicant({
+      firstName: 'Carry', lastName: 'Forward', source: 'walk_in', appliedOn: '2026-05-01',
+      sssNumber: '34-CARRY-001',   // anchor ID so the hire gate passes
+      isArmedPost: true,           // so ltopf_license is in the checklist
+    });
+    await recruitment.advanceStage(a.id, 'contacted');
+    await recruitment.advanceStage(a.id, 'documents');
+
+    await recruitment.setDocument(a.id, 'sosia_license',  { status: 'verified', expiresOn: '2027-02-01' });
+    await recruitment.setDocument(a.id, 'ltopf_license',  { status: 'verified', expiresOn: '2026-12-31' });
+    await recruitment.setDocument(a.id, 'resume_biodata', { status: 'verified' });   // verified but NOT a credential
+    // nbi_clearance left pending → must NOT carry forward.
+
+    await recruitment.hireApplicant(a.id, { basicSalary: 18000, hiredOn: '2026-06-01' });
+
+    const creds = await listCredentials(a.personId);
+    const byType = new Map(creds.map((c) => [c.credType, c]));
+
+    expect(byType.get('sosia_license')?.expiresOn).toBe('2027-02-01');
+    expect(byType.get('ltopf_license')?.expiresOn).toBe('2026-12-31');
+    // résumé is a document, not a credential — never carried.
+    expect(creds.map((c) => c.credType as string)).not.toContain('resume_biodata');
+    // only the two VERIFIED clearances carried (pending docs did not).
+    expect(creds).toHaveLength(2);
   });
 });
