@@ -131,7 +131,10 @@ interface SelectFieldProps {
 export function SelectField({ label, name, value, defaultValue, options, required, disabled, onChange, uncontrolled }: SelectFieldProps) {
   return (
     <div className="field">
-      <label className="field-label" htmlFor={`f-${name}`}>{label}</label>
+      <label className="field-label" htmlFor={`f-${name}`}>
+        {label}
+        {required && <span aria-hidden style={{ color: 'var(--ochre)', marginLeft: '0.25rem' }}>*</span>}
+      </label>
       <select
         id={`f-${name}`} className="input" name={name} required={required} disabled={disabled}
         {...(uncontrolled ? { defaultValue } : { value, onChange: (e) => onChange?.(e.target.value) })}

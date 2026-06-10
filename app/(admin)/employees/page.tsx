@@ -4,10 +4,7 @@ import { clients } from '@/modules/clients';
 import { PageShell } from '@/components/page-shell';
 import { Pagination, clampPageSize } from '@/components/pagination';
 import { EmployeesListBody, type EmployeeRow } from './employees-list-body';
-
-function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
-}
+import { todayIso } from '@/core/dates';
 
 const EMPLOYMENT_TYPES = ['GUARD', 'OFFICE_STAFF', 'SUPERVISOR', 'DRIVER', 'JANITOR', 'OTHER'] as const;
 type EmploymentType = (typeof EMPLOYMENT_TYPES)[number];

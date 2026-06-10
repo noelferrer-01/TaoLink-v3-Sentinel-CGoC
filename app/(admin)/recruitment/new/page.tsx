@@ -1,9 +1,6 @@
 import { PageShell } from '@/components/page-shell';
 import { NewApplicantForm } from './new-applicant-form';
-
-function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
-}
+import { todayIso } from '@/core/dates';
 
 export default function NewApplicantPage() {
   return (
