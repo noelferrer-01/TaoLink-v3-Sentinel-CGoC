@@ -721,6 +721,13 @@ export async function hireApplicant(applicantId: string, meta: HireMeta) {
   // credential wallet (ADR 0018). Only `verified` documents copy over; the
   // DOC_TO_CRED_TYPE map skips résumé/other (documents, not credentials).
   // Credentials hang off the shared personId, so they survive on the employee.
+  //
+  // Resilience, NOT atomicity: the employee + 'hired' marker are already
+  // committed (createEmployee owns its own transaction), so wrapping this loop
+  // in a transaction would risk an orphaned employee + a duplicate on re-hire.
+  // Instead carry-forward is best-effort — a copy hiccup on one clearance never
+  // fails the hire, and any clearance that didn't land simply shows up as
+  // "missing (required)" on the readiness radar, which is self-correcting.
   const verifiedDocs = await db
     .select()
     .from(applicantDocuments)
@@ -729,15 +736,20 @@ export async function hireApplicant(applicantId: string, meta: HireMeta) {
   for (const doc of verifiedDocs) {
     const credType = DOC_TO_CRED_TYPE[doc.docType];
     if (!credType) continue;   // résumé / other — not a credential
-    await addCredential({
-      personId:         a.personId,
-      credType,
-      expiresOn:        doc.expiresOn,
-      verifiedByUserId: doc.verifiedByUserId,
-      verifiedOn:       doc.verifiedOn,
-      status:           'valid',   // display state is derived from expiresOn vs today
-      actorUserId:      meta.actorUserId ?? null,
-    });
+    try {
+      await addCredential({
+        personId:         a.personId,
+        credType,
+        expiresOn:        doc.expiresOn,
+        verifiedByUserId: doc.verifiedByUserId,
+        verifiedOn:       doc.verifiedOn,
+        status:           'valid',   // display state is derived from expiresOn vs today
+        actorUserId:      meta.actorUserId ?? null,
+      });
+    } catch (e) {
+      // One clearance failing to copy must not abort the others or the hire.
+      console.error(`[recruitment/hireApplicant] could not carry ${doc.docType} for ${employeeCode}:`, e);
+    }
   }
 
   await audit.record({
