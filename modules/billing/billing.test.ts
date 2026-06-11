@@ -42,6 +42,9 @@ import {
   getInvoiceWithLines,
   finalizeInvoice,
   markPaid,
+  reconcilePeriod,
+  listUnattributedWorkedDays,
+  listInvoices,
 } from './service';
 
 // ─── Shared cleanup ──────────────────────────────────────────────────────────
@@ -693,6 +696,286 @@ describe('billing.finalizeInvoice + markPaid', () => {
     const draft = await makeDraftInvoice();
 
     await expect(markPaid(draft.id)).rejects.toThrow(/finalize/i);
+  });
+});
+
+// ─── Tests — reconcilePeriod + listUnattributedWorkedDays + listInvoices ──────
+//
+// Fixtures reuse the same assign → recordDTR → runPayroll → generateInvoice
+// chain established above.
+
+describe('billing.reconcilePeriod + listUnattributedWorkedDays + listInvoices', () => {
+  const db = getDb();
+
+  beforeAll(async () => {
+    await seedComplianceRates({ effectiveDate: '2026-01-01' });
+  });
+
+  beforeEach(async () => {
+    await cleanup();
+  });
+
+  // ─── Split-guard reconciles (4+11=15 across two invoices) ──────────────────
+  //
+  // Guard is assigned to Client-X for 4 days, then transferred to Client-Y for
+  // 11 days. Payslip shows daysWorked=15. Both invoices are generated for the
+  // same period. reconcilePeriod sums across all invoices: 4+11=15 — no mismatch.
+  it('split-guard: 4 days at Client-X + 11 days at Client-Y = 15 on payslip → no mismatch', async () => {
+    const clientX = await clients.createClient({ name: 'Reconcile Client-X' });
+    const clientY = await clients.createClient({ name: 'Reconcile Client-Y' });
+    const detX = await clients.createDetachment({ clientId: clientX.id, name: 'X Post' });
+    const detY = await clients.createDetachment({ clientId: clientY.id, name: 'Y Post' });
+
+    const guard = await hr.createEmployee({
+      employeeCode: 'CG-REC-SPL-01',
+      firstName: 'Split',
+      lastName: 'Guard',
+      basicSalary: 18000,
+      hiredOn: '2026-05-01',
+    });
+
+    // Assign to X from May 1; record 4 worked days (May 1–4)
+    const assignX = await assignments.assign({
+      employeeId: guard.id,
+      detachmentId: detX.id,
+      startDate: '2026-05-01',
+    });
+    for (let d = 1; d <= 4; d++) {
+      await recordDTR({
+        employeeId: guard.id,
+        date: `2026-05-${String(d).padStart(2, '0')}`,
+        status: 'worked',
+      });
+    }
+
+    // End X assignment on May 4; assign to Y from May 5; record 11 more days (May 5–15)
+    await assignments.endAssignment(assignX.id, '2026-05-04', 'transfer');
+    await assignments.assign({
+      employeeId: guard.id,
+      detachmentId: detY.id,
+      startDate: '2026-05-05',
+    });
+    for (let d = 5; d <= 15; d++) {
+      await recordDTR({
+        employeeId: guard.id,
+        date: `2026-05-${String(d).padStart(2, '0')}`,
+        status: 'worked',
+      });
+    }
+
+    // Run payroll — payslip will show daysWorked=15
+    await runPayroll('2026-05-01', '2026-05-15');
+
+    // Set billing configs for both clients and generate both invoices
+    await setClientBillingConfig({ clientId: clientX.id, ratePerManday: '780.00' });
+    await setClientBillingConfig({ clientId: clientY.id, ratePerManday: '780.00' });
+    await generateInvoice(clientX.id, { start: '2026-05-01', end: '2026-05-15' });
+    await generateInvoice(clientY.id, { start: '2026-05-01', end: '2026-05-15' });
+
+    const mismatches = await reconcilePeriod({ start: '2026-05-01', end: '2026-05-15' });
+
+    // 4+11=15 balances against payslip 15 → no mismatch for this guard
+    expect(mismatches).toHaveLength(0);
+  });
+
+  // ─── DTR-changed-after-payroll: payslip 15, billed+unattributed = 14 ────────
+  it('DTR-changed-after-payroll: billed+unattributed ≠ payslip → returns mismatch row', async () => {
+    const clientX = await clients.createClient({ name: 'Reconcile Mismatch Client' });
+    const detX = await clients.createDetachment({ clientId: clientX.id, name: 'MM Post' });
+
+    const guard = await hr.createEmployee({
+      employeeCode: 'CG-REC-MM-01',
+      firstName: 'Mismatch',
+      lastName: 'Guard',
+      basicSalary: 18000,
+      hiredOn: '2026-05-01',
+    });
+
+    await assignments.assign({ employeeId: guard.id, detachmentId: detX.id, startDate: '2026-05-01' });
+
+    // Record 14 worked days (May 1–14)
+    for (let d = 1; d <= 14; d++) {
+      await recordDTR({
+        employeeId: guard.id,
+        date: `2026-05-${String(d).padStart(2, '0')}`,
+        status: 'worked',
+      });
+    }
+
+    // Run payroll with 14 days → payslip.daysWorked = 14
+    await runPayroll('2026-05-01', '2026-05-15');
+
+    // Artificially bump the payslip to 15 to simulate DTR-changed-after-payroll
+    // (billed=14, unattributed=0, payslipDays=15 → mismatch)
+    const [run] = await db
+      .select()
+      .from(payRuns)
+      .where(and(eq(payRuns.periodStart, '2026-05-01'), eq(payRuns.periodEnd, '2026-05-15')))
+      .limit(1);
+    await db.update(payslips).set({ daysWorked: '15' }).where(eq(payslips.payRunId, run!.id));
+
+    await setClientBillingConfig({ clientId: clientX.id, ratePerManday: '780.00' });
+    // Re-generate with updated payslip not possible here (generateInvoice would guard-check),
+    // so insert invoice lines directly to reflect 14 billed days.
+    // Instead: generate invoice BEFORE tweaking the payslip.
+    // Back-track: undo the payslip bump, generate invoice (14 days billed), then bump.
+    await db.update(payslips).set({ daysWorked: '14' }).where(eq(payslips.payRunId, run!.id));
+    await generateInvoice(clientX.id, { start: '2026-05-01', end: '2026-05-15' });
+    // Now bump to 15 → billed(14)+unattributed(0) ≠ payslip(15) → mismatch
+    await db.update(payslips).set({ daysWorked: '15' }).where(eq(payslips.payRunId, run!.id));
+
+    const mismatches = await reconcilePeriod({ start: '2026-05-01', end: '2026-05-15' });
+
+    expect(mismatches).toHaveLength(1);
+    const m = mismatches[0]!;
+    expect(m.employeeId).toBe(guard.id);
+    expect(m.employeeCode).toBe('CG-REC-MM-01');
+    expect(m.billed).toBe(14);
+    expect(m.unattributed).toBe(0);
+    expect(m.payslipDays).toBe(15);
+  });
+
+  // ─── Unattributed counts in: 13 billed + 2 unattributed + payslip 15 → no mismatch ──
+  it('unattributed counts in: 13 billed + 2 unattributed = 15 on payslip → no mismatch', async () => {
+    const clientX = await clients.createClient({ name: 'Reconcile Unattr Client' });
+    const detX = await clients.createDetachment({ clientId: clientX.id, name: 'UA Post' });
+
+    const guard = await hr.createEmployee({
+      employeeCode: 'CG-REC-UA-01',
+      firstName: 'Unattr',
+      lastName: 'Guard',
+      basicSalary: 18000,
+      hiredOn: '2026-05-01',
+    });
+
+    // Assign to Client-X from May 1; record 13 worked days (May 1–13)
+    await assignments.assign({ employeeId: guard.id, detachmentId: detX.id, startDate: '2026-05-01' });
+    for (let d = 1; d <= 13; d++) {
+      await recordDTR({
+        employeeId: guard.id,
+        date: `2026-05-${String(d).padStart(2, '0')}`,
+        status: 'worked',
+      });
+    }
+
+    // End the assignment on May 13, then record 2 more days (May 14–15) with no assignment
+    // (assignmentId will be null since there's no active assignment on those dates)
+    const [activeAssign] = await db
+      .select()
+      .from(assignmentsTable)
+      .where(and(eq(assignmentsTable.employeeId, guard.id)))
+      .limit(1);
+    await assignments.endAssignment(activeAssign!.id, '2026-05-13', 'transfer');
+
+    // Record days 14 and 15 with no active assignment → unattributed
+    for (let d = 14; d <= 15; d++) {
+      await recordDTR({
+        employeeId: guard.id,
+        date: `2026-05-${String(d).padStart(2, '0')}`,
+        status: 'worked',
+      });
+    }
+
+    // Run payroll → payslip.daysWorked = 15 (13 attributed + 2 unattributed)
+    await runPayroll('2026-05-01', '2026-05-15');
+
+    await setClientBillingConfig({ clientId: clientX.id, ratePerManday: '780.00' });
+    await generateInvoice(clientX.id, { start: '2026-05-01', end: '2026-05-15' });
+
+    const mismatches = await reconcilePeriod({ start: '2026-05-01', end: '2026-05-15' });
+
+    // 13 billed + 2 unattributed = 15 = payslip → no mismatch
+    expect(mismatches).toHaveLength(0);
+  });
+
+  // ─── listUnattributedWorkedDays passthrough ─────────────────────────────────
+  it('listUnattributedWorkedDays returns null-posting worked days in the period', async () => {
+    const guard = await hr.createEmployee({
+      employeeCode: 'CG-UNATTR-01',
+      firstName: 'Free',
+      lastName: 'Agent',
+      basicSalary: 18000,
+      hiredOn: '2026-05-01',
+    });
+
+    // No assignment — recordDTR will stamp assignmentId = null
+    for (let d = 1; d <= 3; d++) {
+      await recordDTR({
+        employeeId: guard.id,
+        date: `2026-05-${String(d).padStart(2, '0')}`,
+        status: 'worked',
+      });
+    }
+
+    const rows = await listUnattributedWorkedDays({ start: '2026-05-01', end: '2026-05-31' });
+
+    expect(rows.length).toBeGreaterThanOrEqual(3);
+    const guardRows = rows.filter(r => r.employeeId === guard.id);
+    expect(guardRows).toHaveLength(3);
+    expect(guardRows[0]).toMatchObject({
+      employeeId: guard.id,
+      employeeCode: 'CG-UNATTR-01',
+    });
+  });
+
+  // ─── listInvoices: filter by clientId and status ────────────────────────────
+  it('listInvoices returns all invoices, filterable by clientId and status', async () => {
+    const clientA = await clients.createClient({ name: 'List Invoices Client A' });
+    const clientB = await clients.createClient({ name: 'List Invoices Client B' });
+
+    // Insert invoice rows directly (no need for full fixture here)
+    const [invA1] = await db.insert(billingInvoices).values({
+      clientId: clientA.id,
+      periodStart: '2026-05-01',
+      periodEnd: '2026-05-31',
+      status: 'draft',
+    }).returning();
+
+    const [invA2] = await db.insert(billingInvoices).values({
+      clientId: clientA.id,
+      periodStart: '2026-04-01',
+      periodEnd: '2026-04-30',
+      status: 'finalized',
+      soaNumber: '2026-TEST-01',
+    }).returning();
+
+    const [invB1] = await db.insert(billingInvoices).values({
+      clientId: clientB.id,
+      periodStart: '2026-05-01',
+      periodEnd: '2026-05-31',
+      status: 'draft',
+    }).returning();
+
+    // listInvoices() returns all
+    const all = await listInvoices();
+    expect(all.length).toBeGreaterThanOrEqual(3);
+
+    // filtered by clientId — returns only A's invoices
+    const forA = await listInvoices({ clientId: clientA.id });
+    expect(forA).toHaveLength(2);
+    expect(forA.map(i => i.id)).toContain(invA1!.id);
+    expect(forA.map(i => i.id)).toContain(invA2!.id);
+
+    // filtered by status=draft — includes A1 and B1
+    const drafts = await listInvoices({ status: 'draft' });
+    expect(drafts.map(i => i.id)).toContain(invA1!.id);
+    expect(drafts.map(i => i.id)).toContain(invB1!.id);
+    expect(drafts.map(i => i.id)).not.toContain(invA2!.id);
+
+    // filtered by clientId + status
+    const aFinalized = await listInvoices({ clientId: clientA.id, status: 'finalized' });
+    expect(aFinalized).toHaveLength(1);
+    expect(aFinalized[0]!.id).toBe(invA2!.id);
+
+    // newest period first: for clientA, May (invA1) should come before April (invA2)
+    expect(forA[0]!.id).toBe(invA1!.id);
+    expect(forA[1]!.id).toBe(invA2!.id);
+  });
+
+  // ─── reconcilePeriod: no pay run returns empty ───────────────────────────────
+  it('reconcilePeriod returns [] when no pay run exists for the period', async () => {
+    const mismatches = await reconcilePeriod({ start: '2030-01-01', end: '2030-01-15' });
+    expect(mismatches).toEqual([]);
   });
 });
 

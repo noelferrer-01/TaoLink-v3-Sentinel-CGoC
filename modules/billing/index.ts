@@ -5,6 +5,9 @@ import {
   getInvoiceWithLines,
   finalizeInvoice,
   markPaid,
+  reconcilePeriod,
+  listUnattributedWorkedDays,
+  listInvoices,
 } from './service';
 
 export {
@@ -14,8 +17,11 @@ export {
   getInvoiceWithLines,
   finalizeInvoice,
   markPaid,
+  reconcilePeriod,
+  listUnattributedWorkedDays,
+  listInvoices,
 };
-export type { BillingInvoiceWithLines } from './service';
+export type { BillingInvoiceWithLines, ReconcileMismatch } from './service';
 
 export type { BillingInvoice, BillingInvoiceLine, ClientBillingConfig } from './schema';
 
@@ -26,4 +32,7 @@ export const billing = {
   getInvoiceWithLines,
   finalizeInvoice,
   markPaid,
+  reconcilePeriod,
+  listUnattributedWorkedDays,
+  listInvoices,
 };

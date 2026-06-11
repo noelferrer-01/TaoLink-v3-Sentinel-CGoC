@@ -1,4 +1,4 @@
-import { and, asc, count, eq, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm';
 import { getDb } from '@/core/db';
 import {
   clientBillingConfig,
@@ -12,7 +12,8 @@ import {
 import { audit } from '@/modules/audit';
 import { events } from '@/modules/events';
 import { payRuns, payslips } from '@/modules/payroll/schema';
-import { billedDaysByEmployeeDetachment } from '@/modules/dtr';
+import { billedDaysByEmployeeDetachment, listUnattributedWorkedDays as dtrListUnattributed } from '@/modules/dtr';
+import { employees } from '@/modules/hr/schema';
 
 // Placeholder-grade money rounding (contract §7.11).
 // Uses standard banker-adjacent rounding; replace with a money library before go-live.
@@ -417,6 +418,167 @@ export async function finalizeInvoice(
 
     return done!;
   });
+}
+
+// ─── reconcilePeriod ─────────────────────────────────────────────────────────
+
+/**
+ * Period-wide billing↔payroll reconciliation.
+ *
+ * Identity: for each guard paid in the period,
+ *   (Σ billed days across ALL period invoices) + (unattributed worked days) === payslip.daysWorked
+ *
+ * A mismatch means the DTR changed after payroll ran (or billing lines haven't
+ * been generated yet). Returns only the rows that fail — guards that balance
+ * are omitted. Returns [] if no pay run exists for the period (caller decides
+ * what that means; nothing was paid so there's nothing to check against).
+ *
+ * @param period - { start, end } matching the pay run's periodStart/periodEnd (YYYY-MM-DD)
+ */
+export type ReconcileMismatch = {
+  employeeId: string;
+  employeeCode: string;
+  billed: number;
+  unattributed: number;
+  payslipDays: number;
+};
+
+export async function reconcilePeriod(
+  period: { start: string; end: string },
+): Promise<ReconcileMismatch[]> {
+  try {
+    const db = getDb();
+
+    // 1. Find the pay run for this period; if none, return [] — nothing was paid
+    //    to reconcile against.
+    const [run] = await db
+      .select()
+      .from(payRuns)
+      .where(
+        and(
+          eq(payRuns.periodStart, period.start),
+          eq(payRuns.periodEnd, period.end),
+        ),
+      )
+      .limit(1);
+
+    if (!run) return [];
+
+    // 2. Payslip days per employee for that run — these employees are the universe to check.
+    const slipRows = await db
+      .select({ employeeId: payslips.employeeId, daysWorked: payslips.daysWorked })
+      .from(payslips)
+      .where(eq(payslips.payRunId, run.id));
+
+    if (slipRows.length === 0) return [];
+
+    const employeeIds = slipRows.map(r => r.employeeId);
+
+    // 3. Billed days per employee across ALL invoices for the period.
+    //    Join lines → invoices; filter by period dates; sum days per employee.
+    const billedRows = await db
+      .select({
+        employeeId: billingInvoiceLines.employeeId,
+        totalBilled: sql<number>`COALESCE(SUM(${billingInvoiceLines.daysWorked}), 0)::int`,
+      })
+      .from(billingInvoiceLines)
+      .innerJoin(billingInvoices, eq(billingInvoices.id, billingInvoiceLines.invoiceId))
+      .where(
+        and(
+          eq(billingInvoices.periodStart, period.start),
+          eq(billingInvoices.periodEnd, period.end),
+          inArray(billingInvoiceLines.employeeId, employeeIds),
+        ),
+      )
+      .groupBy(billingInvoiceLines.employeeId);
+
+    const billedMap = new Map(billedRows.map(r => [r.employeeId, Number(r.totalBilled)]));
+
+    // 4. Unattributed worked days per employee in the period.
+    //    Call the dtr reader and tally per employeeId in JS (simple, correct at this scale).
+    const unattributedRows = await dtrListUnattributed(period.start, period.end);
+    const unattributedMap = new Map<string, number>();
+    for (const row of unattributedRows) {
+      unattributedMap.set(row.employeeId, (unattributedMap.get(row.employeeId) ?? 0) + 1);
+    }
+
+    // 5. Fetch employeeCode for mismatch rows — only pull codes for employees
+    //    that actually appear in the payslip set.
+    const codeRows = await db
+      .select({ id: employees.id, employeeCode: employees.employeeCode })
+      .from(employees)
+      .where(inArray(employees.id, employeeIds));
+    const codeMap = new Map(codeRows.map(r => [r.id, r.employeeCode]));
+
+    // 6. For each employee in the payslip set, check if billed+unattributed === payslipDays.
+    const mismatches: ReconcileMismatch[] = [];
+    for (const slip of slipRows) {
+      const payslipDays = Number(slip.daysWorked);
+      const billed = billedMap.get(slip.employeeId) ?? 0;
+      const unattributed = unattributedMap.get(slip.employeeId) ?? 0;
+      if (billed + unattributed !== payslipDays) {
+        mismatches.push({
+          employeeId: slip.employeeId,
+          employeeCode: codeMap.get(slip.employeeId) ?? '',
+          billed,
+          unattributed,
+          payslipDays,
+        });
+      }
+    }
+
+    return mismatches;
+  } catch (err) {
+    throw new Error(
+      `[billing/reconcilePeriod] ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
+}
+
+// ─── listUnattributedWorkedDays ───────────────────────────────────────────────
+
+/**
+ * Return worked DTR rows with no billing attribution (assignmentId IS NULL)
+ * for the given period. Delegates to the dtr reader unchanged.
+ */
+export async function listUnattributedWorkedDays(
+  period: { start: string; end: string },
+) {
+  return dtrListUnattributed(period.start, period.end);
+}
+
+// ─── listInvoices ─────────────────────────────────────────────────────────────
+
+/**
+ * Return billing invoices, optionally filtered by clientId and/or status.
+ * Ordered newest period first (periodStart DESC, createdAt DESC).
+ */
+export async function listInvoices(
+  filter: { clientId?: string; status?: 'draft' | 'finalized' | 'paid' } = {},
+): Promise<BillingInvoice[]> {
+  try {
+    const db = getDb();
+
+    const conditions = [];
+    if (filter.clientId) {
+      conditions.push(eq(billingInvoices.clientId, filter.clientId));
+    }
+    if (filter.status) {
+      conditions.push(eq(billingInvoices.status, filter.status));
+    }
+
+    return db
+      .select()
+      .from(billingInvoices)
+      .where(conditions.length > 0 ? and(...conditions) : undefined)
+      .orderBy(desc(billingInvoices.periodStart), desc(billingInvoices.createdAt));
+  } catch (err) {
+    throw new Error(
+      `[billing/listInvoices] ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
 }
 
 // ─── markPaid ────────────────────────────────────────────────────────────────
