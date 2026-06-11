@@ -8,9 +8,13 @@
  *   findPersonByAnyId  — exact match on a column OR in quarantinedIds
  *   findPossibleDuplicates — normalized name+DOB match (collapses PH particles)
  *   updatePerson       — the ONLY identity-edit path; refuses to edit redacted rows
- *   redactPerson       — tombstone: clear identity + all IDs (PII removed, not parked)
+ *   redactPerson       — tombstone: clear identity + all IDs AND delete the credential
+ *                        wallet, atomically (PII removed, not parked)
+ *   addCredential / updateCredential / listCredentials / listCredentialsForPersons
+ *                      — the Slice 3b credential wallet (ADR 0018)
  *
- * Every mutation records an audit row and publishes an event.
+ * Every mutation records an audit row and publishes an event. Identity values are
+ * NEVER embedded in audit payloads (the log is append-only) — see the audit-PII note.
  * Unique-violation errors (Postgres 23505) are caught and re-thrown as plain language.
  *
  * Design: wiki/slices/3-identity-and-credentials.md §5a
@@ -620,9 +624,11 @@ export type AddCredentialInput = {
 };
 
 /**
- * Options for `addCredential`. Pass `{ tx }` so the insert runs inside an
- * existing transaction — `hireApplicant` carries verified clearances forward
- * atomically with the hire. Audit/events use their own handle (as elsewhere).
+ * Options for `addCredential`. Pass `{ tx }` to run the insert inside an existing
+ * transaction. Note: `hireApplicant` deliberately does NOT pass one — its
+ * carry-forward of verified clearances is best-effort (a copy hiccup never fails
+ * the hire), so the inserts are intentionally non-atomic. Audit/events use their
+ * own handle (as elsewhere).
  */
 export type AddCredentialOptions = {
   tx?: DbOrTx;
@@ -771,7 +777,7 @@ export async function listCredentials(personId: string): Promise<PersonCredentia
 
 /**
  * Batch read: every credential for the given persons, in ONE query. Used by the
- * readiness radar (recruitment/service) to avoid an N+1 over thousands of guards.
+ * readiness radar (hr.listReadinessIssues) to avoid an N+1 over thousands of guards.
  * Returns `[]` for an empty input rather than issuing a degenerate `IN ()` query.
  * The caller groups by `personId`.
  */

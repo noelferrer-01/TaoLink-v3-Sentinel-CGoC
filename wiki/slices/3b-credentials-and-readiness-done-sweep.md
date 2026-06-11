@@ -112,3 +112,49 @@ expired/revoked/pending kinds, pagination) + scope/redaction tests in `persons.t
 - **Commander SOP (open)** — confirm the authoritative armed/unarmed posting source so
   `isArmedPost` is reliably populated for the readiness required-set (today nullable →
   unarmed default). Gather when Noel next talks to CGoC.
+
+## 8. Independent re-review + audit-PII hardening (PR #3 pre-ship)
+
+A second, independent pass (multi-agent `/code-review` at high effort + adversarial verify)
+confirmed **5 real issues**, all fixed test-first (commit `d0435e8`):
+
+1. **Expired status ignored** — `deriveCredState` honored only `revoked`/`pending`; a stored
+   `status='expired'` with a blank/future date read as **Valid** and silently cleared the
+   readiness requirement. Added the `expired` branch.
+2. **Firearm caveat vanished on worse states** — the radar showed the `firearmLinkUnverified`
+   caveat only for a *valid* LTOPF; an expiring/expired/revoked LTOPF dropped it (the page
+   keyed on `kind` and ignored the flag). Caveat now renders as its own badge from the flag.
+3. **Non-atomic redaction** — `redactPerson` blanked identity and deleted the credential
+   wallet in two separate statements; a failure between them could strand PII. Wrapped both
+   in one transaction.
+4. **No verifier on credential edit** — flipping a credential to `valid` via the edit path
+   recorded no verifier (the add path did). `updateCredential` now stamps the actor as
+   verifier on become-valid, preserving any existing verifier.
+5. **Credential edits already scoped** to the employee's Person via `expectedPersonId`
+   (verified, not a regression).
+
+### The audit-PII decision (the load-bearing finding)
+
+The "should-fix" item — PII surviving in the audit log after redaction — forced an
+architectural decision. Verified **live** that `audit_log` is **DB-enforced append-only**
+(migration `0001`: `audit_log_no_update` / `audit_log_no_delete` triggers; real `UPDATE`/
+`DELETE` both raise; no bypass). So **scrub-on-redaction is impossible by design** — the
+0001 comment states the intent: *"the action history is sacred; the actor reference is
+releasable."*
+
+Therefore PII is kept **out of audit payloads at write time** (reference people by id/code,
+record only *which* fields changed) — commit `e8cb6cc`. Swept **all 15 audit sites**: only
+**5** embedded identity (persons ×3, hr ×1, recruitment ×1); every other module already
+referenced by id/code, so identity-logging was the outlier. Now: `person.updated` logs
+`changedFields` only; `person.credential.updated` masks `credNumber`/`notes` via a
+**fail-closed allowlist** (`CREDENTIAL_AUDIT_SAFE_FIELDS`, commit `5e6401c` from `/simplify`
+— a future PII column can't leak); `person.created`/`hr.employee.created`/
+`recruitment.applicant.created` drop the embedded name. An end-to-end test runs a person
+through create → edit → credential → redaction and asserts **no personal value survives**
+anywhere in the log. See memory `project_audit_log_immutable_pii_convention`.
+
+**Residuals (backlog, not regressions):** free-text `reason` fields may contain an
+incidentally-typed name; `auth` logs system-login emails (a separate *user*-erasure subject,
+not managed guards). Crypto-erasure (encrypt values, destroy key on redaction) is the only
+way to retain recoverable audit values *and* erase — judged overkill, since the codebase
+doesn't log values elsewhere.

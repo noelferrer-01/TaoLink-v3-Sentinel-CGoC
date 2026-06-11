@@ -65,9 +65,10 @@ export const ALLOWED_TRANSITIONS: Record<Status, readonly Status[]> = {
  * type exists at all.
  *
  * The firearm caveat itself is carried by the separate `firearmLinkUnverified`
- * flag on the issue (set for an LTOPF in ANY state), and the radar renders it as
- * its own badge — so the caveat shows even when the licence is expiring/expired,
- * not only when it is valid.
+ * flag on the issue (set for an LTOPF that is PRESENT in any state — valid,
+ * expiring, expired, revoked; a `missing` LTOPF has no licence to caveat), and
+ * the radar renders it as its own badge — so the caveat shows even when the
+ * licence is expiring/expired, not only when it is valid.
  */
 export type ReadinessKind = 'missing' | 'expiring' | 'expired' | 'revoked' | 'pending' | 'unverified';
 

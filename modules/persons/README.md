@@ -23,7 +23,7 @@ from runtime code (the one schema-level exception is documented below).
 | `findPersonByAnyId` | `(idType: AnchorIdType, idValue: string) => Promise<Person \| null>` | Exact match on that ID type's column; also matches a line-anchored hit in `quarantinedIds` (dup IDs parked during backfill). |
 | `findPossibleDuplicates` | `(input: { firstName; lastName; dateOfBirth?: string \| null }) => Promise<Person[]>` | Same-DOB candidates narrowed by normalized name key. Returns `[]` when no DOB is given (the dedup key needs a birthday). |
 | `updatePerson` | `(id: string, patch: UpdatePersonPatch, actorUserId?) => Promise<Person>` | The **only** identity-edit path. Refuses redacted rows; silently strips immutable/dedup-derived fields; rejects blank first/last name. Catches Postgres `23505` and re-throws a plain-language "already on file" message. Audits + emits an event. |
-| `redactPerson` | `(id: string, actorUserId?) => Promise<Person>` | Tombstone (the soft-delete path): sets `redactedAt`, nulls all identity, names → `'[redacted]'`, `anchorIdType` → `'none'`. A referenced Person can't be hard-deleted (RESTRICT FK), so redaction is how PII is removed. |
+| `redactPerson` | `(id: string, actorUserId?) => Promise<Person>` | Tombstone (the soft-delete path): sets `redactedAt`, nulls all identity, names → `'[redacted]'`, `anchorIdType` → `'none'`, **and deletes the person's entire credential wallet (`person_credentials`)** — all in one transaction. A referenced Person can't be hard-deleted (RESTRICT FK), so redaction is how PII is removed. |
 
 ### Credentials wallet (Slice 3b — ADR 0018)
 
@@ -32,8 +32,8 @@ against the owning Person (the aggregate root) with a `person.credential.*` acti
 
 | Function | Signature | What it does |
 |---|---|---|
-| `addCredential` | `(input: AddCredentialInput, opts?: AddCredentialOptions) => Promise<PersonCredential>` | Adds a credential. `status` defaults to `'valid'`. Pass `{ tx }` so `recruitment.hireApplicant` can carry verified clearances forward atomically. |
-| `updateCredential` | `(id, patch, actorUserId?) => Promise<PersonCredential>` | Updates a credential (changed-field audit). Throws a plain-language not-found error. |
+| `addCredential` | `(input: AddCredentialInput, opts?: AddCredentialOptions) => Promise<PersonCredential>` | Adds a credential. `status` defaults to `'valid'`. Accepts `{ tx }` for transactional inserts (note: `recruitment.hireApplicant` deliberately does NOT pass one — its carry-forward is best-effort, never fails the hire). |
+| `updateCredential` | `(id, patch, actorUserId?, opts?: UpdateCredentialOptions) => Promise<PersonCredential>` | Updates a credential (changed-field audit; PII values masked). Pass `{ expectedPersonId }` to scope the edit to a known owner — a credential belonging to anyone else is refused as not-found (prevents cross-person edits). Throws a plain-language not-found error. |
 | `listCredentials` | `(personId) => Promise<PersonCredential[]>` | One Person's credentials, ordered by type then soonest expiry (NULLs last). |
 | `listCredentialsForPersons` | `(personIds: string[]) => Promise<PersonCredential[]>` | Batch read (no N+1) for the readiness radar. `[]` for an empty input. |
 
