@@ -1,9 +1,10 @@
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, count, eq, sql } from 'drizzle-orm';
 import { getDb } from '@/core/db';
 import {
   clientBillingConfig,
   billingInvoices,
   billingInvoiceLines,
+  billingSoaCounters,
   type ClientBillingConfig,
   type BillingInvoice,
   type BillingInvoiceLine,
@@ -336,4 +337,127 @@ export async function generateInvoice(
       { cause: err },
     );
   }
+}
+
+// ─── finalizeInvoice ─────────────────────────────────────────────────────────
+
+/**
+ * Finalize a draft invoice: assign a gapless, concurrency-safe SOA number
+ * (format YYYY-NNNN where YYYY = year of periodEnd) and flip status to
+ * 'finalized'. The counter increment and the status update commit together
+ * in a transaction — if the transaction rolls back, the counter rolls back
+ * too, preserving the gapless invariant.
+ *
+ * Guards:
+ *   - Invoice must be a draft (throws "already finalized" otherwise).
+ *   - Invoice must have at least one line (throws "no lines" otherwise).
+ *
+ * Audit: records `billing.invoice.finalized` with { soaNumber, totalDue }.
+ */
+export async function finalizeInvoice(
+  invoiceId: string,
+  opts: { actorUserId?: string | null } = {},
+): Promise<BillingInvoice> {
+  return getDb().transaction(async (tx) => {
+    const [inv] = await tx
+      .select()
+      .from(billingInvoices)
+      .where(eq(billingInvoices.id, invoiceId))
+      .limit(1);
+
+    if (!inv) {
+      throw new Error(`[billing/finalizeInvoice] no invoice ${invoiceId}`);
+    }
+    if (inv.status !== 'draft') {
+      throw new Error('[billing/finalizeInvoice] invoice already finalized');
+    }
+
+    const lineCountRows = await tx
+      .select({ n: count() })
+      .from(billingInvoiceLines)
+      .where(eq(billingInvoiceLines.invoiceId, invoiceId));
+
+    if (Number(lineCountRows[0]?.n ?? 0) === 0) {
+      throw new Error(
+        '[billing/finalizeInvoice] invoice has no lines — generate it first',
+      );
+    }
+
+    // Extract year from periodEnd (YYYY-MM-DD string).
+    const year = Number(inv.periodEnd.slice(0, 4));
+
+    // Atomically allocate the next sequence number for this year.
+    // INSERT path: first invoice of the year → inserts (year, 2), returns seq=1
+    // CONFLICT path: subsequent invoices → increments next_value by 1, returns (old next_value)
+    // Because the counter row is locked for this transaction, concurrent
+    // transactions queue behind it — gapless under rollback too.
+    const counterRows = await tx.execute<{ seq: number }>(sql`
+      INSERT INTO billing_soa_counters (year, next_value)
+        VALUES (${year}, 2)
+      ON CONFLICT (year) DO UPDATE
+        SET next_value = billing_soa_counters.next_value + 1
+      RETURNING next_value - 1 AS seq
+    `);
+
+    const seq = Number((counterRows as unknown as Array<{ seq: number }>)[0]!.seq);
+    const soaNumber = `${year}-${String(seq).padStart(4, '0')}`;
+
+    const [done] = await tx
+      .update(billingInvoices)
+      .set({ status: 'finalized', soaNumber, finalizedAt: new Date() })
+      .where(eq(billingInvoices.id, invoiceId))
+      .returning();
+
+    await audit.record({
+      actor: opts.actorUserId ?? null,
+      action: 'billing.invoice.finalized',
+      target: { kind: 'billing_invoice', id: invoiceId },
+      payload: { soaNumber, totalDue: done!.totalDue },
+    });
+
+    return done!;
+  });
+}
+
+// ─── markPaid ────────────────────────────────────────────────────────────────
+
+/**
+ * Mark a finalized invoice as paid. Draft invoices are rejected — callers
+ * must finalize first.
+ *
+ * Audit: records `billing.invoice.paid` with { soaNumber }.
+ */
+export async function markPaid(
+  invoiceId: string,
+  opts: { actorUserId?: string | null } = {},
+): Promise<BillingInvoice> {
+  const db = getDb();
+
+  const [inv] = await db
+    .select()
+    .from(billingInvoices)
+    .where(eq(billingInvoices.id, invoiceId))
+    .limit(1);
+
+  if (!inv) {
+    throw new Error(`[billing/markPaid] no invoice ${invoiceId}`);
+  }
+  if (inv.status !== 'finalized') {
+    throw new Error('[billing/markPaid] finalize the invoice before marking it paid');
+  }
+
+  const [done] = await db
+    .update(billingInvoices)
+    .set({ status: 'paid', paidAt: new Date() })
+    .where(eq(billingInvoices.id, invoiceId))
+    .returning();
+
+  await audit.record({
+    actor: opts.actorUserId ?? null,
+    action: 'billing.invoice.paid',
+    target: { kind: 'billing_invoice', id: invoiceId },
+    payload: { soaNumber: done!.soaNumber },
+  });
+
+  return done!;
 }

@@ -22,7 +22,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { and, eq, gte, sql } from 'drizzle-orm';
 import { closeDb, getDb } from '@/core/db';
 import { clients as clientsTable, detachments } from '@/modules/clients/schema';
-import { clientBillingConfig, billingInvoices, billingInvoiceLines } from './schema';
+import { clientBillingConfig, billingInvoices, billingInvoiceLines, billingSoaCounters } from './schema';
 import { auditLog } from '@/modules/audit/schema';
 import { clients } from '@/modules/clients/index';
 import { assignments } from '@/modules/assignments/index';
@@ -40,6 +40,8 @@ import {
   getClientBillingConfig,
   generateInvoice,
   getInvoiceWithLines,
+  finalizeInvoice,
+  markPaid,
 } from './service';
 
 // ─── Shared cleanup ──────────────────────────────────────────────────────────
@@ -51,6 +53,7 @@ async function cleanup() {
   //   clients → employees → persons
   await db.delete(billingInvoiceLines);
   await db.delete(billingInvoices);
+  await db.delete(billingSoaCounters);
   await db.delete(clientBillingConfig);
   await db.delete(payslips);
   await db.delete(payRuns);
@@ -539,6 +542,157 @@ describe('billing.generateInvoice', () => {
     // Lines ordered by employeeCodeSnapshot ascending
     expect(fetched!.lines[0]!.employeeCodeSnapshot).toBe('CG-ORD-A');
     expect(fetched!.lines[1]!.employeeCodeSnapshot).toBe('CG-ORD-B');
+  });
+});
+
+// ─── Tests — finalizeInvoice + markPaid ──────────────────────────────────────
+//
+// Reuses the T4 happy-path fixture shape: assign → recordDTR → runPayroll →
+// setClientBillingConfig → generateInvoice (yields a draft with lines).
+
+describe('billing.finalizeInvoice + markPaid', () => {
+  const db = getDb();
+  let testStart: Date;
+
+  beforeAll(async () => {
+    await seedComplianceRates({ effectiveDate: '2026-01-01' });
+  });
+
+  beforeEach(async () => {
+    testStart = new Date();
+    await cleanup();
+  });
+
+  /** Build a draft invoice with lines using the T4 happy-path fixture. */
+  async function makeDraftInvoice(opts: { period?: { start: string; end: string } } = {}) {
+    const period = opts.period ?? { start: '2026-05-01', end: '2026-05-31' };
+
+    const clientX = await clients.createClient({ name: 'Finalize Test Client' });
+    const det = await clients.createDetachment({ clientId: clientX.id, name: 'Fin Post' });
+    const guard = await hr.createEmployee({
+      employeeCode: 'CG-FIN-TEST-01',
+      firstName: 'Fin',
+      lastName: 'Guard',
+      basicSalary: 18000,
+      hiredOn: '2026-05-01',
+    });
+    await assignments.assign({ employeeId: guard.id, detachmentId: det.id, startDate: '2026-05-01' });
+    for (let d = 1; d <= 10; d++) {
+      await recordDTR({
+        employeeId: guard.id,
+        date: `2026-05-${String(d).padStart(2, '0')}`,
+        status: 'worked',
+      });
+    }
+    await runPayroll(period.start, period.end);
+    await setClientBillingConfig({ clientId: clientX.id, ratePerManday: '780.00' });
+    const invoice = await generateInvoice(clientX.id, period);
+    return invoice;
+  }
+
+  // ─── finalizeInvoice: happy path ────────────────────────────────────────────
+  it('finalizes a draft invoice: status=finalized, soaNumber matches year pattern, finalizedAt set', async () => {
+    const draft = await makeDraftInvoice();
+
+    const result = await finalizeInvoice(draft.id);
+
+    expect(result.status).toBe('finalized');
+    expect(result.soaNumber).toMatch(/^2026-\d{4}$/);
+    expect(result.finalizedAt).not.toBeNull();
+  });
+
+  // ─── GAPLESS numbering: two sequential finalizes yield 0001 then 0002 ──────
+  it('two sequential finalizes in the same year produce gapless 0001 then 0002', async () => {
+    // Need two separate draft invoices (different client/period combos) to finalize
+    // both in 2026. Use two distinct clients and periods within the same year.
+
+    // First draft: period ending May 2026
+    const draft1 = await makeDraftInvoice({ period: { start: '2026-05-01', end: '2026-05-31' } });
+
+    // Second draft: build a fresh fixture for a different client + period.
+    // Record guard2's DTR THEN re-run payroll so guard2 gets a payslip before generateInvoice.
+    const client2 = await clients.createClient({ name: 'Finalize Client 2' });
+    const det2 = await clients.createDetachment({ clientId: client2.id, name: 'Post 2' });
+    const guard2 = await hr.createEmployee({
+      employeeCode: 'CG-FIN-TEST-02',
+      firstName: 'Fin2',
+      lastName: 'Guard2',
+      basicSalary: 18000,
+      hiredOn: '2026-05-01',
+    });
+    await assignments.assign({ employeeId: guard2.id, detachmentId: det2.id, startDate: '2026-05-01' });
+    for (let d = 1; d <= 5; d++) {
+      await recordDTR({
+        employeeId: guard2.id,
+        date: `2026-05-${String(d).padStart(2, '0')}`,
+        status: 'worked',
+      });
+    }
+    // Re-run payroll to include guard2 (runPayroll is idempotent — wipes + recomputes)
+    await runPayroll('2026-05-01', '2026-05-31');
+    await setClientBillingConfig({ clientId: client2.id, ratePerManday: '780.00' });
+    const draft2 = await generateInvoice(client2.id, { start: '2026-05-01', end: '2026-05-31' });
+
+    const fin1 = await finalizeInvoice(draft1.id);
+    const fin2 = await finalizeInvoice(draft2.id);
+
+    // Both years are 2026; numbers must be 0001 and 0002 (gapless, no gaps or repeats)
+    expect(fin1.soaNumber).toBe('2026-0001');
+    expect(fin2.soaNumber).toBe('2026-0002');
+  });
+
+  // ─── Guard: empty invoice (no lines) ────────────────────────────────────────
+  it('throws /no lines/i when the invoice has no lines', async () => {
+    // Insert a bare draft invoice row directly (no lines)
+    const clientX = await clients.createClient({ name: 'Empty Invoice Client' });
+    const [emptyInv] = await db.insert(billingInvoices).values({
+      clientId: clientX.id,
+      periodStart: '2026-06-01',
+      periodEnd: '2026-06-30',
+    }).returning();
+
+    await expect(finalizeInvoice(emptyInv!.id)).rejects.toThrow(/no lines/i);
+  });
+
+  // ─── Guard: already finalized ────────────────────────────────────────────────
+  it('throws /already finalized/i when invoice is already finalized', async () => {
+    const draft = await makeDraftInvoice();
+    await finalizeInvoice(draft.id);
+
+    await expect(finalizeInvoice(draft.id)).rejects.toThrow(/already finalized/i);
+  });
+
+  // ─── Audit: billing.invoice.finalized ────────────────────────────────────────
+  it('finalizeInvoice audits billing.invoice.finalized', async () => {
+    const draft = await makeDraftInvoice();
+    await finalizeInvoice(draft.id, { actorUserId: null });
+
+    const rows = await db.select().from(auditLog).where(gte(auditLog.createdAt, testStart));
+    const entry = rows.find(r => r.action === 'billing.invoice.finalized');
+    expect(entry).toBeDefined();
+    expect(JSON.stringify(entry!.payload)).toContain('soaNumber');
+  });
+
+  // ─── markPaid: happy path ────────────────────────────────────────────────────
+  it('markPaid on a finalized invoice: status=paid, paidAt set, audits billing.invoice.paid', async () => {
+    const draft = await makeDraftInvoice();
+    const finalized = await finalizeInvoice(draft.id);
+
+    const paid = await markPaid(finalized.id);
+
+    expect(paid.status).toBe('paid');
+    expect(paid.paidAt).not.toBeNull();
+
+    const rows = await db.select().from(auditLog).where(gte(auditLog.createdAt, testStart));
+    const entry = rows.find(r => r.action === 'billing.invoice.paid');
+    expect(entry).toBeDefined();
+  });
+
+  // ─── Guard: markPaid on a draft ─────────────────────────────────────────────
+  it('markPaid on a draft throws /finalize/i', async () => {
+    const draft = await makeDraftInvoice();
+
+    await expect(markPaid(draft.id)).rejects.toThrow(/finalize/i);
   });
 });
 
