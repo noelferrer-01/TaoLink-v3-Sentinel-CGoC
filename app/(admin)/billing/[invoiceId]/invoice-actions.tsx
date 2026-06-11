@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { finalizeInvoiceAction, markPaidAction } from '../actions';
+import { finalizeInvoiceAction, markPaidAction, type InvoiceActionResult } from '../actions';
 
 interface Props {
   invoiceId: string;
@@ -23,19 +23,12 @@ export function InvoiceActions({ invoiceId, status }: Props) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
-  function runFinalize() {
+  // One runner for both transitions — finalize and mark-paid share the exact
+  // same shape (clear error → run → refresh on ok, else show the message).
+  function run(action: () => Promise<InvoiceActionResult>) {
     setError(null);
     startTransition(async () => {
-      const result = await finalizeInvoiceAction(invoiceId);
-      if (result.kind === 'ok') router.refresh();
-      else setError(result.message);
-    });
-  }
-
-  function runMarkPaid() {
-    setError(null);
-    startTransition(async () => {
-      const result = await markPaidAction(invoiceId);
+      const result = await action();
       if (result.kind === 'ok') router.refresh();
       else setError(result.message);
     });
@@ -45,13 +38,13 @@ export function InvoiceActions({ invoiceId, status }: Props) {
     <div className="no-print" style={{ marginBottom: '1.5rem' }}>
       <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
         {status === 'draft' && (
-          <button type="button" className="btn" onClick={runFinalize} disabled={pending}>
+          <button type="button" className="btn" onClick={() => run(() => finalizeInvoiceAction(invoiceId))} disabled={pending}>
             {pending ? 'Finalizing…' : 'Finalize SOA'}
           </button>
         )}
 
         {status === 'finalized' && (
-          <button type="button" className="btn" onClick={runMarkPaid} disabled={pending}>
+          <button type="button" className="btn" onClick={() => run(() => markPaidAction(invoiceId))} disabled={pending}>
             {pending ? 'Marking paid…' : 'Mark paid'}
           </button>
         )}

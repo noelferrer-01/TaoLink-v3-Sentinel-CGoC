@@ -4,6 +4,7 @@ import { clients } from '@/modules/clients';
 import { payroll } from '@/modules/payroll';
 import { PageShell } from '@/components/page-shell';
 import { formatPeso } from '../payroll/peso';
+import { formatPhDate, encodePeriod, parsePeriod } from './_format';
 import { GenerateSoa } from './generate-soa';
 import { ReattachButton } from './reattach-button';
 
@@ -27,23 +28,6 @@ function statusClass(s: string): string {
   }
 }
 
-/** Parse a `start|end` period string, timezone-safe (no Date() needed). */
-function parsePeriod(raw: string | undefined): { start: string; end: string } | null {
-  if (!raw) return null;
-  const [start, end] = raw.split('|');
-  if (!start || !end) return null;
-  return { start, end };
-}
-
-/** Format a YYYY-MM-DD as "Mon D, YYYY" without timezone drift. */
-function formatDate(iso: string): string {
-  const [y, m, d] = iso.split('-');
-  if (!y || !m || !d) return iso;
-  return new Date(Number(y), Number(m) - 1, Number(d)).toLocaleDateString('en-PH', {
-    year: 'numeric', month: 'short', day: 'numeric',
-  });
-}
-
 export default async function BillingPage({
   searchParams,
 }: {
@@ -62,15 +46,13 @@ export default async function BillingPage({
 
   // Period for the Unattributed panel: ?period=start|end, else most recent pay run.
   const periodOptions = payRuns.map((r) => ({
-    value: `${r.periodStart}|${r.periodEnd}`,
+    value: encodePeriod({ start: r.periodStart, end: r.periodEnd }),
     label: `${r.periodStart} → ${r.periodEnd}`,
   }));
   const selectedPeriod =
     parsePeriod(params.period) ??
     (payRuns[0] ? { start: payRuns[0].periodStart, end: payRuns[0].periodEnd } : null);
-  const selectedPeriodValue = selectedPeriod
-    ? `${selectedPeriod.start}|${selectedPeriod.end}`
-    : '';
+  const selectedPeriodValue = selectedPeriod ? encodePeriod(selectedPeriod) : '';
 
   const unattributed = selectedPeriod
     ? await billing.listUnattributedWorkedDays(selectedPeriod)
@@ -206,7 +188,7 @@ export default async function BillingPage({
                 <tr key={u.dtrEntryId}>
                   <td style={{ fontFamily: 'var(--ff-mono)' }}>{u.employeeCode}</td>
                   <td>{u.lastName}, {u.firstName.charAt(0)}.</td>
-                  <td style={{ color: 'var(--muted)' }}>{formatDate(u.date)}</td>
+                  <td style={{ color: 'var(--muted)' }}>{formatPhDate(u.date)}</td>
                   <td><ReattachButton dtrEntryId={u.dtrEntryId} /></td>
                 </tr>
               ))}

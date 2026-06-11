@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { SelectField } from '@/components/form';
 import { generateInvoiceAction } from './actions';
+import { parsePeriod } from './_format';
 
 interface ClientOption {
   id: string;
@@ -43,14 +44,14 @@ export function GenerateSoa({ clients, periods }: Props) {
     e.preventDefault();
     setError(null);
 
-    const [start, end] = period.split('|');
-    if (!clientId || !start || !end) {
+    const parsed = parsePeriod(period);
+    if (!clientId || !parsed) {
       setError('Pick a client and a period first.');
       return;
     }
 
     startTransition(async () => {
-      const result = await generateInvoiceAction(clientId, start, end);
+      const result = await generateInvoiceAction(clientId, parsed.start, parsed.end);
       if (result.kind === 'ok') {
         router.push(`/billing/${result.invoiceId}`);
       } else {

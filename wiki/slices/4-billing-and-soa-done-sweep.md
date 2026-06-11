@@ -93,6 +93,10 @@ The full audit trail fired: `billing.config.updated ×2`, `billing.invoice.gener
 | 7.11 (D) | Money rounding | Deferred — exact for `days × rate`; `round2` placeholder for the deferred VAT/EWT. |
 | 7.12 (D) | Per-client billing frequency | Deferred — pinned to the pay-run period until payroll goes per-client. |
 
+## Known deferral surfaced by the simplify pass
+
+- **Due date is computed from live config, not snapshotted.** `[invoiceId]/page.tsx` derives Due = `periodEnd + paymentTermsDays` from the client's *current* `client_billing_config`. The engine snapshots names/rate/detachment onto lines at finalize for document stability (§6) but does **not** snapshot the due date, so editing a client's terms after finalize re-dates already-issued SOAs on next view. Recorded as a fast-follow in the contract §9 Deferred table (engine change: add a column + snapshot in `finalizeInvoice`). For Noel: decide whether the MVP's terms-on-view is acceptable or whether to freeze it before real client billing.
+
 ## Parked / backlog (apply during a later simplify pass)
 
 - `reattributeDtrDay` could guard against overwriting a non-null `assignment_id` (currently re-resolves regardless).

@@ -3,29 +3,10 @@ import { notFound } from 'next/navigation';
 import { billing } from '@/modules/billing';
 import { clients } from '@/modules/clients';
 import { formatPeso } from '../../payroll/peso';
+import { formatPhDate, dueDate } from '../_format';
 import { InvoiceActions } from './invoice-actions';
 
 const DEFAULT_PAYMENT_TERMS_DAYS = 15;
-
-/** Format a YYYY-MM-DD as "Mon D, YYYY" without timezone drift. */
-function formatDate(iso: string): string {
-  const [y, m, d] = iso.split('-');
-  if (!y || !m || !d) return iso;
-  return new Date(Number(y), Number(m) - 1, Number(d)).toLocaleDateString('en-PH', {
-    year: 'numeric', month: 'short', day: 'numeric',
-  });
-}
-
-/**
- * Due date = periodEnd + paymentTermsDays calendar days. Computed in local
- * Y/M/D to avoid timezone drift, then formatted.
- */
-function dueDate(periodEnd: string, termsDays: number): string {
-  const [y, m, d] = periodEnd.split('-');
-  if (!y || !m || !d) return '—';
-  const due = new Date(Number(y), Number(m) - 1, Number(d) + termsDays);
-  return due.toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' });
-}
 
 /** ⚑ placeholder marker — VAT/EWT are not yet confirmed with CGoC (contract §7.9). */
 function ConfirmFlag() {
@@ -89,7 +70,7 @@ export default async function InvoiceDetailPage({
           }}
           role="status"
         >
-          Paid{invoice.paidAt ? ` on ${formatDate(invoice.paidAt.toISOString().slice(0, 10))}` : ''}.
+          Paid{invoice.paidAt ? ` on ${formatPhDate(invoice.paidAt.toISOString().slice(0, 10))}` : ''}.
         </div>
       )}
 
@@ -145,7 +126,7 @@ export default async function InvoiceDetailPage({
             </div>
             <div className="field-label">Period</div>
             <div style={{ marginBottom: '0.625rem' }}>
-              {formatDate(invoice.periodStart)} – {formatDate(invoice.periodEnd)}
+              {formatPhDate(invoice.periodStart)} – {formatPhDate(invoice.periodEnd)}
             </div>
             <div className="field-label">Due</div>
             <div>{dueDate(invoice.periodEnd, termsDays)}</div>

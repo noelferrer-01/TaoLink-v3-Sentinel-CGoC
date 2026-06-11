@@ -237,6 +237,7 @@ It also forces three cross-module contracts to be designed correctly: **DTR owns
 | **RBAC** (admin-only for now, consistent with the whole app) | app-wide RBAC slice |
 | Redaction policy for guard names on historical financial SOAs | open policy decision (§7.10) |
 | Bulk re-attribution of unattributed DTR days | later (single-day re-attach ships) |
+| **Snapshotting the Due date / `paymentTermsDays` onto a finalized SOA.** The detail view computes Due = `periodEnd + paymentTermsDays` from the client's **current** config, so editing a client's terms after finalize re-dates already-issued SOAs on next view. The MVP accepts terms-on-view; freezing it (alongside the names/rate already snapshotted on finalize, §6) is a fast-follow if real billing needs it. | fast-follow (engine: add a column + snapshot in `finalizeInvoice`) |
 
 ---
 
