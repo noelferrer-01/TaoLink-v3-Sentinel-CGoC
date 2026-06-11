@@ -5,10 +5,13 @@ import {
   isPeriodClosed,
   summarizePeriod,
   bulkFillWorked,
+  billedDaysByEmployeeDetachment,
+  listUnattributedWorkedDays,
+  reattributeDtrDay,
 } from './service';
 import { WORKED_DTR_STATUSES } from './schema';
 
-export type { PeriodSummary } from './service';
+export type { PeriodSummary, BilledDays, UnattributedDay } from './service';
 
 export const dtr = {
   recordDTR,
@@ -17,6 +20,9 @@ export const dtr = {
   isPeriodClosed,
   summarizePeriod,
   bulkFillWorked,
+  billedDaysByEmployeeDetachment,
+  listUnattributedWorkedDays,
+  reattributeDtrDay,
   WORKED_DTR_STATUSES,
 };
 export {
@@ -26,5 +32,8 @@ export {
   isPeriodClosed,
   summarizePeriod,
   bulkFillWorked,
+  billedDaysByEmployeeDetachment,
+  listUnattributedWorkedDays,
+  reattributeDtrDay,
   WORKED_DTR_STATUSES,
 };

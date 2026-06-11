@@ -333,6 +333,199 @@ describe('dtr module — 6.2 late-DTR-close warning', () => {
   });
 });
 
+// ─── Billing reader suite ─────────────────────────────────────────────────────
+//
+// Three functions billing needs:
+//   billedDaysByEmployeeDetachment(clientId, start, end)
+//   listUnattributedWorkedDays(start, end)
+//   reattributeDtrDay(dtrEntryId)
+//
+// All read the FROZEN dtr_entries.assignment_id — no re-derivation in the
+// read paths. Only reattributeDtrDay explicitly calls getActiveAssignment.
+
+import {
+  billedDaysByEmployeeDetachment,
+  listUnattributedWorkedDays,
+  reattributeDtrDay,
+} from './index';
+
+describe('dtr module — billing readers', () => {
+  const db = getDb();
+
+  beforeEach(async () => {
+    await db.delete(payslips);
+    await db.delete(payRuns);
+    await db.delete(dtrEntries);
+    await db.delete(dtrPeriodCloses);
+    await db.delete(assignmentsTable);
+    await db.delete(detachments);
+    await db.delete(clients);
+    await db.delete(employees);
+    await db.delete(persons);
+  });
+
+  // ─── Billing fixture helpers ──────────────────────────────────────────────
+  // guard A: assigned to Client-X detachment; 4 worked days stamped with that
+  //          assignment_id via recordDTR.
+  // guard B: no assignment at all → 2 worked days with assignment_id = null.
+
+  async function makeBillingFixtures() {
+    // Guard A
+    const guardA = await hr.createEmployee({
+      employeeCode: 'CG-BILL-A',
+      firstName: 'Ana',
+      lastName: 'Reyes',
+      basicSalary: 18000,
+      hiredOn: '2026-05-01',
+    });
+
+    // Guard B — no assignment, intentionally
+    const guardB = await hr.createEmployee({
+      employeeCode: 'CG-BILL-B',
+      firstName: 'Ben',
+      lastName: 'Santos',
+      basicSalary: 18000,
+      hiredOn: '2026-05-01',
+    });
+
+    // Client-X with one detachment
+    const clientX = await clientsModule.createClient({ name: 'Client-X' });
+    const detX = await clientsModule.createDetachment({ clientId: clientX.id, name: 'Client-X Post 1' });
+
+    // Guard A gets assigned to Client-X from May 01
+    await assignments.assign({
+      employeeId: guardA.id,
+      detachmentId: detX.id,
+      startDate: '2026-05-01',
+    });
+
+    // Record 4 worked days for guard A (assignment_id auto-stamped from active assignment)
+    await recordDTR({ employeeId: guardA.id, date: '2026-05-01', status: 'worked' });
+    await recordDTR({ employeeId: guardA.id, date: '2026-05-02', status: 'worked' });
+    await recordDTR({ employeeId: guardA.id, date: '2026-05-03', status: 'holiday_worked' });
+    await recordDTR({ employeeId: guardA.id, date: '2026-05-04', status: 'restday_worked' });
+
+    // Record 2 worked days for guard B (no assignment → assignment_id = null)
+    const b1 = await recordDTR({ employeeId: guardB.id, date: '2026-05-01', status: 'worked' });
+    const b2 = await recordDTR({ employeeId: guardB.id, date: '2026-05-02', status: 'worked' });
+
+    return { guardA, guardB, clientX, detX, b1, b2 };
+  }
+
+  // ─── Test B1: billedDaysByEmployeeDetachment returns 4 days for guard A ───
+  it('billedDaysByEmployeeDetachment returns 4 worked days for guard A under Client-X', async () => {
+    const { guardA, clientX } = await makeBillingFixtures();
+
+    const rows = await billedDaysByEmployeeDetachment(clientX.id, '2026-05-01', '2026-05-31');
+
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    expect(row.employeeId).toBe(guardA.id);
+    expect(row.employeeCode).toBe('CG-BILL-A');
+    expect(row.firstName).toBe('Ana');
+    expect(row.lastName).toBe('Reyes');
+    expect(row.days).toBe(4);
+  });
+
+  // ─── Test B2: billedDaysByEmployeeDetachment excludes guard B (null assignment) ──
+  it('billedDaysByEmployeeDetachment excludes guard B whose assignment_id IS NULL', async () => {
+    const { guardB, clientX } = await makeBillingFixtures();
+
+    const rows = await billedDaysByEmployeeDetachment(clientX.id, '2026-05-01', '2026-05-31');
+
+    const bRow = rows.find((r) => r.employeeId === guardB.id);
+    expect(bRow).toBeUndefined();
+  });
+
+  // ─── Test B3: billedDaysByEmployeeDetachment excludes non-worked statuses ────
+  it('billedDaysByEmployeeDetachment excludes absent/leave statuses from the count', async () => {
+    const { guardA, clientX } = await makeBillingFixtures();
+
+    // Add a non-worked entry on a new day — should not add to the 4-day total
+    await recordDTR({ employeeId: guardA.id, date: '2026-05-05', status: 'absent' });
+
+    const rows = await billedDaysByEmployeeDetachment(clientX.id, '2026-05-01', '2026-05-31');
+
+    const aRow = rows.find((r) => r.employeeId === guardA.id);
+    expect(aRow?.days).toBe(4); // still 4, not 5
+  });
+
+  // ─── Test B4: listUnattributedWorkedDays returns both of guard B's rows ───
+  it('listUnattributedWorkedDays returns B\'s 2 unattributed worked days across ALL clients', async () => {
+    const { guardB, b1, b2 } = await makeBillingFixtures();
+
+    const rows = await listUnattributedWorkedDays('2026-05-01', '2026-05-31');
+
+    // Should include both of B's rows
+    const bRows = rows.filter((r) => r.employeeId === guardB.id);
+    expect(bRows).toHaveLength(2);
+
+    const ids = bRows.map((r) => r.dtrEntryId).sort();
+    expect(ids).toEqual([b1.id, b2.id].sort());
+
+    // Row shape check
+    const first = bRows[0]!;
+    expect(first.employeeCode).toBe('CG-BILL-B');
+    expect(first.firstName).toBe('Ben');
+    expect(first.lastName).toBe('Santos');
+    expect(typeof first.date).toBe('string');
+  });
+
+  // ─── Test B5: listUnattributedWorkedDays excludes guard A (has assignment) ─
+  it('listUnattributedWorkedDays excludes guard A whose days ARE attributed', async () => {
+    const { guardA } = await makeBillingFixtures();
+
+    const rows = await listUnattributedWorkedDays('2026-05-01', '2026-05-31');
+
+    const aRow = rows.find((r) => r.employeeId === guardA.id);
+    expect(aRow).toBeUndefined();
+  });
+
+  // ─── Test B6: reattributeDtrDay stamps assignment_id + audit, moves to billed ─
+  it('reattributeDtrDay stamps assignment_id on a null-assignment row and it moves under its client', async () => {
+    const { guardB, clientX, detX, b1 } = await makeBillingFixtures();
+
+    // Verify b1 has no assignment yet
+    expect(b1.assignmentId).toBeNull();
+
+    // Give guard B an active assignment covering 2026-05-01
+    await assignments.assign({
+      employeeId: guardB.id,
+      detachmentId: detX.id,
+      startDate: '2026-05-01',
+    });
+
+    // Re-attribute b1
+    const updated = await reattributeDtrDay(b1.id);
+    expect(updated.assignmentId).not.toBeNull();
+
+    // b1 must now appear in billedDaysByEmployeeDetachment for Client-X
+    const billed = await billedDaysByEmployeeDetachment(clientX.id, '2026-05-01', '2026-05-31');
+    const bRow = billed.find((r) => r.employeeId === guardB.id);
+    expect(bRow).toBeDefined();
+    expect(bRow!.days).toBe(1);
+
+    // b1 must NOT appear in listUnattributedWorkedDays anymore
+    const unattributed = await listUnattributedWorkedDays('2026-05-01', '2026-05-31');
+    const stillUnattributed = unattributed.find((r) => r.dtrEntryId === b1.id);
+    expect(stillUnattributed).toBeUndefined();
+  });
+
+  // ─── Test B7: reattributeDtrDay throws when no active assignment ─────────
+  it('reattributeDtrDay throws with a plain-language error when no active assignment covers the date', async () => {
+    const { b1 } = await makeBillingFixtures();
+
+    // Guard B still has no assignment → should throw
+    await expect(reattributeDtrDay(b1.id)).rejects.toThrow(/assign the guard first/i);
+  });
+
+  // ─── Test B8: reattributeDtrDay throws for a non-existent entry id ───────
+  it('reattributeDtrDay throws when the dtr entry does not exist', async () => {
+    const fakeId = '00000000-0000-0000-0000-000000000099';
+    await expect(reattributeDtrDay(fakeId)).rejects.toThrow(/no entry/i);
+  });
+});
+
 // Close the shared DB connection once, after all suites in this file finish.
 afterAll(async () => {
   await closeDb();

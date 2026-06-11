@@ -1,10 +1,14 @@
-import { and, between, eq, inArray, sql } from 'drizzle-orm';
+import { and, between, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { getDb } from '@/core/db';
-import { dtrEntries, dtrPeriodCloses, type DtrEntry } from './schema';
+import { dtrEntries, dtrPeriodCloses, type DtrEntry, WORKED_DTR_STATUSES } from './schema';
 import { audit } from '@/modules/audit';
 import { events } from '@/modules/events';
 import { getActiveAssignment } from '@/modules/assignments/service';
 import { resolveForPeriod } from '@/modules/payroll-calendars/service';
+import { assignments } from '@/modules/assignments/schema';
+import { detachments } from '@/modules/clients/schema';
+import { employees } from '@/modules/hr/schema';
+import { persons } from '@/modules/persons/schema';
 
 // Sentinel UUID for global-default calendar lookup (no per-client scope).
 // closePeriod is period-wide; late-warning uses the global-default calendar.
@@ -222,4 +226,118 @@ export async function closePeriod(
       payload: { error: warnErr?.message ?? String(warnErr) },
     }).catch(() => { /* truly swallow — audit itself failing must not crash */ });
   }
+}
+
+// ─── Billing readers ─────────────────────────────────────────────────────────
+
+export type BilledDays = {
+  employeeId: string;
+  employeeCode: string;
+  firstName: string;
+  lastName: string;
+  detachmentId: string;
+  detachmentName: string;
+  days: number;
+};
+
+// Worked man-days per (employee, detachment) for ONE client in [start, end],
+// attributed by the FROZEN dtr_entries.assignment_id. No getActiveAssignment.
+export async function billedDaysByEmployeeDetachment(
+  clientId: string,
+  start: string,
+  end: string,
+): Promise<BilledDays[]> {
+  return getDb()
+    .select({
+      employeeId: employees.id,
+      employeeCode: employees.employeeCode,
+      firstName: persons.firstName,
+      lastName: persons.lastName,
+      detachmentId: detachments.id,
+      detachmentName: detachments.name,
+      days: sql<number>`COUNT(*)::int`,
+    })
+    .from(dtrEntries)
+    .innerJoin(assignments, eq(assignments.id, dtrEntries.assignmentId))
+    .innerJoin(detachments, eq(detachments.id, assignments.detachmentId))
+    .innerJoin(employees, eq(employees.id, dtrEntries.employeeId))
+    .innerJoin(persons, eq(persons.id, employees.personId))
+    .where(
+      and(
+        eq(detachments.clientId, clientId),
+        between(dtrEntries.date, start, end),
+        inArray(dtrEntries.status, [...WORKED_DTR_STATUSES]),
+      ),
+    )
+    .groupBy(
+      employees.id,
+      employees.employeeCode,
+      persons.firstName,
+      persons.lastName,
+      detachments.id,
+      detachments.name,
+    );
+}
+
+export type UnattributedDay = {
+  dtrEntryId: string;
+  employeeId: string;
+  employeeCode: string;
+  firstName: string;
+  lastName: string;
+  date: string;
+};
+
+// Period-level, ALL clients: worked days with NO posting (assignment_id IS NULL).
+export async function listUnattributedWorkedDays(
+  start: string,
+  end: string,
+): Promise<UnattributedDay[]> {
+  return getDb()
+    .select({
+      dtrEntryId: dtrEntries.id,
+      employeeId: employees.id,
+      employeeCode: employees.employeeCode,
+      firstName: persons.firstName,
+      lastName: persons.lastName,
+      date: dtrEntries.date,
+    })
+    .from(dtrEntries)
+    .innerJoin(employees, eq(employees.id, dtrEntries.employeeId))
+    .innerJoin(persons, eq(persons.id, employees.personId))
+    .where(
+      and(
+        isNull(dtrEntries.assignmentId),
+        between(dtrEntries.date, start, end),
+        inArray(dtrEntries.status, [...WORKED_DTR_STATUSES]),
+      ),
+    )
+    .orderBy(persons.lastName, persons.firstName, dtrEntries.date);
+}
+
+// Re-resolve the active assignment for an existing DTR row's date and stamp it.
+export async function reattributeDtrDay(
+  dtrEntryId: string,
+  opts: { actorUserId?: string | null } = {},
+): Promise<DtrEntry> {
+  const db = getDb();
+  const [row] = await db.select().from(dtrEntries).where(eq(dtrEntries.id, dtrEntryId)).limit(1);
+  if (!row) throw new Error(`[dtr/reattributeDtrDay] no entry ${dtrEntryId}`);
+  const active = await getActiveAssignment(row.employeeId, row.date);
+  if (!active)
+    throw new Error(
+      '[dtr/reattributeDtrDay] still no active posting on that date — assign the guard first',
+    );
+  const [updated] = await db
+    .update(dtrEntries)
+    .set({ assignmentId: active.id })
+    .where(eq(dtrEntries.id, dtrEntryId))
+    .returning();
+  await audit.record({
+    actor: opts.actorUserId ?? null,
+    action: 'dtr.reattributed',
+    target: { kind: 'dtr_entry', id: dtrEntryId },
+    payload: { assignmentId: active.id, date: row.date },
+  });
+  return updated!;
 }
