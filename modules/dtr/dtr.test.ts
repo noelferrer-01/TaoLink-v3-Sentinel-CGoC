@@ -21,6 +21,7 @@ import {
   isPeriodClosed,
   summarizePeriod,
   bulkFillWorked,
+  WORKED_DTR_STATUSES,
 } from './index';
 
 // ─── Fixture helpers ─────────────────────────────────────────────────────────
@@ -169,6 +170,11 @@ describe('dtr module', () => {
     const byId = new Map(summary.map((s) => [s.employeeId, s.recordedDays]));
     expect(byId.get(employee.id)).toBe(3);
     expect(byId.get(employee2.id)).toBe(1);
+  });
+
+  // ─── Test 10: WORKED_DTR_STATUSES is the canonical worked-day set ───────────
+  it('WORKED_DTR_STATUSES is the canonical worked-day set', () => {
+    expect([...WORKED_DTR_STATUSES].sort()).toEqual(['holiday_worked', 'restday_worked', 'worked']);
   });
 
   // ─── Test 9: bulkFillWorked records every missing day in range ────────────

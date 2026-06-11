@@ -6,6 +6,7 @@ import {
   summarizePeriod,
   bulkFillWorked,
 } from './service';
+import { WORKED_DTR_STATUSES } from './schema';
 
 export type { PeriodSummary } from './service';
 
@@ -16,6 +17,7 @@ export const dtr = {
   isPeriodClosed,
   summarizePeriod,
   bulkFillWorked,
+  WORKED_DTR_STATUSES,
 };
 export {
   recordDTR,
@@ -24,4 +26,5 @@ export {
   isPeriodClosed,
   summarizePeriod,
   bulkFillWorked,
+  WORKED_DTR_STATUSES,
 };

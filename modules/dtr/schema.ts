@@ -4,6 +4,11 @@ import { assignments } from '@/modules/assignments/schema';
 
 export const dtrStatus = pgEnum('dtr_status', ['worked', 'absent', 'leave', 'holiday_worked', 'restday_worked']);
 
+// The dtr_status values that count as a worked (billable / payable) day.
+// Owned here because dtr owns dtr_status; payroll and billing both consume it
+// so the definition can never drift between what's paid and what's billed.
+export const WORKED_DTR_STATUSES = ['worked', 'holiday_worked', 'restday_worked'] as const satisfies ReadonlyArray<DtrEntry['status']>;
+
 export const dtrEntries = pgTable('dtr_entries', {
   id: uuid('id').primaryKey().defaultRandom(),
   employeeId: uuid('employee_id').notNull().references(() => employees.id),
