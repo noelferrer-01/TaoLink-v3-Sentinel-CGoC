@@ -36,6 +36,12 @@ const sections: { heading: string; items: NavItem[] }[] = [
       { href: '/exports', label: 'Government Exports',  icon: '📄' },
     ],
   },
+  {
+    heading: 'Billing',
+    items: [
+      { href: '/billing', label: 'Statements of Account', icon: '💰' },
+    ],
+  },
 ];
 
 // localStorage key for persistence

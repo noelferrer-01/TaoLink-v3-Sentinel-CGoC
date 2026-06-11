@@ -911,3 +911,25 @@ span.btn.is-disabled {
   border-top: 1px solid var(--rule);
   padding-top: 1rem;
 }
+
+/* ───── Print — clean the SOA so it prints as a standalone document ───── */
+/* Hide the app chrome (sidebar) and any control marked .no-print (action
+   bars, breadcrumbs, banners). The .soa-document card prints borderless
+   edge-to-edge so it reads as Commander Group's own letter. */
+@media print {
+  .admin-sidebar,
+  .no-print {
+    display: none !important;
+  }
+
+  .admin-main {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .soa-document {
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+  }
+}
