@@ -697,6 +697,24 @@ describe('billing.finalizeInvoice + markPaid', () => {
 
     await expect(markPaid(draft.id)).rejects.toThrow(/finalize/i);
   });
+
+  // ─── Guard: markPaid on an already-paid invoice ──────────────────────────────
+  it('markPaid on an already-paid invoice reports it is already paid (not "finalize first")', async () => {
+    const draft = await makeDraftInvoice();
+    const finalized = await finalizeInvoice(draft.id);
+    await markPaid(finalized.id);
+
+    await expect(markPaid(finalized.id)).rejects.toThrow(/already.*paid/i);
+  });
+
+  // ─── Guard: finalizeInvoice on a paid invoice ────────────────────────────────
+  it('finalizeInvoice on a paid invoice reports "already paid", not "already finalized"', async () => {
+    const draft = await makeDraftInvoice();
+    const finalized = await finalizeInvoice(draft.id);
+    await markPaid(finalized.id);
+
+    await expect(finalizeInvoice(finalized.id)).rejects.toThrow(/already paid/i);
+  });
 });
 
 // ─── Tests — reconcilePeriod + listUnattributedWorkedDays + listInvoices ──────

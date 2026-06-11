@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { clients } from '@/modules/clients';
 import { billing } from '@/modules/billing';
 import { getSessionFromCookie } from '@/modules/auth';
+import { plainMessage } from '../../_action-error';
 
 /**
  * Editable patch shape for the client detail/edit form. All fields are optional;
@@ -124,10 +125,9 @@ export async function saveBillingConfigAction(
     revalidatePath(`/clients/${clientId}`);
     return { kind: 'ok' };
   } catch (e) {
-    const raw = e instanceof Error ? e.message : String(e);
     return {
       kind: 'error',
-      message: `We couldn't save the billing config. ${raw}`,
+      message: `We couldn't save the billing config. ${plainMessage(e)}`,
     };
   }
 }

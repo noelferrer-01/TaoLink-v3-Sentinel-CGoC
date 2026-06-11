@@ -3,7 +3,7 @@ import { notFound } from 'next/navigation';
 import { billing } from '@/modules/billing';
 import { clients } from '@/modules/clients';
 import { formatPeso } from '../../payroll/peso';
-import { formatPhDate, dueDate } from '../_format';
+import { formatPhDate, formatPhInstant, dueDate } from '../_format';
 import { InvoiceActions } from './invoice-actions';
 
 const DEFAULT_PAYMENT_TERMS_DAYS = 15;
@@ -70,7 +70,7 @@ export default async function InvoiceDetailPage({
           }}
           role="status"
         >
-          Paid{invoice.paidAt ? ` on ${formatPhDate(invoice.paidAt.toISOString().slice(0, 10))}` : ''}.
+          Paid{invoice.paidAt ? ` on ${formatPhInstant(invoice.paidAt)}` : ''}.
         </div>
       )}
 

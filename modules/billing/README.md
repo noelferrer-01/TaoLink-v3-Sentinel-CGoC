@@ -23,7 +23,7 @@ import { billing, type BillingInvoice, type BillingInvoiceLine, type BillingInvo
 | `finalizeInvoice` | `(invoiceId: string, opts?: { actorUserId?: string \| null }) => Promise<BillingInvoice>` | Assign a gapless concurrency-safe SOA number (`YYYY-NNNN`), flip status to `finalized`, and freeze the document — all in one transaction. Throws if the invoice is already finalized or has no lines. Audits `billing.invoice.finalized`. |
 | `markPaid` | `(invoiceId: string, opts?: { actorUserId?: string \| null }) => Promise<BillingInvoice>` | Flip a finalized invoice to `paid`. Rejects draft invoices — callers must finalize first. Audits `billing.invoice.paid`. |
 | `reconcilePeriod` | `(period: { start: string; end: string }) => Promise<ReconcileMismatch[]>` | Period-wide billing↔payroll identity check: for each guard paid in the period, `Σ billed days (all SOAs) + unattributed days = payslip.daysWorked`. Returns only mismatching rows; returns `[]` when no pay run exists. |
-| `listUnattributedWorkedDays` | `(period: { start: string; end: string }) => Promise<...>` | Period-level, all clients: every worked DTR row whose `assignment_id IS NULL` — includes guards with no posting the entire period (a per-client view would miss these). |
+| `listUnattributedWorkedDays` | `(period: { start: string; end: string }) => Promise<Array<{ dtrEntryId, employeeId, employeeCode, firstName, lastName, date }>>` | Period-level, all clients: every worked DTR row whose `assignment_id IS NULL` — includes guards with no posting the entire period (a per-client view would miss these). Delegates to `dtr.listUnattributedWorkedDays` (the row type is dtr's `UnattributedDay`). |
 | `listInvoices` | `(filter?: { clientId?: string; status?: 'draft' \| 'finalized' \| 'paid' }) => Promise<BillingInvoice[]>` | Return invoices, optionally filtered, ordered newest period first. |
 
 ### Types
@@ -83,6 +83,7 @@ import { billing, type BillingInvoice, type BillingInvoiceLine, type BillingInvo
 ### "Finalize the invoice before marking it paid"  (draft → paid rejected)
 **Trigger:** `markPaid` called on a draft invoice. The lifecycle enforces `draft → finalized → paid`; skipping finalize is refused.
 **Fix:** call `finalizeInvoice` first (which assigns the SOA number), then `markPaid`.
+**Related:** calling `markPaid` on an **already-paid** invoice throws `[billing/markPaid] this invoice is already marked paid` (distinct from the draft case). Likewise `finalizeInvoice` on a non-draft throws `invoice is already <status> — only a draft can be finalized`, so a `paid` invoice reports "already paid", not "already finalized".
 
 ### "Billed days exceeds payroll for a guard"
 **Trigger:** `generateInvoice` local sanity check fires — a guard's total billed days at this client exceed their `payslips.daysWorked` for the period. Indicates DTR has been edited after payroll ran or a data integrity issue.

@@ -320,24 +320,34 @@ export async function reattributeDtrDay(
   dtrEntryId: string,
   opts: { actorUserId?: string | null } = {},
 ): Promise<DtrEntry> {
-  const db = getDb();
-  const [row] = await db.select().from(dtrEntries).where(eq(dtrEntries.id, dtrEntryId)).limit(1);
-  if (!row) throw new Error(`[dtr/reattributeDtrDay] no entry ${dtrEntryId}`);
-  const active = await getActiveAssignment(row.employeeId, row.date);
-  if (!active)
+  try {
+    const db = getDb();
+    const [row] = await db.select().from(dtrEntries).where(eq(dtrEntries.id, dtrEntryId)).limit(1);
+    if (!row) throw new Error(`[dtr/reattributeDtrDay] no entry ${dtrEntryId}`);
+    const active = await getActiveAssignment(row.employeeId, row.date);
+    if (!active)
+      throw new Error(
+        '[dtr/reattributeDtrDay] still no active posting on that date — assign the guard first',
+      );
+    const [updated] = await db
+      .update(dtrEntries)
+      .set({ assignmentId: active.id })
+      .where(eq(dtrEntries.id, dtrEntryId))
+      .returning();
+    await audit.record({
+      actor: opts.actorUserId ?? null,
+      action: 'dtr.reattributed',
+      target: { kind: 'dtr_entry', id: dtrEntryId },
+      payload: { assignmentId: active.id, date: row.date },
+    });
+    return updated!;
+  } catch (err) {
+    // Pass through our own guard errors (their messages are already correct);
+    // wrap anything unexpected (DB/audit failure) with the module prefix.
+    if (err instanceof Error && err.message.startsWith('[dtr/reattributeDtrDay]')) throw err;
     throw new Error(
-      '[dtr/reattributeDtrDay] still no active posting on that date — assign the guard first',
+      `[dtr/reattributeDtrDay] ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
     );
-  const [updated] = await db
-    .update(dtrEntries)
-    .set({ assignmentId: active.id })
-    .where(eq(dtrEntries.id, dtrEntryId))
-    .returning();
-  await audit.record({
-    actor: opts.actorUserId ?? null,
-    action: 'dtr.reattributed',
-    target: { kind: 'dtr_entry', id: dtrEntryId },
-    payload: { assignmentId: active.id, date: row.date },
-  });
-  return updated!;
+  }
 }

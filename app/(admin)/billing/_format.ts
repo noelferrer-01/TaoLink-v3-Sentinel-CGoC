@@ -13,6 +13,16 @@ export function formatPhDate(iso: string): string {
 }
 
 /**
+ * Format a timestamp (a real instant, e.g. a `timestamptz` column) as
+ * "Mon D, YYYY" in **Manila time**. Use this instead of `.toISOString().slice(0,10)`,
+ * which renders the UTC calendar day and shows the previous day for the 00:00–07:59
+ * Manila window (PH is UTC+8).
+ */
+export function formatPhInstant(at: Date): string {
+  return at.toLocaleDateString('en-PH', { ...PH_DATE, timeZone: 'Asia/Manila' });
+}
+
+/**
  * Due date = periodEnd + termsDays calendar days. Built in local Y/M/D so the
  * day-overflow rolls the month correctly and no timezone shift creeps in.
  */

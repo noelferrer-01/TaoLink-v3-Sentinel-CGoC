@@ -370,7 +370,10 @@ export async function finalizeInvoice(
       throw new Error(`[billing/finalizeInvoice] no invoice ${invoiceId}`);
     }
     if (inv.status !== 'draft') {
-      throw new Error('[billing/finalizeInvoice] invoice already finalized');
+      // Status-aware so a paid invoice doesn't report "already finalized".
+      throw new Error(
+        `[billing/finalizeInvoice] invoice is already ${inv.status} — only a draft can be finalized`,
+      );
     }
 
     const lineCountRows = await tx
@@ -604,6 +607,9 @@ export async function markPaid(
 
     if (!inv) {
       throw new Error(`[billing/markPaid] no invoice ${invoiceId}`);
+    }
+    if (inv.status === 'paid') {
+      throw new Error('[billing/markPaid] this invoice is already marked paid');
     }
     if (inv.status !== 'finalized') {
       throw new Error('[billing/markPaid] finalize the invoice before marking it paid');

@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { billing } from '@/modules/billing';
 import { dtr } from '@/modules/dtr';
 import { getSessionFromCookie } from '@/modules/auth';
+import { plainMessage } from '../_action-error';
 
 /**
  * Server actions for the Billing area (Slice 4, Task 9 UI).
@@ -24,16 +25,6 @@ const SESSION_EXPIRED = {
   message: 'Your session expired. Please sign in again.',
 };
 
-/**
- * Strip a leading `[module/fn]` bracket prefix from a service error so the
- * clerk sees only the plain-language remainder. Falls back to the raw message
- * when there's no prefix.
- */
-function plainMessage(e: unknown): string {
-  const raw = e instanceof Error ? e.message : String(e);
-  return raw.replace(/^\[[^\]]+\]\s*/, '').trim() || raw;
-}
-
 // ─── Generate ─────────────────────────────────────────────────────────────────
 
 export type GenerateInvoiceResult =
@@ -41,9 +32,11 @@ export type GenerateInvoiceResult =
   | { kind: 'error'; message: string };
 
 /**
- * Generate a draft SOA for one client + one pay-run period. Returns the new
+ * Generate a draft SOA for one client + one pay-run period. Returns the
  * invoice id so the client can route to `/billing/[invoiceId]`. If a draft
- * already exists for that client+period the engine returns the existing one.
+ * already exists for that client+period the engine wipes its lines and
+ * recomputes them from current DTR (idempotent regenerate, same invoice id);
+ * a finalized invoice is refused.
  */
 export async function generateInvoiceAction(
   clientId: string,

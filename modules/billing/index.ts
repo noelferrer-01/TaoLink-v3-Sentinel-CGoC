@@ -21,7 +21,7 @@ export {
   listUnattributedWorkedDays,
   listInvoices,
 };
-export type { BillingInvoiceWithLines, ReconcileMismatch } from './service';
+export type { BillingInvoiceWithLines, ReconcileMismatch, SetClientBillingConfigInput } from './service';
 
 export type { BillingInvoice, BillingInvoiceLine, ClientBillingConfig } from './schema';
 
