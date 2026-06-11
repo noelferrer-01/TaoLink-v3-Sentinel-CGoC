@@ -5,11 +5,11 @@
  * IDs, address, contact). `hr_employees` and `recruitment_applicants` are role
  * rows that reference this table; they hold only role-specific data.
  *
- * Implements ADR 0017 (person-centric identity).
+ * Implements ADR 0017 (person-centric identity) and ADR 0018 (credentials as
+ * first-class durable records — the `person_credentials` wallet, Slice 3b).
  * Design: wiki/slices/3-identity-and-credentials.md §5a.
- * Build plan: wiki/slices/3a-person-identity-plan.md Task 1.
- *
- * NOTE: `person_credentials` is NOT part of this schema — that is Slice 3b.
+ * Build plan: wiki/slices/3a-person-identity-plan.md Task 1 (persons),
+ *             wiki/slices/3b-credentials-and-readiness-plan.md Task 1 (credentials).
  */
 
 import { sql } from 'drizzle-orm';
@@ -24,6 +24,7 @@ import {
   index,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
+import { users } from '@/modules/auth/schema';
 
 // ─── Enums ─────────────────────────────────────────────────────────────────────
 
@@ -151,3 +152,68 @@ export const persons = pgTable('persons', {
 
 export type Person    = typeof persons.$inferSelect;
 export type NewPerson = typeof persons.$inferInsert;
+
+// ─── Credentials wallet (Slice 3b — ADR 0018) ──────────────────────────────────
+
+/**
+ * Credential types that live in a Person's licence wallet.
+ *
+ * Spellings match `recruitment_doc_type` EXACTLY so the hire doc→credential
+ * carry-forward (recruitment/service.ts) can't silently drop a type — but this
+ * enum holds ONLY the 9 credential-bearing types and excludes `resume_biodata`
+ * and `other` (those are documents, not credentials). See Slice 3b plan delta 2.
+ */
+export const personCredType = pgEnum('person_cred_type', [
+  'nbi_clearance',
+  'police_pnp_clearance',
+  'barangay_clearance',
+  'drug_test',
+  'medical_exam',
+  'neuro_psych',
+  'training_cert_sbr_rtc',
+  'sosia_license',
+  'ltopf_license',
+]);
+
+/**
+ * Stored lifecycle status of a credential. `revoked` is kept DISTINCT from
+ * `expired` — a revoked licence is a compliance event, not a quiet lapse.
+ * The *display* state (labels.ts `deriveCredState`) layers `expiring` on top.
+ */
+export const personCredStatus = pgEnum('person_cred_status', [
+  'valid',
+  'expired',
+  'pending',
+  'revoked',
+]);
+
+export const personCredentials = pgTable('person_credentials', {
+  id: uuid('id').primaryKey().defaultRandom(),
+
+  // The Person who holds this credential. CASCADE: a credential has no
+  // independent retention value, so redacting/removing the Person clears it.
+  personId: uuid('person_id').notNull().references(() => persons.id, { onDelete: 'cascade' }),
+
+  credType:    personCredType('cred_type').notNull(),
+  credNumber:  text('cred_number'),
+  issuingBody: text('issuing_body'),
+  issuedOn:    date('issued_on'),
+  expiresOn:   date('expires_on'),
+  status:      personCredStatus('status').notNull().default('valid'),
+
+  // Who verified it (recruitment clearance verification at hire, or HR later).
+  // SET NULL: the credential outlives the user account that recorded it.
+  verifiedByUserId: uuid('verified_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  verifiedOn:       date('verified_on'),
+
+  notes: text('notes'),
+
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  // FK/join hot path — listCredentials(personId) and the readiness diff.
+  personIdIdx: index('person_credentials_person_id_idx').on(t.personId),
+}));
+
+export type PersonCredential    = typeof personCredentials.$inferSelect;
+export type NewPersonCredential = typeof personCredentials.$inferInsert;

@@ -1,8 +1,11 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { hr } from '@/modules/hr';
+import { listCredentials } from '@/modules/persons';
+import { todayIso } from '@/core/dates';
 import { PageShell } from '@/components/page-shell';
 import { EmployeeDetailBody } from './employee-detail-body';
+import { LicencesPanel } from './licences-panel';
 
 export default async function EmployeeDetailPage({
   params,
@@ -33,6 +36,10 @@ export default async function EmployeeDetailPage({
     employee.rdoCode && employee.dateOfBirth && employee.addressLine1,
   );
 
+  // Slice 3b: the Person's credential wallet for the Licences & clearances panel.
+  // personId is NOT NULL since 0024 (getEmployeeWithIdentity INNER-joins persons).
+  const credentials = await listCredentials(employee.personId);
+
   // Identity fields are nullable for pre-backfill rows (personId null); fall
   // back to the employee code so the breadcrumb and title are never blank.
   const fullName = (employee.firstName && employee.lastName)
@@ -54,6 +61,12 @@ export default async function EmployeeDetailPage({
         employee={employee}
         isBirReady={isBirReady}
         terminatedAt={terminatedAt}
+      />
+      <LicencesPanel
+        employeeId={employee.id}
+        isArmedPost={employee.isArmedPost ?? false}
+        credentials={credentials}
+        today={todayIso()}
       />
     </PageShell>
   );

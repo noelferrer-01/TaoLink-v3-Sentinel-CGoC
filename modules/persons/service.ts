@@ -8,9 +8,13 @@
  *   findPersonByAnyId  — exact match on a column OR in quarantinedIds
  *   findPossibleDuplicates — normalized name+DOB match (collapses PH particles)
  *   updatePerson       — the ONLY identity-edit path; refuses to edit redacted rows
- *   redactPerson       — tombstone: clear identity + all IDs (PII removed, not parked)
+ *   redactPerson       — tombstone: clear identity + all IDs AND delete the credential
+ *                        wallet, atomically (PII removed, not parked)
+ *   addCredential / updateCredential / listCredentials / listCredentialsForPersons
+ *                      — the Slice 3b credential wallet (ADR 0018)
  *
- * Every mutation records an audit row and publishes an event.
+ * Every mutation records an audit row and publishes an event. Identity values are
+ * NEVER embedded in audit payloads (the log is append-only) — see the audit-PII note.
  * Unique-violation errors (Postgres 23505) are caught and re-thrown as plain language.
  *
  * Design: wiki/slices/3-identity-and-credentials.md §5a
@@ -18,13 +22,14 @@
  * Build plan: wiki/slices/3a-person-identity-plan.md Task 2
  */
 
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and, inArray, sql } from 'drizzle-orm';
 import { getDb, type DbOrTx } from '@/core/db';
 import { isPgError } from '@/core/errors';
+import { todayIso } from '@/core/dates';
 import { audit } from '@/modules/audit';
 import { events } from '@/modules/events';
-import { persons, type Person, type NewPerson } from './schema';
-import { checkIdFormat, normalizeNameKey, ANCHOR_ID_LABELS, type AnchorIdType } from './labels';
+import { persons, personCredentials, type Person, type NewPerson, type PersonCredential } from './schema';
+import { checkIdFormat, normalizeNameKey, ANCHOR_ID_LABELS, type AnchorIdType, type CredType, type CredStatus } from './labels';
 
 // ─── Column map ───────────────────────────────────────────────────────────────
 // Maps each anchorIdType to its corresponding schema column name and Drizzle
@@ -85,6 +90,54 @@ function uniqueViolationMessage(err: unknown): string | null {
     }
   }
   return null;
+}
+
+// ─── Audit PII handling ─────────────────────────────────────────────────────────
+//
+// The audit log is append-only — DB-enforced immutable (migration 0001: an
+// UPDATE/DELETE trigger blocks any change to a row). So PII can NEVER be erased
+// from it after the fact. The rule therefore has to be applied at write time:
+// never EMBED a person's identity VALUES in an audit payload — reference the
+// person by id and record only WHICH fields changed. When the Person is redacted,
+// their PII is gone from `persons`, and the audit — holding only references — has
+// nothing left to leak. This matches how every other module already audits (by
+// id/code, not by value); identity logging was the outlier.
+//
+// `persons` is entirely identity, so `person.updated` records `changedFields`
+// ONLY. Credentials mix PII (number, notes) with non-PII (status, dates), so the
+// credential payload keeps the useful non-PII values and masks just the PII ones.
+
+/**
+ * Credential fields whose VALUE is safe to keep in the audit log. This is an
+ * ALLOWLIST on purpose — it fails CLOSED: the credential number, free-text notes,
+ * and crucially ANY field added to the schema later are masked unless explicitly
+ * listed here, so a new column can never silently leak PII into the append-only
+ * log. Worst case is a new safe field reads '«set»' until it's added.
+ */
+const CREDENTIAL_AUDIT_SAFE_FIELDS = new Set<string>([
+  'credType', 'status', 'issuedOn', 'expiresOn', 'issuingBody', 'verifiedByUserId', 'verifiedOn',
+]);
+
+/**
+ * Builds a before/after audit payload over `changedFields`, keeping the value of
+ * audit-safe fields and replacing every other field's value with a non-PII
+ * presence marker (`null` when empty, `'«set»'` when a value was present). Safe
+ * fields still show useful detail (e.g. status valid→revoked, an expiry change).
+ */
+function maskedDiff(
+  changedFields: string[],
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+  safeFields: Set<string>,
+): { before: Record<string, unknown>; after: Record<string, unknown> } {
+  const keep = (field: string, value: unknown): unknown => {
+    if (safeFields.has(field)) return value;
+    return value == null || value === '' ? null : '«set»';
+  };
+  return {
+    before: Object.fromEntries(changedFields.map((k) => [k, keep(k, before[k])])),
+    after:  Object.fromEntries(changedFields.map((k) => [k, keep(k, after[k])])),
+  };
 }
 
 // ─── createPerson ─────────────────────────────────────────────────────────────
@@ -206,8 +259,10 @@ export async function createPerson(input: CreatePersonInput, opts?: CreatePerson
     actor:   input.actorUserId ?? null,
     action:  'person.created',
     target:  { kind: 'person', id: created.id },
+    // The Person is referenced by target id — the name (PII) is NOT embedded, so
+    // it can't outlive redaction in this append-only log. anchorIdType is a type,
+    // not a value; formatWarning is a generic advisory with no ID in it.
     payload: {
-      name: `${created.lastName}, ${created.firstName}`,
       anchorIdType,
       ...(formatWarning ? { formatWarning } : {}),
     },
@@ -414,11 +469,10 @@ export async function updatePerson(
     actor:   actorUserId ?? null,
     action:  'person.updated',
     target:  { kind: 'person', id },
-    payload: {
-      before:        Object.fromEntries(changedFields.map((k) => [k, (before as Record<string, unknown>)[k]])),
-      after:         Object.fromEntries(changedFields.map((k) => [k, (updated as Record<string, unknown>)[k]])),
-      changedFields,
-    },
+    // `persons` is entirely identity, so every value here would be PII. Record
+    // only WHICH fields changed — never the before/after values. The accountability
+    // ("who changed which identity fields, when") is kept; the PII is not embedded.
+    payload: { changedFields },
   });
   await events.publish('person.updated', { id, changedFields });
 
@@ -470,51 +524,68 @@ export async function redactPerson(
   if (before.passportNumber)       clearedIdTypes.push('passport');
   if (before.driversLicenseNumber) clearedIdTypes.push('drivers_license');
 
-  const [updated] = await db
-    .update(persons)
-    .set({
-      // Tombstone marker
-      redactedAt: new Date(),
+  // Atomicity: the identity blank-out AND the credential-wallet scrub must commit
+  // together. Two separate statements could leave a tombstoned person with live
+  // PII credentials if the second failed — so both run in ONE transaction.
+  // Audit/events run AFTER commit (the house pattern), so they aren't rolled back.
+  const { updated, credentialsDeleted } = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .update(persons)
+      .set({
+        // Tombstone marker
+        redactedAt: new Date(),
 
-      // Clear identity — firstName/lastName are NOT NULL so use placeholder
-      firstName:   '[redacted]',
-      lastName:    '[redacted]',
-      middleName:  null,
-      suffix:      null,
-      dateOfBirth: null,
-      sex:         null,
+        // Clear identity — firstName/lastName are NOT NULL so use placeholder
+        firstName:   '[redacted]',
+        lastName:    '[redacted]',
+        middleName:  null,
+        suffix:      null,
+        dateOfBirth: null,
+        sex:         null,
 
-      // Clear all IDs — unique slots vacated; PII is truly removed (not parked)
-      philsysNumber:        null,
-      sssNumber:            null,
-      tinNumber:            null,
-      philhealthNumber:     null,
-      pagibigNumber:        null,
-      umidNumber:           null,
-      passportNumber:       null,
-      driversLicenseNumber: null,
+        // Clear all IDs — unique slots vacated; PII is truly removed (not parked)
+        philsysNumber:        null,
+        sssNumber:            null,
+        tinNumber:            null,
+        philhealthNumber:     null,
+        pagibigNumber:        null,
+        umidNumber:           null,
+        passportNumber:       null,
+        driversLicenseNumber: null,
 
-      // Reset anchor type
-      anchorIdType: 'none',
+        // Reset anchor type
+        anchorIdType: 'none',
 
-      // Clear address / contact
-      addressLine1: null,
-      addressLine2: null,
-      city:         null,
-      province:     null,
-      postalCode:   null,
-      phone:        null,
-      email:        null,
+        // Clear address / contact
+        addressLine1: null,
+        addressLine2: null,
+        city:         null,
+        province:     null,
+        postalCode:   null,
+        phone:        null,
+        email:        null,
 
-      // quarantinedIds is for the dedup backfill case only — null it so we
-      // don't accidentally surface PII through findPersonByAnyId after redaction.
-      quarantinedIds: null,
+        // quarantinedIds is for the dedup backfill case only — null it so we
+        // don't accidentally surface PII through findPersonByAnyId after redaction.
+        quarantinedIds: null,
 
-      updatedAt: new Date(),
-    })
-    .where(eq(persons.id, id))
-    .returning();
-  if (!updated) throw new Error(`[persons/redactPerson] update returned no row for ${id}`);
+        updatedAt: new Date(),
+      })
+      .where(eq(persons.id, id))
+      .returning();
+    if (!row) throw new Error(`[persons/redactPerson] update returned no row for ${id}`);
+
+    // Slice 3b: the credential wallet holds PII too (licence numbers, notes such as
+    // an assigned firearm). Redaction must scrub it — delete the rows outright.
+    // The audit history of those credentials lives in `audit_log`, not here, so it
+    // survives.
+    const del = await tx
+      .delete(personCredentials)
+      .where(eq(personCredentials.personId, id))
+      .returning({ id: personCredentials.id });
+
+    return { updated: row, credentialsDeleted: del.length };
+  });
 
   await audit.record({
     actor:   actorUserId ?? null,
@@ -524,9 +595,197 @@ export async function redactPerson(
       previousAnchorIdType: before.anchorIdType,
       // Types only — actual values are NOT logged (would re-leak PII).
       clearedIdTypes,
+      credentialsDeleted,
     },
   });
   await events.publish('person.redacted', { id });
 
   return updated;
+}
+
+// ─── Credentials wallet (Slice 3b — ADR 0018) ───────────────────────────────────
+//
+// Credentials are owned by a Person; every mutation is audited against the
+// Person (the aggregate root) with a `person.credential.*` action so a person's
+// full history — identity edits AND credential changes — reads as one trail.
+
+export type AddCredentialInput = {
+  personId:    string;
+  credType:    CredType;
+  credNumber?: string | null;
+  issuingBody?: string | null;
+  issuedOn?:   string | null;
+  expiresOn?:  string | null;
+  status?:     CredStatus;          // defaults to 'valid'
+  verifiedByUserId?: string | null;
+  verifiedOn?: string | null;
+  notes?:      string | null;
+  actorUserId?: string | null;
+};
+
+/**
+ * Options for `addCredential`. Pass `{ tx }` to run the insert inside an existing
+ * transaction. Note: `hireApplicant` deliberately does NOT pass one — its
+ * carry-forward of verified clearances is best-effort (a copy hiccup never fails
+ * the hire), so the inserts are intentionally non-atomic. Audit/events use their
+ * own handle (as elsewhere).
+ */
+export type AddCredentialOptions = {
+  tx?: DbOrTx;
+};
+
+/**
+ * Adds a credential to a Person's wallet and returns the created row.
+ * `status` defaults to 'valid'. Records a `person.credential.added` audit row.
+ */
+export async function addCredential(
+  input: AddCredentialInput,
+  opts?: AddCredentialOptions,
+): Promise<PersonCredential> {
+  const executor: DbOrTx = opts?.tx ?? getDb();
+
+  const values = {
+    personId:         input.personId,
+    credType:         input.credType,
+    credNumber:       input.credNumber ?? null,
+    issuingBody:      input.issuingBody ?? null,
+    issuedOn:         input.issuedOn ?? null,
+    expiresOn:        input.expiresOn ?? null,
+    status:           input.status ?? 'valid',
+    verifiedByUserId: input.verifiedByUserId ?? null,
+    verifiedOn:       input.verifiedOn ?? null,
+    notes:            input.notes ?? null,
+  };
+
+  const [created] = await executor.insert(personCredentials).values(values).returning();
+  if (!created) throw new Error('[persons/addCredential] insert returned no row');
+
+  await audit.record({
+    actor:   input.actorUserId ?? null,
+    action:  'person.credential.added',
+    target:  { kind: 'person', id: input.personId },
+    payload: {
+      credId:    created.id,
+      credType:  created.credType,
+      status:    created.status,
+      expiresOn: created.expiresOn,
+    },
+  });
+  await events.publish('person.credential.added', { personId: input.personId, credId: created.id });
+
+  return created;
+}
+
+// ─── updateCredential ─────────────────────────────────────────────────────────
+
+type UpdateCredentialPatch = Partial<
+  Omit<PersonCredential, 'id' | 'personId' | 'createdAt' | 'updatedAt'>
+>;
+
+/**
+ * Options for `updateCredential`. Pass `{ expectedPersonId }` to scope the edit
+ * to a known owner — the call is refused (as not-found, to avoid leaking
+ * existence) if the credential belongs to anyone else. The employee detail
+ * action uses this so a request can't edit an unrelated person's credential by id.
+ */
+export type UpdateCredentialOptions = {
+  expectedPersonId?: string;
+};
+
+/**
+ * Updates a credential and returns the updated row. Records the changed fields
+ * in a `person.credential.updated` audit row (targeted at the owning Person).
+ * Throws a plain-language error if the credential does not exist (or, when
+ * `expectedPersonId` is given, does not belong to that person).
+ */
+export async function updateCredential(
+  id: string,
+  patch: UpdateCredentialPatch,
+  actorUserId?: string | null,
+  opts?: UpdateCredentialOptions,
+): Promise<PersonCredential> {
+  const db = getDb();
+
+  const [before] = await db.select().from(personCredentials).where(eq(personCredentials.id, id));
+  if (!before) throw new Error(`Credential not found — no credential with id ${id}.`);
+
+  // Ownership scope: a credential id that belongs to a different person is
+  // reported as not-found (same message — don't leak that the id exists).
+  if (opts?.expectedPersonId && before.personId !== opts.expectedPersonId) {
+    throw new Error(`Credential not found — no credential with id ${id}.`);
+  }
+
+  // personId / id / timestamps are not caller-editable.
+  const IMMUTABLE = ['id', 'personId', 'createdAt'] as const;
+  const safePatch = { ...patch } as Record<string, unknown>;
+  for (const field of IMMUTABLE) delete safePatch[field];
+
+  // When a credential becomes 'valid' by human assertion through this edit,
+  // record the actor as its verifier — mirroring addCredential, which the edit
+  // path previously skipped. Never overwrite an existing verifier (a re-save of
+  // an already-verified credential keeps its original provenance).
+  if (safePatch.status === 'valid' && !before.verifiedByUserId && actorUserId) {
+    safePatch.verifiedByUserId = actorUserId;
+    safePatch.verifiedOn = todayIso();
+  }
+
+  const [updated] = await db
+    .update(personCredentials)
+    .set({ ...safePatch, updatedAt: new Date() })
+    .where(eq(personCredentials.id, id))
+    .returning();
+  if (!updated) throw new Error(`[persons/updateCredential] update returned no row for ${id}`);
+
+  const changedFields = Object.keys(safePatch).filter(
+    (k) => (before as Record<string, unknown>)[k] !== (updated as Record<string, unknown>)[k],
+  );
+
+  await audit.record({
+    actor:   actorUserId ?? null,
+    action:  'person.credential.updated',
+    target:  { kind: 'person', id: updated.personId },
+    payload: {
+      credId:   id,
+      credType: updated.credType,
+      changedFields,
+      // Keep the audit-safe detail (status, expiry, verifier); everything else
+      // (credential number, free-text notes, any future column) is masked so PII
+      // can't outlive redaction in the append-only log.
+      ...maskedDiff(changedFields, before as Record<string, unknown>, updated as Record<string, unknown>, CREDENTIAL_AUDIT_SAFE_FIELDS),
+    },
+  });
+  await events.publish('person.credential.updated', { personId: updated.personId, credId: id, changedFields });
+
+  return updated;
+}
+
+// ─── listCredentials ──────────────────────────────────────────────────────────
+
+/**
+ * Returns a Person's credentials, ordered by type then soonest expiry (NULL
+ * expiries last). The display layer derives Valid/Expiring/Expired/etc. via
+ * `deriveCredState` (labels.ts) — this is a plain read, no state computed here.
+ */
+export async function listCredentials(personId: string): Promise<PersonCredential[]> {
+  const db = getDb();
+  return db
+    .select()
+    .from(personCredentials)
+    .where(eq(personCredentials.personId, personId))
+    .orderBy(personCredentials.credType, sql`${personCredentials.expiresOn} ASC NULLS LAST`);
+}
+
+/**
+ * Batch read: every credential for the given persons, in ONE query. Used by the
+ * readiness radar (hr.listReadinessIssues) to avoid an N+1 over thousands of guards.
+ * Returns `[]` for an empty input rather than issuing a degenerate `IN ()` query.
+ * The caller groups by `personId`.
+ */
+export async function listCredentialsForPersons(personIds: string[]): Promise<PersonCredential[]> {
+  if (personIds.length === 0) return [];
+  const db = getDb();
+  return db
+    .select()
+    .from(personCredentials)
+    .where(inArray(personCredentials.personId, personIds));
 }

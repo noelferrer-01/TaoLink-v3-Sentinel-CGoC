@@ -4,15 +4,19 @@
  * This file re-exports only what other modules and pages should import.
  * Do NOT import from persons/schema.ts or persons/labels.ts directly outside
  * this module — always go through persons/index.ts.
- *
- * Service functions (createPerson, assertAnchored, findPersonByAnyId, etc.)
- * will be added in Task 2 (persons/service.ts) and re-exported here.
  */
 
 // ─── Schema types ─────────────────────────────────────────────────────────────
 
-export type { Person, NewPerson } from './schema';
-export { persons, personSex, personAnchorIdType } from './schema';
+export type { Person, NewPerson, PersonCredential, NewPersonCredential } from './schema';
+export {
+  persons,
+  personSex,
+  personAnchorIdType,
+  personCredentials,
+  personCredType,
+  personCredStatus,
+} from './schema';
 
 // ─── Labels + helpers ─────────────────────────────────────────────────────────
 
@@ -23,6 +27,15 @@ export {
   checkIdFormat,
   type AnchorIdType,
   type AnchorIdTypeNonNone,
+  // Credentials (Slice 3b)
+  CRED_TYPE_LABELS,
+  CRED_STATUS_LABELS,
+  CRED_WINDOW_DAYS,
+  deriveCredState,
+  READINESS_CRED_SET,
+  type CredType,
+  type CredStatus,
+  type CredState,
 } from './labels';
 
 // ─── Service functions ────────────────────────────────────────────────────────
@@ -37,6 +50,14 @@ export {
   redactPerson,
   type CreatePersonInput,
   type CreatePersonOptions,
+  // Credentials (Slice 3b)
+  addCredential,
+  updateCredential,
+  listCredentials,
+  listCredentialsForPersons,
+  type AddCredentialInput,
+  type AddCredentialOptions,
+  type UpdateCredentialOptions,
 } from './service';
 
 // ─── Name-search primitives (shared by hr + recruitment) ───────────────────────

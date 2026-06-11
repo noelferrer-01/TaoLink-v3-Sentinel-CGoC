@@ -14,8 +14,9 @@ const sections: { heading: string; items: NavItem[] }[] = [
   {
     heading: 'Recruitment',
     items: [
-      { href: '/recruitment',           label: 'Applicants', icon: '🧾' },
-      { href: '/recruitment/blacklist', label: 'Blacklist',  icon: '🚫' },
+      { href: '/recruitment',           label: 'Applicants',       icon: '🧾' },
+      { href: '/recruitment/readiness', label: 'Licence readiness', icon: '🪪' },
+      { href: '/recruitment/blacklist', label: 'Blacklist',        icon: '🚫' },
     ],
   },
   {

@@ -6,6 +6,7 @@
  */
 
 import type { Applicant, ApplicantDocument } from './schema';
+import type { CredType } from '@/modules/persons';
 
 export type Stage = Applicant['pipelineStage'];
 export type Source = Applicant['source'];
@@ -106,3 +107,30 @@ const BASE_REQUIRED_DOCS: readonly DocType[] = [
 export function requiredDocsFor(isArmedPost: boolean): readonly DocType[] {
   return isArmedPost ? [...BASE_REQUIRED_DOCS, 'ltopf_license'] : BASE_REQUIRED_DOCS;
 }
+
+// ─── Hire → credential carry-forward (Slice 3b) ────────────────────────────────
+// (The licence-readiness radar's ReadinessKind/labels live in modules/hr — see
+//  the move note in recruitment/service.ts. The doc→credential map stays here
+//  because hire — which owns it — is recruitment's job.)
+
+/**
+ * Maps an applicant document type to the Person credential it becomes at hire
+ * (ADR 0018). Credential spellings are identical to the doc-type spellings, so
+ * this is near-identity — but it is written out EXHAUSTIVELY (Record<DocType,…>)
+ * so adding a doc type forces a decision here and the doc→credential carry-
+ * forward can't silently drop one. `resume_biodata` and `other` are documents,
+ * not credentials, and map to null. Round-trip tested in recruitment.test.ts.
+ */
+export const DOC_TO_CRED_TYPE: Record<DocType, CredType | null> = {
+  nbi_clearance:         'nbi_clearance',
+  police_pnp_clearance:  'police_pnp_clearance',
+  barangay_clearance:    'barangay_clearance',
+  drug_test:             'drug_test',
+  medical_exam:          'medical_exam',
+  neuro_psych:           'neuro_psych',
+  training_cert_sbr_rtc: 'training_cert_sbr_rtc',
+  sosia_license:         'sosia_license',
+  ltopf_license:         'ltopf_license',
+  resume_biodata:        null,   // a hiring document, not a credential
+  other:                 null,   // not a credential
+};

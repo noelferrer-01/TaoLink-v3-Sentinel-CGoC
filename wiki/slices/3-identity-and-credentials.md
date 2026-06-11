@@ -123,7 +123,7 @@ Not a generic party model ([0017](../decisions/0017-person-centric-identity.md) 
   - **GIN trigram index** `persons_fullname_trgm` on `(first_name || ' ' || last_name)` (pg_trgm already enabled, migration 0009).
 - **`person_credentials`** (3b) — see [ADR 0018](../decisions/0018-credentials-first-class.md): `personId`, `credType` (literal recruitment doc-type enum incl. `police_pnp_clearance`), `credNumber`, `issuingBody`, `issuedOn`, `expiresOn`, `status` (`valid`/`expired`/`pending`/`revoked`), `verifiedByUserId`, `verifiedOn`, `notes`.
 - **`labels.ts`** — `ANCHOR_ID_LABELS`, `ID_TYPE_LADDER`, `validateIdFormat` (**advisory** — strip separators, plausible-length per type, returns a *warning* the UI can override; legacy grandfathered), `normalizeNameKey`, `CRED_TYPE_LABELS`, `deriveCredState(expiresOn, status, today, window)` → `valid|expiring|expired|revoked|pending` (**`revoked` kept distinct**), `READINESS_CRED_SET(isArmedPost)` (licences/clearances only — **not** the document checklist; excludes `resume_biodata`).
-- **Public API:** `createPerson` (accepts `none`), `assertAnchored` (throws only used at hire), `getPerson`, `findPersonByAnyId`, `findPossibleDuplicates`, `updatePerson` (the only identity-edit path; refuses to edit a `redactedAt` person's identity), `redactPerson` (tombstone mechanism), `addCredential`/`updateCredential`/`listCredentials` (3b), `listReadinessIssues` (3b).
+- **Public API:** `createPerson` (accepts `none`), `assertAnchored` (throws only used at hire), `getPerson`, `findPersonByAnyId`, `findPossibleDuplicates`, `updatePerson` (the only identity-edit path; refuses to edit a `redactedAt` person's identity), `redactPerson` (tombstone mechanism; **3b: also deletes the person's credentials — licence numbers are PII**), `addCredential`/`updateCredential`/`listCredentials`/`listCredentialsForPersons` (3b). **`listReadinessIssues` is NOT here — it lives in `hr`** (readiness joins employees + credentials; persons imports nothing downstream — moved there in the 3b pressure test; see [3b done-sweep §4](3b-credentials-and-readiness-done-sweep.md)).
 - **`hr.getEmployeeWithIdentity(id)` / `…Page`** — employee ⋈ person accessor (the single read path for identity).
 
 ### 5b. `modules/hr/` changes (3a)
@@ -156,7 +156,7 @@ Not a generic party model ([0017](../decisions/0017-person-centric-identity.md) 
 | `recruitment.hireApplicant` | `persons.assertAnchored` + `hr.createEmployee({personId})` + `persons.addCredential` | hard ID gate; link Person; (3b) carry clearances |
 | compliance/payroll/assignment/exports readers | `hr.getEmployeeWithIdentity` | single-source identity, no stale copy |
 | `hr.updateEmployee` (identity) | `persons.updatePerson` | only identity-edit path |
-| `recruitment/readiness` | `persons.listReadinessIssues` | missing + expiring required credentials |
+| `recruitment/readiness` (page) | `hr.listReadinessIssues` | missing + expiring required credentials (service lives in hr — employees ⋈ credentials; moved from the originally-planned persons in the 3b pressure test) |
 
 ---
 

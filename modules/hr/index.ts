@@ -13,6 +13,7 @@ import {
   updateEmployee,
   searchEmployees,
   generateNextEmployeeCode,
+  listReadinessIssues,
   IDENTITY_FIELDS,
 } from './service';
 
@@ -32,15 +33,20 @@ export type {
   ListEmployeesPageResult,
   GetEmployeesWithIdentityPageOptions,
   GetEmployeesWithIdentityPageResult,
+  ReadinessIssue,
+  ReadinessQuery,
 } from './service';
 export {
   STATUS_LABELS,
   EMPLOYMENT_TYPE_LABELS,
   PAY_FREQUENCY_LABELS,
   ALLOWED_TRANSITIONS,
+  READINESS_KIND_LABELS,
+  FIREARM_LINK_UNVERIFIED_LABEL,
   type Status,
   type EmploymentType,
   type PayFrequency,
+  type ReadinessKind,
 } from './labels';
 
 export const hr = {
@@ -58,6 +64,7 @@ export const hr = {
   updateEmployee,
   searchEmployees,
   generateNextEmployeeCode,
+  listReadinessIssues,
 };
 export {
   createEmployee,
@@ -74,5 +81,6 @@ export {
   updateEmployee,
   searchEmployees,
   generateNextEmployeeCode,
+  listReadinessIssues,
   IDENTITY_FIELDS,
 };

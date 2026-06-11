@@ -11,10 +11,14 @@
  * Build plan: wiki/slices/3a-person-identity-plan.md Task 1, Step 3
  */
 
-import type { personAnchorIdType } from './schema';
+import type { personAnchorIdType, personCredType, personCredStatus } from './schema';
 
 // Re-export as a plain type alias so callers don't need to import from schema.
 export type AnchorIdType = typeof personAnchorIdType.enumValues[number];
+
+// Credential type aliases (Slice 3b) — same pattern: callers import from here.
+export type CredType   = typeof personCredType.enumValues[number];
+export type CredStatus = typeof personCredStatus.enumValues[number];
 
 // ─── Labels ────────────────────────────────────────────────────────────────────
 
@@ -115,3 +119,98 @@ export function checkIdFormat(type: AnchorIdType, raw: string): string | null {
   const label = ANCHOR_ID_LABELS[type] ?? type.toUpperCase();
   return `That ${label} number looks unusual — double-check it. You can still save it.`;
 }
+
+// ─── Credentials (Slice 3b — ADR 0018) ─────────────────────────────────────────
+
+/**
+ * Human-readable names for each credential type. Spellings mirror the
+ * recruitment doc-type labels (DOC_TYPE_LABELS) so the same clearance reads
+ * identically on the applicant document checklist and the employee wallet.
+ */
+export const CRED_TYPE_LABELS: Record<CredType, string> = {
+  nbi_clearance:         'NBI clearance',
+  police_pnp_clearance:  'PNP / police clearance',
+  barangay_clearance:    'Barangay clearance',
+  drug_test:             'Drug test',
+  medical_exam:          'Medical exam',
+  neuro_psych:           'Neuro-psychological exam',
+  training_cert_sbr_rtc: 'Security training cert (SBR/RTC)',
+  sosia_license:         'SOSIA license',
+  ltopf_license:         'LTOPF license (firearms)',
+};
+
+/** Human-readable names for the stored credential status. */
+export const CRED_STATUS_LABELS: Record<CredStatus, string> = {
+  valid:   'Valid',
+  expired: 'Expired',
+  pending: 'Pending',
+  revoked: 'Revoked',
+};
+
+/**
+ * The derived DISPLAY state of a credential. Layers `expiring` (a still-valid
+ * licence inside its renewal window) on top of the four stored statuses.
+ * `revoked` is kept distinct from `expired` — never collapse the two.
+ */
+export type CredState = 'valid' | 'expiring' | 'expired' | 'revoked' | 'pending';
+
+/**
+ * Derives the display state from a credential's expiry + stored status.
+ *
+ *   revoked / expired / pending → pass through (the stored status is authoritative;
+ *                       a blank or stale future date must NOT mask an explicit lapse)
+ *   no expiry          → valid (e.g. a one-off clearance with no lapse date)
+ *   expiry in the past → expired
+ *   expiry within window (inclusive of today) → expiring
+ *   otherwise          → valid
+ *
+ * `today` and `expiresOn` are ISO `YYYY-MM-DD` strings (date columns). The
+ * string `<` compares lexicographically, which is correct for zero-padded ISO
+ * dates; the window check uses millisecond math on UTC-midnight parses.
+ */
+export function deriveCredState(
+  expiresOn: string | null,
+  status: string,
+  today: string,
+  windowDays = 60,
+): CredState {
+  if (status === 'revoked') return 'revoked';   // kept DISTINCT from expired
+  if (status === 'expired') return 'expired';   // explicit lapse — never let a null/future date read as valid
+  if (status === 'pending') return 'pending';
+  if (!expiresOn) return 'valid';
+  if (expiresOn < today) return 'expired';
+  return (Date.parse(expiresOn) - Date.parse(today)) <= windowDays * 86_400_000 ? 'expiring' : 'valid';
+}
+
+/**
+ * The required CREDENTIAL set for readiness — licences/clearances only. This is
+ * deliberately NOT the applicant document checklist (`requiredDocsFor` in
+ * recruitment/labels.ts), which includes `resume_biodata`; a résumé is a hiring
+ * document, not a credential a guard must keep current. Armed posts additionally
+ * require a firearms licence (LTOPF).
+ */
+export const READINESS_CRED_SET = (isArmedPost: boolean): readonly CredType[] => {
+  const base: readonly CredType[] = [
+    'nbi_clearance',
+    'police_pnp_clearance',
+    'barangay_clearance',
+    'drug_test',
+    'medical_exam',
+    'neuro_psych',
+    'training_cert_sbr_rtc',
+    'sosia_license',
+  ];
+  return isArmedPost ? [...base, 'ltopf_license'] : base;
+};
+
+/**
+ * Per-credential renewal windows (days) for the readiness radar — not one size.
+ * A firearms licence needs a longer lead time to renew than a drug test. Types
+ * absent here fall back to the caller's default window.
+ */
+export const CRED_WINDOW_DAYS: Partial<Record<CredType, number>> = {
+  ltopf_license: 90,
+  sosia_license: 90,
+  nbi_clearance: 60,
+  drug_test:     30,
+};

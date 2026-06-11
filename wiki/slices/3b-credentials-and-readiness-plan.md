@@ -9,13 +9,18 @@
 
 **Tech Stack:** as 3a.
 
+> **Deltas folded in after the backlog sweep (2026-06-11), confirmed against shipped code:**
+> 1. **Migration is `0026`, not `0025`** — `0025` was consumed by the T12b legacy-column drop. `person_credentials` is a plain additive `CREATE TABLE`; no destructive gating / abort-test needed (unlike 0025).
+> 2. **`credType` enum holds only the 9 credential-bearing doc-type spellings** (`nbi_clearance`, `police_pnp_clearance`, `barangay_clearance`, `drug_test`, `medical_exam`, `neuro_psych`, `training_cert_sbr_rtc`, `sosia_license`, `ltopf_license`) — **excludes `resume_biodata` and `other`** (not credentials). The doc→cred map in hire (T4) covers all `recruitmentDocType` values but skips those two; the round-trip test guards against a silent gap.
+> 3. **`employees.isArmedPost` is nullable** in the shipped schema (design assumed always-set). Readiness treats `null` as **unarmed** (`isArmedPost ?? false`) so a legacy guard with no post-type isn't wrongly flagged for LTOPF.
+
 ---
 
-### Task 1: `person_credentials` schema + credential labels (migration 0025)
+### Task 1: `person_credentials` schema + credential labels (migration 0026)
 
-**Files:** Modify `modules/persons/schema.ts`, `modules/persons/labels.ts`; migration `0025_person_credentials.sql`.
+**Files:** Modify `modules/persons/schema.ts`, `modules/persons/labels.ts`; migration `0026_person_credentials.sql`.
 
-- [ ] **Step 1:** `person_credentials` per [contract §5a / ADR 0018](../decisions/0018-credentials-first-class.md): `personId → persons (cascade)`, `credType` enum **using the literal recruitment doc-type spellings incl. `police_pnp_clearance`** (so the doc→cred map can't silently drop a type), `credNumber`, `issuingBody`, `issuedOn`, `expiresOn`, `status` enum (`valid`/`expired`/`pending`/`revoked`), `verifiedByUserId → users (set null)`, `verifiedOn`, `notes`, timestamps.
+- [ ] **Step 1:** `person_credentials` per [contract §5a / ADR 0018](../decisions/0018-credentials-first-class.md): `personId → persons (cascade)`, `credType` enum **using the 9 credential-bearing recruitment doc-type spellings incl. `police_pnp_clearance`** (excludes `resume_biodata`/`other` — see delta 2), `credNumber`, `issuingBody`, `issuedOn`, `expiresOn`, `status` enum (`valid`/`expired`/`pending`/`revoked`), `verifiedByUserId → users (set null)`, `verifiedOn`, `notes`, timestamps. Index `personId` (FK join hot path).
 - [ ] **Step 2:** Add to `labels.ts`: `CRED_TYPE_LABELS`, `CRED_STATUS_LABELS`, and
 ```ts
 export type CredState = 'valid' | 'expiring' | 'expired' | 'revoked' | 'pending';
@@ -49,7 +54,9 @@ export const CRED_WINDOW_DAYS: Partial<Record<CredType, number>> = { ltopf_licen
 
 ### Task 3: `listReadinessIssues` — missing + expiring vs the credential required set
 
-**Files:** Modify `modules/persons/service.ts`, test
+> **Post-build correction (pressure test):** this shipped in **`modules/hr/service.ts`**, not persons — readiness joins hr employees with credentials and persons imports nothing downstream. Selection also fixed to report the *most severe* present state (revoked > expired > pending) rather than the "best", and the user window control was dropped (per-credential windows are authoritative). See [done-sweep §4](3b-credentials-and-readiness-done-sweep.md).
+
+**Files:** Modify `modules/hr/service.ts`, `modules/hr/labels.ts`, test (`modules/hr/hr.test.ts`)
 
 - [ ] **Step 1: Failing tests:**
   - Armed employee (person + `isArmedPost=true`) with **no LTOPF row** → a `missing` issue.

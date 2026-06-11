@@ -22,19 +22,26 @@ Import from `@/modules/recruitment` (the `recruitment` object or named exports).
 | `rejectApplicant` / `withdrawApplicant` | `(id, reason, opts?) => Promise<Applicant>` | Terminal; records `outcomeReason`. |
 | `checkMatches` | `({ personId, firstName, lastName, dateOfBirth?, sssNumber?, philsysNumber?, tinNumber?, excludeApplicantId? }) => Promise<Match[]>` | Cross-checks a candidate against everyone on file before save/hire. Exact channels: same `personId`; government-ID hit (SSS/PhilSys/TIN, via `persons`); active employees (`active_employee` — possible double-hire); terminated employees (`terminated_employee`); in-flight applicants (`concurrent_applicant`, terminal stages excluded); active blacklist. Possible channel: fuzzy name+DOB. |
 | `addToBlacklist` / `listBlacklist` / `removeFromBlacklist` | see types | `remove` is a soft deactivate (`active=false`). |
-| `hireApplicant` | `(applicantId, HireMeta) => Promise<Employee>` | **ADR 0009 handoff.** Requires stage `documents` **and an anchored government ID** — calls `persons.assertAnchored(personId)`, which throws if the Person's `anchorIdType` is `'none'`. Then calls `hr.createEmployee` **linking the applicant's existing Person** (no new Person minted), auto-generates `CG-#####` unless overridden, back-links `hiredEmployeeId`, sets stage `hired`. Audits + emits `recruitment.applicant.hired`. |
+| `hireApplicant` | `(applicantId, HireMeta) => Promise<Employee>` | **ADR 0009 handoff.** Requires stage `documents` **and an anchored government ID** — calls `persons.assertAnchored(personId)`, which throws if the Person's `anchorIdType` is `'none'`. Then calls `hr.createEmployee` **linking the applicant's existing Person** (no new Person minted), auto-generates `CG-#####` unless overridden, back-links `hiredEmployeeId`, sets stage `hired`. **Slice 3b:** copies every *verified* applicant document into the Person's credential wallet (`DOC_TO_CRED_TYPE`; `resume_biodata`/`other` are skipped). Audits + emits `recruitment.applicant.hired`. |
+> The licence **readiness radar** (`listReadinessIssues`) is NOT here — it moved to
+> **`hr`** in the 3b pressure test (it's an employee concern: employees ⋈ credentials).
+> Recruitment keeps the hire **carry-forward**, which is its job.
 
 Labels/constants also exported: `STAGE_LABELS`, `SOURCE_LABELS`, `DOC_TYPE_LABELS`,
 `DOC_STATUS_LABELS`, `ALLOWED_TRANSITIONS`, `requiredDocsFor(isArmedPost)`,
-`MATCH_KIND_LABELS` + the `MatchKind` type.
+`MATCH_KIND_LABELS` + the `MatchKind` type. Slice 3b: `DOC_TO_CRED_TYPE`
+(exhaustive doc→credential map for the hire carry-forward, round-trip tested).
 
 ## Dependencies
 
 - `@/core/db` — Drizzle handle (`getDb`).
 - `@/modules/persons` — `createPerson`, `assertAnchored`, `getPerson`,
   `findPersonByAnyId`, `findPossibleDuplicates` (identity minting, the hire gate,
-  and the known-person / duplicate lookups behind intake).
+  and the known-person / duplicate lookups behind intake); Slice 3b adds
+  `addCredential` (hire carry-forward only).
 - `@/modules/hr` — `createEmployee`, `generateNextEmployeeCode` (the hire handoff).
+  (The readiness radar `hr.listReadinessIssues` lives in hr — recruitment does not
+  call it; the radar page under `/recruitment` imports it directly from hr.)
 - `@/modules/audit` — `audit.record` (note: arg is `actor`, not `actorUserId`).
 - `@/modules/events` — `events.publish`.
 - Tables: `recruitment_applicants` (its `person_id` is a `NOT NULL` FK to `persons`,

@@ -18,11 +18,12 @@ import {
   type ApplicantDocument,
   type BlacklistEntry,
 } from './schema';
-import { ALLOWED_TRANSITIONS, requiredDocsFor, type DocType, type DocStatus, type Stage, type MatchKind } from './labels';
+import { ALLOWED_TRANSITIONS, requiredDocsFor, DOC_TO_CRED_TYPE, type DocType, type DocStatus, type Stage, type MatchKind } from './labels';
 import {
   createPerson, assertAnchored, getPerson, findPersonByAnyId, findPossibleDuplicates,
   persons, type Person, ID_TYPE_LADDER,
   escapeLike, personFullNameMatches, personFullNameSimilarityDesc, withNameSearchThreshold,
+  addCredential,
 } from '@/modules/persons';
 
 // ─── ApplicantIdentity ────────────────────────────────────────────────────────
@@ -166,12 +167,13 @@ export async function createApplicant(input: CreateApplicantInput): Promise<Appl
   }
 
   // Audit + events run after commit — not inside the transaction.
-  // Name comes from the identity input (the role row no longer carries it).
+  // Link to the Person by id only — the name (PII) must not be embedded in the
+  // append-only audit log, where it could outlive that person's redaction.
   await audit.record({
     actor: input.actorUserId ?? null,
     action: 'recruitment.applicant.created',
     target: { kind: 'recruitment_applicant', id: created.id },
-    payload: { name: `${input.firstName.trim()} ${input.lastName.trim()}` },
+    payload: { personId: created.personId },
   });
   await events.publish('recruitment.applicant.created', { id: created.id });
   return created;
@@ -714,6 +716,41 @@ export async function hireApplicant(applicantId: string, meta: HireMeta) {
     .set({ pipelineStage: 'hired', hiredEmployeeId: employee.id, updatedAt: new Date() })
     .where(eq(applicants.id, applicantId));
 
+  // ── Slice 3b: carry the applicant's VERIFIED clearances into the Person's
+  // credential wallet (ADR 0018). Only `verified` documents copy over; the
+  // DOC_TO_CRED_TYPE map skips résumé/other (documents, not credentials).
+  // Credentials hang off the shared personId, so they survive on the employee.
+  //
+  // Resilience, NOT atomicity: the employee + 'hired' marker are already
+  // committed (createEmployee owns its own transaction), so wrapping this loop
+  // in a transaction would risk an orphaned employee + a duplicate on re-hire.
+  // Instead carry-forward is best-effort — a copy hiccup on one clearance never
+  // fails the hire, and any clearance that didn't land simply shows up as
+  // "missing (required)" on the readiness radar, which is self-correcting.
+  const verifiedDocs = await db
+    .select()
+    .from(applicantDocuments)
+    .where(and(eq(applicantDocuments.applicantId, applicantId), eq(applicantDocuments.status, 'verified')));
+
+  for (const doc of verifiedDocs) {
+    const credType = DOC_TO_CRED_TYPE[doc.docType];
+    if (!credType) continue;   // résumé / other — not a credential
+    try {
+      await addCredential({
+        personId:         a.personId,
+        credType,
+        expiresOn:        doc.expiresOn,
+        verifiedByUserId: doc.verifiedByUserId,
+        verifiedOn:       doc.verifiedOn,
+        status:           'valid',   // display state is derived from expiresOn vs today
+        actorUserId:      meta.actorUserId ?? null,
+      });
+    } catch (e) {
+      // One clearance failing to copy must not abort the others or the hire.
+      console.error(`[recruitment/hireApplicant] could not carry ${doc.docType} for ${employeeCode}:`, e);
+    }
+  }
+
   await audit.record({
     actor: meta.actorUserId ?? null,
     action: 'recruitment.applicant.hired',
@@ -723,3 +760,8 @@ export async function hireApplicant(applicantId: string, meta: HireMeta) {
   await events.publish('recruitment.applicant.hired', { id: applicantId, employeeId: employee.id });
   return employee;
 }
+
+// listReadinessIssues moved to modules/hr (Slice 3b pressure-test fix): readiness
+// joins hr employees with person credentials and uses NO recruitment-domain code,
+// so its home is hr (which owns employees and already imports persons). The hire
+// carry-forward above (which IS recruitment's job) keeps DOC_TO_CRED_TYPE here.

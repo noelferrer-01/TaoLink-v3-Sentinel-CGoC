@@ -12,13 +12,17 @@
  * TDD: red → green per function.
  */
 
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { closeDb, getDb } from '@/core/db';
-import { persons } from './schema';
+import { persons, personCredType, personCredStatus } from './schema';
 import {
   checkIdFormat,
   normalizeNameKey,
+  deriveCredState,
+  READINESS_CRED_SET,
+  CRED_TYPE_LABELS,
+  CRED_STATUS_LABELS,
 } from './labels';
 import {
   createPerson,
@@ -28,7 +32,14 @@ import {
   findPossibleDuplicates,
   updatePerson,
   redactPerson,
+  addCredential,
+  updateCredential,
+  listCredentials,
+  listCredentialsForPersons,
 } from './service';
+import { auditLog } from '@/modules/audit/schema';
+import { auth } from '@/modules/auth';
+import { todayIso } from '@/core/dates';
 
 // ─── Cleanup ──────────────────────────────────────────────────────────────────
 
@@ -181,6 +192,101 @@ describe('normalizeNameKey', () => {
     const a = normalizeNameKey('Pedro', 'De Los Reyes', '1985-01-15');
     const b = normalizeNameKey('Pedro', 'Delos Reyes', '1985-01-15');
     expect(a).toBe(b);
+  });
+});
+
+// ─── Unit: deriveCredState (Slice 3b) ─────────────────────────────────────────
+
+describe('deriveCredState', () => {
+  const today = '2026-06-11';
+
+  it('returns revoked when status is revoked, even with a future expiry', () => {
+    expect(deriveCredState('2027-01-01', 'revoked', today)).toBe('revoked');
+  });
+
+  it('keeps revoked DISTINCT from expired (revoked + past expiry → revoked)', () => {
+    // The core 3b rule: a revoked licence is a compliance event, not a lapse.
+    expect(deriveCredState('2020-01-01', 'revoked', today)).toBe('revoked');
+  });
+
+  it('returns pending when status is pending', () => {
+    expect(deriveCredState('2027-01-01', 'pending', today)).toBe('pending');
+  });
+
+  it('honors a stored status=expired even when the expiry date is blank', () => {
+    // Regression: a clerk sets Status=Expired but leaves the date empty. Without
+    // honoring the stored status, the no-expiry branch returned 'valid' and the
+    // credential silently cleared the readiness requirement.
+    expect(deriveCredState(null, 'expired', today)).toBe('expired');
+  });
+
+  it('honors a stored status=expired even when the expiry date is in the future', () => {
+    // An explicitly-expired licence is expired regardless of a stale future date.
+    expect(deriveCredState('2027-01-01', 'expired', today)).toBe('expired');
+  });
+
+  it('returns valid when there is no expiry date', () => {
+    expect(deriveCredState(null, 'valid', today)).toBe('valid');
+  });
+
+  it('returns expired when the expiry date is in the past', () => {
+    expect(deriveCredState('2026-05-01', 'valid', today)).toBe('expired');
+  });
+
+  it('returns expiring when the expiry falls within the window', () => {
+    expect(deriveCredState('2026-07-01', 'valid', today, 60)).toBe('expiring');
+  });
+
+  it('returns valid when the expiry is beyond the window', () => {
+    expect(deriveCredState('2027-01-01', 'valid', today, 60)).toBe('valid');
+  });
+
+  it('treats an expiry exactly today as expiring (not expired)', () => {
+    expect(deriveCredState(today, 'valid', today)).toBe('expiring');
+  });
+
+  it('respects a custom window', () => {
+    // 45 days out: inside a 60-day window (expiring), outside a 30-day window (valid).
+    expect(deriveCredState('2026-07-26', 'valid', today, 60)).toBe('expiring');
+    expect(deriveCredState('2026-07-26', 'valid', today, 30)).toBe('valid');
+  });
+});
+
+// ─── Unit: READINESS_CRED_SET (Slice 3b) ──────────────────────────────────────
+
+describe('READINESS_CRED_SET', () => {
+  it('includes the 8 base clearances for an unarmed post and excludes LTOPF', () => {
+    const set = READINESS_CRED_SET(false);
+    expect(set).toHaveLength(8);
+    expect(set).not.toContain('ltopf_license');
+    expect(set).toContain('sosia_license');
+  });
+
+  it('adds the firearms licence (LTOPF) for an armed post', () => {
+    const set = READINESS_CRED_SET(true);
+    expect(set).toHaveLength(9);
+    expect(set).toContain('ltopf_license');
+  });
+
+  it('never includes resume_biodata (a document, not a credential)', () => {
+    expect(READINESS_CRED_SET(true)).not.toContain('resume_biodata');
+    expect(READINESS_CRED_SET(false)).not.toContain('resume_biodata');
+  });
+});
+
+// ─── Unit: credential label completeness (Slice 3b) ───────────────────────────
+
+describe('credential labels', () => {
+  it('has a non-empty label for every credential type', () => {
+    for (const t of personCredType.enumValues) {
+      expect(CRED_TYPE_LABELS[t], `missing label for credType ${t}`).toBeTruthy();
+    }
+  });
+
+  it('has a non-empty label for every credential status', () => {
+    for (const s of personCredStatus.enumValues) {
+      expect(CRED_STATUS_LABELS[s], `missing label for credStatus ${s}`).toBeTruthy();
+    }
   });
 });
 
@@ -515,6 +621,29 @@ describe('persons service (integration)', () => {
         updatePerson('00000000-0000-0000-0000-000000000000', { firstName: 'Ghost' }),
       ).rejects.toThrow(/not found/i);
     });
+
+    it('records WHICH identity fields changed but never their values (append-only audit is PII-free)', async () => {
+      // The audit log is DB-immutable, so PII can't be scrubbed later — it must
+      // never be written. person.updated records the changed field NAMES only;
+      // the old/new values (names, ID numbers) are not embedded.
+      const p = await createPerson({ firstName: 'Zxqfirst', lastName: 'Zxqlast' });
+      await updatePerson(p.id, { firstName: 'Renamedzz', anchorIdType: 'sss', sssNumber: '34-9999999-1' });
+
+      const rows = await getDb()
+        .select()
+        .from(auditLog)
+        .where(sql`target_kind = 'person' AND target_id = ${p.id} AND action = 'person.updated'`);
+      expect(rows.length).toBe(1);
+      const payload = rows[0]!.payload as { changedFields: string[] };
+      // Accountability is kept — we know which fields a clerk touched...
+      expect(payload.changedFields).toContain('sssNumber');
+      expect(payload.changedFields).toContain('firstName');
+      // ...but none of the actual values are recoverable from the audit log.
+      const blob = JSON.stringify(payload);
+      expect(blob).not.toContain('34-9999999-1');   // ID value
+      expect(blob).not.toContain('Renamedzz');       // new name
+      expect(blob).not.toContain('Zxqfirst');        // old name
+    });
   });
 
   // ─── redactPerson ─────────────────────────────────────────────────────────────
@@ -585,6 +714,259 @@ describe('persons service (integration)', () => {
       // findPersonByAnyId also returns null — PII is truly gone.
       const found = await findPersonByAnyId('sss', '55-9876543-1');
       expect(found).toBeNull();
+    });
+  });
+});
+
+// ─── Integration: credentials wallet (Slice 3b) ───────────────────────────────
+
+describe('credentials service (integration)', () => {
+  beforeEach(cleanup);
+  afterAll(async () => {
+    await cleanup();
+    await closeDb();
+  });
+
+  // Real users for the verifier FK (person_credentials.verified_by_user_id).
+  // Unique-per-run emails; left in the test DB (harmless), the way auth/approvals
+  // tests do. `cleanup` truncates persons CASCADE, which leaves users untouched.
+  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  let verifierId: string;
+  let editorId: string;
+  beforeAll(async () => {
+    verifierId = (await auth.createUser({ email: `creds-verifier-${stamp}@sentinel.test`, password: 'temp-pw-not-used-1234567890' })).id;
+    editorId   = (await auth.createUser({ email: `creds-editor-${stamp}@sentinel.test`,   password: 'temp-pw-not-used-1234567890' })).id;
+  });
+
+  async function makePerson() {
+    return createPerson({
+      firstName: 'Juan',
+      lastName: 'Dela Cruz',
+      dateOfBirth: '1990-04-02',
+    });
+  }
+
+  describe('addCredential', () => {
+    it('inserts a credential and returns the full row', async () => {
+      const p = await makePerson();
+      const cred = await addCredential({
+        personId:   p.id,
+        credType:   'sosia_license',
+        credNumber: 'SG-2024-887',
+        expiresOn:  '2027-02-01',
+      });
+
+      expect(cred.id).toBeTruthy();
+      expect(cred.personId).toBe(p.id);
+      expect(cred.credType).toBe('sosia_license');
+      expect(cred.credNumber).toBe('SG-2024-887');
+      expect(cred.expiresOn).toBe('2027-02-01');
+    });
+
+    it('defaults status to valid when not provided', async () => {
+      const p = await makePerson();
+      const cred = await addCredential({ personId: p.id, credType: 'nbi_clearance' });
+      expect(cred.status).toBe('valid');
+    });
+
+    it('records a person.credential.added audit row targeting the person', async () => {
+      const p = await makePerson();
+      const cred = await addCredential({ personId: p.id, credType: 'ltopf_license', credNumber: 'LT-99102' });
+
+      const rows = await getDb()
+        .select()
+        .from(auditLog)
+        .where(sql`target_kind = 'person' AND target_id = ${p.id} AND action = 'person.credential.added'`);
+      expect(rows.length).toBe(1);
+      const payload = rows[0]!.payload as { credId: string; credType: string };
+      expect(payload.credId).toBe(cred.id);
+      expect(payload.credType).toBe('ltopf_license');
+    });
+  });
+
+  describe('listCredentials', () => {
+    it('returns only the given person’s credentials', async () => {
+      const a = await makePerson();
+      const b = await createPerson({ firstName: 'Maria', lastName: 'Santos', dateOfBirth: '1992-08-08' });
+      await addCredential({ personId: a.id, credType: 'sosia_license' });
+      await addCredential({ personId: a.id, credType: 'nbi_clearance' });
+      await addCredential({ personId: b.id, credType: 'drug_test' });
+
+      const credsA = await listCredentials(a.id);
+      expect(credsA).toHaveLength(2);
+      expect(credsA.every((c) => c.personId === a.id)).toBe(true);
+      expect(credsA.map((c) => c.credType).sort()).toEqual(['nbi_clearance', 'sosia_license']);
+    });
+
+    it('returns an empty array for a person with no credentials', async () => {
+      const p = await makePerson();
+      expect(await listCredentials(p.id)).toEqual([]);
+    });
+  });
+
+  describe('updateCredential', () => {
+    it('updates fields and returns the updated row', async () => {
+      const p = await makePerson();
+      const cred = await addCredential({ personId: p.id, credType: 'sosia_license', expiresOn: '2027-02-01' });
+
+      const updated = await updateCredential(cred.id, { status: 'revoked', notes: 'licence revoked by SOSIA' });
+      expect(updated.id).toBe(cred.id);
+      expect(updated.status).toBe('revoked');
+      expect(updated.notes).toBe('licence revoked by SOSIA');
+      // unchanged fields survive
+      expect(updated.expiresOn).toBe('2027-02-01');
+    });
+
+    it('records a person.credential.updated audit row', async () => {
+      const p = await makePerson();
+      const cred = await addCredential({ personId: p.id, credType: 'nbi_clearance', status: 'valid' });
+      await updateCredential(cred.id, { status: 'expired' });
+
+      const rows = await getDb()
+        .select()
+        .from(auditLog)
+        .where(sql`target_kind = 'person' AND target_id = ${p.id} AND action = 'person.credential.updated'`);
+      expect(rows.length).toBe(1);
+      const payload = rows[0]!.payload as { credId: string; changedFields: string[] };
+      expect(payload.credId).toBe(cred.id);
+      expect(payload.changedFields).toContain('status');
+    });
+
+    it('throws a plain-language error when the credential does not exist', async () => {
+      await expect(
+        updateCredential('00000000-0000-0000-0000-000000000000', { status: 'expired' }),
+      ).rejects.toThrow(/not found/i);
+    });
+
+    it('refuses to update a credential that belongs to a different person (expectedPersonId scope)', async () => {
+      const a = await makePerson();
+      const b = await createPerson({ firstName: 'Other', lastName: 'Person', dateOfBirth: '1991-01-01' });
+      const cred = await addCredential({ personId: a.id, credType: 'sosia_license', status: 'valid' });
+
+      // Scoped to the WRONG person → not-found (no cross-person edit, no existence leak).
+      await expect(
+        updateCredential(cred.id, { status: 'revoked' }, null, { expectedPersonId: b.id }),
+      ).rejects.toThrow(/not found/i);
+
+      // The credential is untouched.
+      expect((await listCredentials(a.id))[0]!.status).toBe('valid');
+
+      // Scoped to the RIGHT person → succeeds.
+      const ok = await updateCredential(cred.id, { status: 'revoked' }, null, { expectedPersonId: a.id });
+      expect(ok.status).toBe('revoked');
+    });
+
+    it('stamps the editing actor as verifier when a credential becomes valid via edit', async () => {
+      const p = await makePerson();
+      const cred = await addCredential({ personId: p.id, credType: 'nbi_clearance', status: 'pending' });
+      expect(cred.verifiedByUserId).toBeNull();
+
+      // A clerk flips Pending → Valid. Mirrors addCredentialAction's "asserting it
+      // valid = you verified it" provenance, which the edit path previously dropped.
+      const updated = await updateCredential(cred.id, { status: 'valid' }, verifierId);
+      expect(updated.status).toBe('valid');
+      expect(updated.verifiedByUserId).toBe(verifierId);
+      expect(updated.verifiedOn).toBe(todayIso());
+    });
+
+    it('preserves the original verifier when an already-valid credential is re-saved', async () => {
+      const p = await makePerson();
+      // Added valid with an explicit original verifier (e.g. recruitment carry-forward).
+      const cred = await addCredential({
+        personId: p.id, credType: 'sosia_license', status: 'valid',
+        verifiedByUserId: verifierId, verifiedOn: '2026-01-01',
+      });
+
+      // A DIFFERENT actor edits the expiry — the original verifier must stand.
+      const updated = await updateCredential(cred.id, { status: 'valid', expiresOn: '2030-01-01' }, editorId);
+      expect(updated.verifiedByUserId).toBe(verifierId);
+      expect(updated.verifiedOn).toBe('2026-01-01');
+    });
+
+    it('masks the credential number and notes in the audit payload but keeps non-PII detail', async () => {
+      const p = await makePerson();
+      const cred = await addCredential({ personId: p.id, credType: 'nbi_clearance', credNumber: 'NBI-OLD-123', status: 'pending' });
+      await updateCredential(cred.id, {
+        credNumber: 'NBI-NEW-7654321',
+        notes:      'assigned firearm M16 #SN-XYZ',
+        status:     'revoked',
+        expiresOn:  '2030-01-01',
+      }, verifierId);
+
+      const rows = await getDb()
+        .select()
+        .from(auditLog)
+        .where(sql`target_kind = 'person' AND target_id = ${p.id} AND action = 'person.credential.updated'`);
+      expect(rows.length).toBe(1);
+      const payload = rows[0]!.payload as { changedFields: string[]; before: Record<string, unknown>; after: Record<string, unknown> };
+      expect(payload.changedFields).toContain('credNumber');
+      // PII values (number + free-text notes) are masked out of the payload...
+      const blob = JSON.stringify(payload);
+      expect(blob).not.toContain('NBI-OLD-123');
+      expect(blob).not.toContain('NBI-NEW-7654321');
+      expect(blob).not.toContain('SN-XYZ');
+      // ...but useful non-PII detail survives for accountability.
+      expect(payload.before.status).toBe('pending');
+      expect(payload.after.status).toBe('revoked');
+      expect(payload.after.expiresOn).toBe('2030-01-01');
+    });
+  });
+
+  describe('redactPerson + credentials', () => {
+    it('deletes the person’s credentials on redaction (licence numbers are PII)', async () => {
+      const p = await makePerson();
+      await addCredential({ personId: p.id, credType: 'sosia_license', credNumber: 'SG-887', notes: 'assigned firearm #12' });
+      await addCredential({ personId: p.id, credType: 'ltopf_license', credNumber: 'LT-99102' });
+      expect(await listCredentials(p.id)).toHaveLength(2);
+
+      await redactPerson(p.id);
+
+      // Wallet is gone — no licence numbers / notes left attached to the tombstone.
+      expect(await listCredentials(p.id)).toEqual([]);
+    });
+
+    it('never embeds personal values in the person’s audit trail (immutable log stays PII-free)', async () => {
+      // The audit log is append-only (DB-enforced), so it can't be scrubbed at
+      // redaction. The guarantee is that PII was NEVER written to it — so after a
+      // full lifecycle + redaction, none of the person's values are recoverable.
+      const p = await makePerson();                                                  // person.created (Juan Dela Cruz)
+      await updatePerson(p.id, { anchorIdType: 'sss', sssNumber: '34-7777777-1' });   // person.updated
+      const cred = await addCredential({ personId: p.id, credType: 'nbi_clearance', credNumber: 'NBI-SECRET-1', notes: 'firearm SN-XYZ' });
+      await updateCredential(cred.id, { credNumber: 'NBI-SECRET-2' }, verifierId);     // person.credential.updated
+      await redactPerson(p.id);
+
+      const rows = await getDb()
+        .select()
+        .from(auditLog)
+        .where(sql`target_kind = 'person' AND target_id = ${p.id}`);
+      const blob = JSON.stringify(rows.map((r) => r.payload));
+      expect(blob).not.toContain('Dela Cruz');     // name
+      expect(blob).not.toContain('Juan');
+      expect(blob).not.toContain('34-7777777-1');  // SSS number
+      expect(blob).not.toContain('NBI-SECRET-1');  // old credential number
+      expect(blob).not.toContain('NBI-SECRET-2');  // new credential number
+      expect(blob).not.toContain('SN-XYZ');        // credential notes
+      // The audit rows themselves still exist — accountability is preserved.
+      expect(rows.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('listCredentialsForPersons', () => {
+    it('returns credentials for all given persons in one call', async () => {
+      const a = await makePerson();
+      const b = await createPerson({ firstName: 'Maria', lastName: 'Santos', dateOfBirth: '1992-08-08' });
+      await addCredential({ personId: a.id, credType: 'sosia_license' });
+      await addCredential({ personId: a.id, credType: 'nbi_clearance' });
+      await addCredential({ personId: b.id, credType: 'drug_test' });
+
+      const all = await listCredentialsForPersons([a.id, b.id]);
+      expect(all).toHaveLength(3);
+      expect(all.filter((c) => c.personId === a.id)).toHaveLength(2);
+      expect(all.filter((c) => c.personId === b.id)).toHaveLength(1);
+    });
+
+    it('returns an empty array when given no person ids', async () => {
+      expect(await listCredentialsForPersons([])).toEqual([]);
     });
   });
 });
