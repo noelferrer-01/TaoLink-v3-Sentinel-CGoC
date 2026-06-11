@@ -21,6 +21,8 @@
 ## Daily logs
 - [daily/2026-05-23.md](daily/2026-05-23.md) — project init, memory + wiki scaffold
 - [daily/2026-05-24.md](daily/2026-05-24.md) — meeting transcripts ingested, ADRs 0001-0016 closed, Slice 0 implemented end-to-end (16/16 tests, manual login round-trip)
+- _(Slices 1, 2, 3/3a/3b have no daily notes — see `../wiki/slices/*-done-sweep.md` for their record)_
+- [daily/2026-06-12.md](daily/2026-06-12.md) — Slice 4 (Billing & SOA) finished (T9 UI → T10 verify → `/go` → PR #4 → cloud review → fixes), **merged to `main`** (`slice-4-done`); HR/compliance review → Slice 5+ roadmap
 
 ## Canonical project brief
 - **`../ref/00-RESUME-POINT.md`** — the canonical handoff brief. Any fresh session reads this first.

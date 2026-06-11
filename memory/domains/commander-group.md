@@ -69,11 +69,12 @@
 - **"Movement like Shopee logistics"** — Noel's vision for guard-tracking UI, explicitly reaffirmed in the transcript.
 
 ## Open questions for Commander Group department heads
-See the full questionnaire at `../../ref/sentinel-docs/sentinel-client-questionnaire.md`. Hard-blocking items before any Phase-0 code:
-- Part A (internal vs licensable → multi-tenancy call)
-- Part D8–10 (applicant vs employee legal moment → lifecycle boundary)
-- Part E7–8 (exhaustive employee statuses and which are paid → guard state machine)
-- Part G1–3 (shift patterns per client → shifts as global table or client config)
-- Part J18 (per-client equipment profiles → inventory data model)
-- Part N (approval thresholds → approvals primitive data model)
-- **Recruitment vs Deployment ownership** (per §1D meeting notes — see `wiki/decisions/0001`)
+Full questionnaire: `../../ref/sentinel-docs/sentinel-client-questionnaire.md`. We are **past Phase 0** (Slices 0–4 shipped) — these are no longer build-blocking (Noel locked the architecture himself) but several still **block correctness** before real guard data:
+- Part D8–10 (applicant vs employee legal moment) — needs the **labor-lawyer consult** (ADR 0004); the highest legal risk.
+- Part E7–8 (exhaustive employee statuses + which are paid → guard state machine).
+- Part C9 (**armed vs unarmed = a pay/billing rate difference?** — currently modeled only as a credential).
+- Part G1–3 (shift patterns per client → drives the unbuilt wage stack: NSD/holiday/rest-day).
+- Billing tax treatment (VAT/EWT scope; wage-passthrough vs blended) + is the **SOA a BIR-registered numbered doc** (Slice 4 left these as placeholders).
+- D.O.150-2016 / SOSIA / FEO reporting scope (frequency, format).
+- Part J18 (per-client equipment profiles → inventory data model, future slice); Part N (approval thresholds).
+- *Resolved since:* Part A (multi-tenancy → single-tenant, ADR 0007); Recruitment-vs-Deployment ownership → Recruitment (ADR 0001).
