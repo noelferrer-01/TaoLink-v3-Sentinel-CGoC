@@ -31,9 +31,15 @@
 - **Salary-history constraints** — DB-level
 - **13th-month disbursements** — labor code mandatory
 
-## Open compliance asks (from /ref/ recommended next steps)
-- One-time **labor lawyer consult** for applicant-pool legal classification (DOLE has hit other agencies for non-payment of guards under contract).
-- **PNP SOSIA / DOLE D.O. 150 / FEO / NTC scope confirmation** with Commander Group's compliance officer — reporting frequency, format, regulator-facing exports.
+## v3 realized state + gap roadmap (2026-06-12)
+**What v3 actually computes today (through Slice 4):** SSS / PhilHealth / Pag-IBIG / BIR-withholding only — i.e. **basic pay + the 4 statutory deductions.** OT is in the formula but hardwired to 0. The full guard **wage stack (NSD, holiday 200%/130%, rest-day premium, 13th-month, SIL) is NOT built** — deferred to the wage-stack slice (v2 did it correctly; rebuild from `ref/`). Government **exports = SSS-R3 + BIR-2316 only** (PhilHealth RF-1, Pag-IBIG MCRF, BIR 1601-C, Alphalist missing). Security-specific strength = the **credential wallet + readiness radar** (SOSIA/LTOPF/clearances, expiry-tracked).
+
+The ranked compliance-gap register + recommended slice sequence is the **standing roadmap**: [`../../wiki/reviews/2026-06-12-hr-operations-compliance-review.md`](../../wiki/reviews/2026-06-12-hr-operations-compliance-review.md). Biggest security-agency exposures it flags as ABSENT: **floating/off-detail 6-month clock** (D.O.150-16 constructive dismissal), **solidary liability** (Art. 106-109) + AR aging, **minimum-wage/regional-wage-order floor**, **cash bond / loans** infra, and the **silent-zero** failure when a rate row is missing.
+
+## Open compliance asks (block correctness, not the build)
+- One-time **labor-lawyer consult** for applicant-pool legal classification (ADR 0004) — DOLE has hit other agencies for non-payment of guards under contract. Highest legal risk.
+- **PNP SOSIA / DOLE D.O. 150 / FEO / NTC scope confirmation** with CGoC's compliance officer — reporting frequency, format, regulator-facing exports.
+- **Billing tax treatment** (VAT/EWT on agency fee vs whole; wage-passthrough vs blended) + **is the SOA a BIR-registered numbered doc** — Slice 4 left these as placeholders.
 
 ## Risks (per /ref/)
 - **Payroll bugs are catastrophic at 10k employees.** Plan for parallel-run periods before cutover.

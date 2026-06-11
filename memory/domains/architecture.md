@@ -1,22 +1,18 @@
 # Architecture — Sentinel
 
-> **Status: PARTIALLY HARDENED.** Resolutions on 2026-05-23 (see [`../../wiki/decisions/`](../../wiki/decisions/) ADRs 0001, 0002, 0003, 0004, 0009, 0010, 0011) have moved several architectural calls from reference to commitment. Remaining items below (stack, DB, multi-tenancy, exact phase order) are still REFERENCE-ONLY pending Noel's calls.
->
-> **Resolved calls so far:**
-> - Recruitment owns assignments + transfers + reshuffles (not Operations/Deployment).
-> - Marketing is a real department; build the full Marketing module.
-> - No relationship to CG's existing partial systems — Sentinel is a parallel fresh build.
-> - Applicant pool is hybrid (relievers paid, new callbacks unpaid).
-> - HR is "starter" (minimal) in Phase 1; Recruitment ships in Phase 2 as the entry point.
-> - Inventory integrates via event bus, standalone-capable.
-> - Operations role pivots to logistics/client-comms/monitoring.
->
-> **Still open:** phase order revision proposal in [`../../wiki/decisions/0012-phase-order-revision.md`](../../wiki/decisions/0012-phase-order-revision.md).
+> **CURRENT STATE (2026-06-12): the realized architecture is the shipped slices, not the prior thinking below.**
+> - **Stack LOCKED:** TypeScript + Next.js (App Router) + Drizzle + Postgres, single-tenant, Docker Compose dev (ADRs 0005–0008). The "Stack OPEN" / "phase order" sections below are **historical** — superseded.
+> - **Build model = vertical slices** (ADR 0013), not the horizontal phase table below. Shipped + merged: Slices 0–4 (see [general.md](../general.md) Status). Realized design lives in [`../../wiki/slices/`](../../wiki/slices/) (contracts + done-sweeps) and each `modules/*/README.md`.
+> - **Module shape that actually shipped:** flat `modules/<feature>/` (one public `index.ts`, `service.ts`, `schema.ts`, `README.md`, tests) per [AGENTS.md](../../AGENTS.md) — NOT the `core/services/tools/agents` layering sketched below (that was pre-build thinking; agents/LangGraph remain a far-future slice).
+> - **What's built vs deferred + the next-slice roadmap:** [`../../wiki/reviews/2026-06-12-hr-operations-compliance-review.md`](../../wiki/reviews/2026-06-12-hr-operations-compliance-review.md).
+> - **Resolved org/process calls (still true):** Recruitment owns assignments/transfers; Marketing is a real dept; no integration with CG's legacy systems; applicant pool hybrid (relievers paid, callbacks unpaid); Operations pivoted to logistics/liaison/monitoring; Inventory event-subscribed. (ADRs 0001–0004, 0009–0011.)
 
-## Stack (OPEN)
-- **Lean A:** TypeScript + Next.js (App Router) + Postgres + Drizzle + custom worker. Continuity with v1/v2.
-- **Option B:** Python + FastAPI/Flask + Postgres + Celery. Better fit for LangGraph agent layer in Phase 10.
-- **Not locked.** See `../general.md` for full list of open calls.
+---
+*Everything below is PRIOR THINKING, kept for traceability. The principles (§Architectural principles) still hold; the Stack-options and Phase-order tables are superseded — see the banner above.*
+
+## Stack (SUPERSEDED — locked to TypeScript, see banner)
+- **Lean A (CHOSEN):** TypeScript + Next.js (App Router) + Postgres + Drizzle + custom worker. Continuity with v1/v2.
+- **Option B (not taken):** Python + FastAPI/Flask + Postgres + Celery.
 
 ## Sentinel layered architecture (prior thinking)
 ```

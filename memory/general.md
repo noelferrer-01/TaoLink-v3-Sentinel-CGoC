@@ -6,15 +6,12 @@
 - **Business / client-doc identity:** SistemaHub. Signatory: Jenefer Ayson — Co-Founder. Contact: jen@sistemahub.com, +63 968 151 0101.
 - **Client:** Commander Group of Companies (Philippine security agency). https://commandergrp.com/Home/
 
-## Status (as of 2026-05-23)
-- **Pre-Phase-0.** No code written. Workspace contains only scaffolding (`AGENTS.md`, `memory/`, `wiki/`, `ref/`).
-- **Hard gates open** (do NOT start Phase 0 code before these are closed):
-  - Client discovery questionnaire (`ref/sentinel-docs/sentinel-client-questionnaire.md`) — ~20 [CRITICAL] items unanswered.
-  - Stack call: TypeScript vs Python — **lean TypeScript**, not locked.
-  - Multi-tenancy: internal vs licensable — open.
-  - Database: MySQL (v1/v2) vs Postgres (recommended) — open.
-  - Hosting: on-prem / cloud / hybrid — open.
-  - Dev environment: Docker vs native (raised 2026-05-23, see daily log) — open.
+## Status (as of 2026-06-12)
+- **Active vertical-slice development; pre-production** (nothing live at CGoC). Building one demo-able vertical slice at a time per [ADR 0013](../wiki/decisions/0013-vertical-slices-over-horizontal-phases.md).
+- **Shipped + merged to `main`:** Slice 0 (auth/audit/approvals/events) · 1 (first payslip: HR + clients/detachments + assignments + DTR + payroll + SSS-R3 + BIR-2316) · 2 (multi-client at scale) · 3 + 3a + 3b (recruitment ATS + person identity spine + credential wallet/readiness radar) · **4 (Billing & SOA — `slice-4-done`, merged 2026-06-12).** Tags: `slice-1-done … slice-4-done`.
+- **Foundational gates — all CLOSED:** stack = **TypeScript/Next.js/Drizzle/Postgres** (ADR 0005/0006); multi-tenancy = **single-tenant** (ADR 0007); dev env = **Docker Compose** (ADR 0008). The client questionnaire moved from blocking → validation (Noel locked most calls himself).
+- **Next target:** Slice 5 = wage-stack engine (complete the guard payslip) + floating-clock; RBAC before real data. See the [HR/compliance roadmap](../wiki/reviews/2026-06-12-hr-operations-compliance-review.md).
+- **Still-open client/legal gates (don't block Slice 5):** 5 "Commander asks" (gov-ID timing, armed/unarmed as a rate dim, billing tax treatment, SOA-as-BIR-doc, D.O.150/SOSIA/FEO reporting scope) + labor-lawyer consult on unpaid cleared-applicants (ADR 0004). See [commander-group.md](domains/commander-group.md).
 
 ## Working-style preferences (Noel)
 - **Modular architecture, always.** Each feature is a self-contained module that can be added/removed without breaking others. (Soul global + AGENTS.md.)
