@@ -593,33 +593,46 @@ export async function markPaid(
   invoiceId: string,
   opts: { actorUserId?: string | null } = {},
 ): Promise<BillingInvoice> {
-  const db = getDb();
+  try {
+    const db = getDb();
 
-  const [inv] = await db
-    .select()
-    .from(billingInvoices)
-    .where(eq(billingInvoices.id, invoiceId))
-    .limit(1);
+    const [inv] = await db
+      .select()
+      .from(billingInvoices)
+      .where(eq(billingInvoices.id, invoiceId))
+      .limit(1);
 
-  if (!inv) {
-    throw new Error(`[billing/markPaid] no invoice ${invoiceId}`);
+    if (!inv) {
+      throw new Error(`[billing/markPaid] no invoice ${invoiceId}`);
+    }
+    if (inv.status !== 'finalized') {
+      throw new Error('[billing/markPaid] finalize the invoice before marking it paid');
+    }
+
+    const [done] = await db
+      .update(billingInvoices)
+      .set({ status: 'paid', paidAt: new Date() })
+      .where(eq(billingInvoices.id, invoiceId))
+      .returning();
+
+    await audit.record({
+      actor: opts.actorUserId ?? null,
+      action: 'billing.invoice.paid',
+      target: { kind: 'billing_invoice', id: invoiceId },
+      payload: { soaNumber: done!.soaNumber },
+    });
+
+    return done!;
+  } catch (err) {
+    // Pass-through our own explicit guard errors (they already carry the correct
+    // prefix and message that test regexes match against).
+    if (err instanceof Error && err.message.startsWith('[billing/markPaid]')) {
+      throw err;
+    }
+    // Wrap unexpected errors with module context.
+    throw new Error(
+      `[billing/markPaid] ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
   }
-  if (inv.status !== 'finalized') {
-    throw new Error('[billing/markPaid] finalize the invoice before marking it paid');
-  }
-
-  const [done] = await db
-    .update(billingInvoices)
-    .set({ status: 'paid', paidAt: new Date() })
-    .where(eq(billingInvoices.id, invoiceId))
-    .returning();
-
-  await audit.record({
-    actor: opts.actorUserId ?? null,
-    action: 'billing.invoice.paid',
-    target: { kind: 'billing_invoice', id: invoiceId },
-    payload: { soaNumber: done!.soaNumber },
-  });
-
-  return done!;
 }
