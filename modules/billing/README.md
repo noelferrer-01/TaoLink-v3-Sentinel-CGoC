@@ -102,6 +102,15 @@ Both the 12% VAT and 2% EWT amounts are computed as simple percentages of the su
 ### Period-wide reconciliation identity
 `reconcilePeriod` checks: for each guard in the period, `Σ billed days (across ALL that period's SOAs) + unattributed days = payslip.daysWorked`. A guard split across two clients contributes to two SOAs; neither SOA alone balances against the payslip — only the period-wide sum does. Do not run `reconcilePeriod` on a partial set of SOAs; run it after all that period's SOAs have been generated.
 
+## App surface
+
+The clerk-facing UI lives outside this module at `app/(admin)/billing/`:
+- `page.tsx` — Statements list + Generate control + period-level Unattributed panel (Re-attach).
+- `[invoiceId]/page.tsx` — the printable per-guard SOA (issuer = **Commander Group**, not SistemaHub; Due = `periodEnd + paymentTermsDays`), with status-gated **Finalize** (draft only) / **Mark paid** (finalized only) / **Print** buttons.
+- `actions.ts` — `'use server'` wrappers that pass `actorUserId` from the session and surface module errors as plain-language inline messages.
+
+Verified end-to-end in a browser walk (Slice 4 T10): set rate → Generate → draft SOA → Finalize (gapless `2026-0001`) → Mark paid → Unattributed surface + Re-attach. See the done-sweep below. Print/Save-PDF uses the browser's `window.print()` with a minimal `@media print` rule in `app/globals.css`; official PDF branding is deferred (contract §7.8/§9).
+
 ---
 
-Cross-references: [`wiki/slices/4-billing-and-soa.md`](../../wiki/slices/4-billing-and-soa.md) (contract + wireframes + design decisions), [`wiki/slices/4-billing-and-soa-plan.md`](../../wiki/slices/4-billing-and-soa-plan.md) (implementation plan).
+Cross-references: [`wiki/slices/4-billing-and-soa.md`](../../wiki/slices/4-billing-and-soa.md) (contract + wireframes + design decisions), [`wiki/slices/4-billing-and-soa-plan.md`](../../wiki/slices/4-billing-and-soa-plan.md) (implementation plan), [`wiki/slices/4-billing-and-soa-done-sweep.md`](../../wiki/slices/4-billing-and-soa-done-sweep.md) (verification + deltas).

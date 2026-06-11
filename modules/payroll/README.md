@@ -31,7 +31,7 @@ Types re-exported from the entry point: `PayRun`, `NewPayRun`, `Payslip`, `NewPa
 - **Other modules:**
   - `@/modules/compliance` — statutory rate lookups (SSS, PhilHealth, Pag-IBIG, BIR WTAX).
   - `@/modules/hr` — employee master (basic salary, pay frequency, status).
-  - `@/modules/dtr` — daily time record entries (days worked per period).
+  - `@/modules/dtr` — daily time record entries (days worked per period) **and** the canonical worked-day status set `WORKED_DTR_STATUSES`. As of Slice 4 this set is DTR-owned (it previously lived as a private `WORKED_STATUSES` const here); payroll imports it so payroll and billing can never disagree on what counts as a worked day. Behaviour is unchanged — same three statuses (`worked`, `holiday_worked`, `restday_worked`).
   - `@/modules/audit` — records every mutation and every per-employee failure to `audit_log`.
   - `@/modules/events` — publishes `payslip.generated`, `payroll.run.completed`, and `payroll.run.locked`; subscribes to `dtr.period.closed`.
   - `@/modules/clients` and `@/modules/assignments` are **indirect** dependencies — DTR rows reference them but payroll does not read those tables directly.
