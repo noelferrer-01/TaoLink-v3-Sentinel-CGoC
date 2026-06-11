@@ -103,28 +103,36 @@ function uniqueViolationMessage(err: unknown): string | null {
 // ONLY. Credentials mix PII (number, notes) with non-PII (status, dates), so the
 // credential payload keeps the useful non-PII values and masks just the PII ones.
 
-/** Credential fields whose value is PII; masked to a presence marker in audit. */
-const CREDENTIAL_PII_FIELDS = new Set<string>(['credNumber', 'notes']);
+/**
+ * Credential fields whose VALUE is safe to keep in the audit log. This is an
+ * ALLOWLIST on purpose — it fails CLOSED: the credential number, free-text notes,
+ * and crucially ANY field added to the schema later are masked unless explicitly
+ * listed here, so a new column can never silently leak PII into the append-only
+ * log. Worst case is a new safe field reads '«set»' until it's added.
+ */
+const CREDENTIAL_AUDIT_SAFE_FIELDS = new Set<string>([
+  'credType', 'status', 'issuedOn', 'expiresOn', 'issuingBody', 'verifiedByUserId', 'verifiedOn',
+]);
 
 /**
- * Builds a before/after audit payload over `changedFields`, replacing the value
- * of any PII field (`piiFields`) with a non-PII presence marker (`null` when
- * empty, `'«set»'` when a value was present). Non-PII fields pass through, so the
- * audit still shows useful detail (e.g. status valid→revoked, an expiry change).
+ * Builds a before/after audit payload over `changedFields`, keeping the value of
+ * audit-safe fields and replacing every other field's value with a non-PII
+ * presence marker (`null` when empty, `'«set»'` when a value was present). Safe
+ * fields still show useful detail (e.g. status valid→revoked, an expiry change).
  */
 function maskedDiff(
   changedFields: string[],
   before: Record<string, unknown>,
   after: Record<string, unknown>,
-  piiFields: Set<string>,
+  safeFields: Set<string>,
 ): { before: Record<string, unknown>; after: Record<string, unknown> } {
-  const mask = (field: string, value: unknown): unknown => {
-    if (!piiFields.has(field)) return value;
+  const keep = (field: string, value: unknown): unknown => {
+    if (safeFields.has(field)) return value;
     return value == null || value === '' ? null : '«set»';
   };
   return {
-    before: Object.fromEntries(changedFields.map((k) => [k, mask(k, before[k])])),
-    after:  Object.fromEntries(changedFields.map((k) => [k, mask(k, after[k])])),
+    before: Object.fromEntries(changedFields.map((k) => [k, keep(k, before[k])])),
+    after:  Object.fromEntries(changedFields.map((k) => [k, keep(k, after[k])])),
   };
 }
 
@@ -734,9 +742,10 @@ export async function updateCredential(
       credId:   id,
       credType: updated.credType,
       changedFields,
-      // Keep the useful non-PII detail (status, expiry, verifier); mask the PII
-      // values (credential number, free-text notes) so they can't outlive redaction.
-      ...maskedDiff(changedFields, before as Record<string, unknown>, updated as Record<string, unknown>, CREDENTIAL_PII_FIELDS),
+      // Keep the audit-safe detail (status, expiry, verifier); everything else
+      // (credential number, free-text notes, any future column) is masked so PII
+      // can't outlive redaction in the append-only log.
+      ...maskedDiff(changedFields, before as Record<string, unknown>, updated as Record<string, unknown>, CREDENTIAL_AUDIT_SAFE_FIELDS),
     },
   });
   await events.publish('person.credential.updated', { personId: updated.personId, credId: id, changedFields });
