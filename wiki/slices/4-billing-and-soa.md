@@ -74,19 +74,23 @@ It also forces three cross-module contracts to be designed correctly: **DTR owns
 └───────────────────────────────────────────────────────────────┘
 ```
 
-### W3. Generate SOA — picker + **unattributed-days guard**
+### W3. Generate SOA picker + **period-level unattributed-days guard**
 
 ```
 ┌─ Generate Statement of Account ───────────────────────────┐
 │ Client  [ SM Aura Premier ▾ ]   Period [ May 16–31 2026 ▾ ]│  ← period = a pay-run period
-│ [ Generate ]                                              │
-│                                                           │
-│ ⚠ 2 worked days have no posting and were NOT billed:      │  ← only if any exist
-│    CG-10044 Reyes, P. — May 16                            │
-│    CG-10051 Cruz, A.  — May 23                            │
-│    [ Re-attach to a posting ]  ← re-resolves the DTR day  │
+│ [ Generate ]   (needs this period's payroll run first)    │
+└───────────────────────────────────────────────────────────┘
+
+┌─ Unattributed worked days · May 16–31 · ALL clients ──────┐  ← billing dashboard (period-level)
+│ No posting attached → unbillable until re-attached.       │
+│   CG-10044 Reyes, P. — May 16   (near: SM Aura)           │
+│   CG-10051 Cruz, A.  — May 23   (no posting all period)   │  ← a per-client view would miss this one
+│   [ Re-attach to a posting ]   ← re-resolves the DTR day  │
 └───────────────────────────────────────────────────────────┘
 ```
+
+> **Note:** the unattributed panel is a **period-level** surface (billing dashboard, all clients), separate from any single client's generate — so a guard with **no posting the entire period** still appears (a per-client view would miss them). Re-attach fixes the DTR day, then regenerate.
 
 ### W4. The Statement of Account (detailed — per guard) — printable detail
 
@@ -121,11 +125,11 @@ It also forces three cross-module contracts to be designed correctly: **DTR owns
 1. Clerk opens **SM Aura Premier**, scrolls to **Billing & Contract**, types `780` into Billing rate, leaves VAT/EWT on (with the ⚑ note that the real treatment is pending), clicks **Save**.
 2. Payroll for **May 16–31** has already been run + locked the usual way (Slice 1/2 flow).
 3. Clerk opens **Statements of Account**, clicks **Generate SOA**, picks SM Aura + the May 16–31 period, clicks **Generate**.
-4. If any of SM Aura's guards have worked days with no posting, a **⚠ unattributed** panel lists them by guard + date and they are **excluded from the bill** (not silently dropped). Clerk can **Re-attach** a day to a posting and regenerate. *(If a step needs a field the Components section lacks, the schema is wrong, not this walk.)*
+4. The draft **excludes** any worked day with no posting — those are never billed silently. They're caught in the **period-level Unattributed worked days** panel on the billing dashboard (all clients, including guards with no posting all period). Clerk can **Re-attach** a day to a posting and regenerate. *(If a step needs a field the Components section lacks, the schema is wrong, not this walk.)*
 5. A **draft** SOA appears (W4). Clerk eyeballs it — the per-guard days match the DTR they entered. A guard transferred mid-period to BDO only shows their SM Aura days here; their BDO days are on BDO's own SOA.
 6. Clerk clicks **Finalize**. The SOA gets number `2026-0512`, the numbers freeze, status → **Finalized**. Re-generating is now refused.
 7. Later, on payment, clerk opens the SOA and clicks **Mark paid** → status **Paid**.
-8. (Behind the scenes) generating ran the **period reconciliation**: every guard's billed-days-across-all-SOAs + unattributed = their payslip days. Had DTR been edited after payroll, the clerk would have seen a "re-run payroll first" warning.
+8. (Behind the scenes) generating ran a **local sanity check** (SM Aura's billed days ≤ each guard's payslip days). Separately — once the period's SOAs exist — the clerk runs **period reconciliation** on the billing dashboard: every guard's billed-days-across-all-SOAs + unattributed = their payslip days. Had DTR been edited after payroll, that check flags "re-run payroll first."
 
 ---
 
@@ -144,11 +148,11 @@ It also forces three cross-module contracts to be designed correctly: **DTR owns
 | Function | What it does |
 |---|---|
 | `setClientBillingConfig(input)` | Upsert a client's rate/terms/VAT/EWT flags. Audits `billing.config.updated`. |
-| `previewUnattributed(clientId, period)` | Returns worked days for the client's guards in the period whose DTR row has `assignment_id IS NULL` (guard+date list). |
-| `generateInvoice(clientId, period, { actorUserId })` | Draft-upsert one invoice for `(client, period)`; wipe+recompute lines from DTR via the **frozen** `assignment_id → detachment → client`; group by (employee, detachment); `days × rate = amount`; compute subtotal + placeholder VAT/EWT/total; run period reconciliation; audit `billing.invoice.generated`. Refuses if the invoice is already finalized. |
+| `listUnattributedWorkedDays(period)` | **Period-level, all clients.** Every worked day in the period whose DTR row has `assignment_id IS NULL` (guard + date + nearest-posting context) — including guards with *no* posting all period. Unbillable until re-attached. |
+| `generateInvoice(clientId, period, { actorUserId })` | Draft-upsert one invoice for `(client, period)`; wipe+recompute lines from DTR via the **frozen** `assignment_id → detachment → client`; group by (employee, detachment); `days × rate = amount` (all worked statuses at the flat rate — holiday/rest-day premium deferred, §9); compute subtotal + placeholder VAT/EWT/total; run a **local sanity check** (this client's billed days ≤ each guard's payslip days); audit `billing.invoice.generated`. **Guards:** warns/blocks if no pay run exists for the period (run payroll first); refuses if the invoice is already finalized. |
 | `finalizeInvoice(invoiceId, { actorUserId })` | Mirrors `lockPayRun`: guard already-finalized, guard empty-invoice; assign `soaNumber` via a **concurrency-safe sequence**; snapshot line display fields; freeze; audit `billing.invoice.finalized`. |
-| `markPaid(invoiceId, { actorUserId })` | draft/finalized → paid; audit `billing.invoice.paid`. |
-| `reconcilePeriod(period)` | Period-wide check: per guard, `Σ billed days + unattributed = payslip.daysWorked`; returns mismatches. |
+| `markPaid(invoiceId, { actorUserId })` | **finalized → paid** (a draft must be finalized first); audit `billing.invoice.paid`. |
+| `reconcilePeriod(period)` | **Separate period-level step**, run after the period's SOAs exist (e.g. from the billing dashboard): per guard, `Σ billed days across all SOAs + unattributed = payslip.daysWorked`; returns mismatches (flags DTR-changed-after-payroll). |
 | `listInvoices(filter)` / `getInvoiceWithLines(id)` | Reads for the UI. |
 
 **Dependencies:** `dtr` (worked-day def + per-(employee,detachment) day reader off frozen `assignment_id`), `assignments`/`clients` (detachment→client join), `hr`+`persons` (guard code/name via join at draft), `payroll` (payslip day-count for reconciliation), `audit`, `events`. No module imports `billing` (leaf).
@@ -190,13 +194,13 @@ It also forces three cross-module contracts to be designed correctly: **DTR owns
 
 > This section exists so the code review has a concrete checklist to *break*. Each item is either handled in-scope (H), or an accepted/deferred risk (D).
 
-1. **(H) Unattributed worked days = silent revenue leak.** A worked day with `assignment_id IS NULL` (training/HQ, or attendance recorded *before* the posting was created) can't be billed. Handling: surfaced on generate, excluded from the bill (not dropped), re-attachable via §5b. Review target: confirm they're never silently billed to the wrong client nor dropped without surfacing.
+1. **(H) Unattributed worked days = silent revenue leak.** A worked day with `assignment_id IS NULL` (training/HQ, or attendance recorded *before* the posting was created) can't be billed. Handling: excluded from the bill (not dropped), surfaced **period-wide** (billing dashboard, all clients — `listUnattributedWorkedDays`), re-attachable via §5b. Review target: confirm a guard with **zero postings all period** still surfaces (a per-client view would miss them), and no unattributed day is silently billed or dropped.
 2. **(H) Attribution must use the frozen stamp, not a live lookup.** Re-deriving the client at billing time would let later assignment edits rewrite issued invoices. Review target: confirm `generateInvoice` reads `dtr_entries.assignment_id`, never calls `getActiveAssignment`.
 3. **(H) Worked-day definition drift.** If billing and payroll disagree on what counts as a worked day, the reconciliation identity breaks. Review target: confirm a single shared definition (DTR-owned) and that payroll still uses it.
-4. **(H) Reconciliation is period-wide, not per-SOA.** Review target: a guard split across two clients reconciles only across *all* the period's SOAs + unattributed; confirm the check isn't applied per-invoice (which would false-alarm on every split guard).
+4. **(H) Reconciliation is period-wide, not per-SOA.** A guard split across two clients reconciles only across *all* the period's SOAs + unattributed. Review target: confirm `generateInvoice` does only the **local** check (billed ≤ payslip days) and the period-wide equality lives in `reconcilePeriod` (run after the SOAs exist) — never inside a single-client generate, which would false-alarm on every split guard.
 5. **(H) SOA numbering must be concurrency-safe + gapless.** Naive `max(soaNumber)+1` races under concurrent finalize. Review target: numbering uses a DB sequence / locked counter; two finalizes can't collide or skip.
 6. **(H) Regenerate / finalize guards.** One invoice per (client, period); regenerating a draft wipes+recomputes; a finalized SOA can't be regenerated or edited. Review target: confirm the unique constraint + the finalized-immutability guard, modeled on `lockPayRun`.
-7. **(H) DTR edited after payroll lock.** Generating after DTR changed (vs. the locked payslip snapshot) must warn "re-run payroll," not silently emit a divergent bill. Review target: `reconcilePeriod` flags the mismatch.
+7. **(H) Generate needs the period's payroll.** Generating *before* the period's payroll has run (no payslips) must block/warn "run payroll first" — the local check has nothing to compare against. Generating *after* DTR changed (vs. the locked payslip snapshot) must warn "re-run payroll," not silently emit a divergent bill. Review target: `generateInvoice` guards the no-pay-run case; `reconcilePeriod` flags the changed-after case.
 8. **(D) SOA-as-BIR-document?** Whether the Statement is an official BIR-registered series (strict gapless/ATP rules) or an internal statement preceding the official receipt — **CGoC question**. We build safe numbering regardless; the registration rules are out of scope until answered.
 9. **(D) Exact VAT/EWT + wage-vs-fee split.** PH security agencies often bill *wages at cost + agency fee*, with VAT/EWT on the fee only. The MVP's single blended rate can't express that, so the tax lines are **illustrative placeholders**. If CGoC's real model is wage+fee, the rate *setup* grows (one field → wage+fee) but the SOA shape (guard × days × rate × amount) is unchanged — **CGoC question**.
 10. **(D) Redaction vs. a finalized SOA.** A finalized invoice snapshots guard name for document stability — which retains PII after a person is redacted; conversely a live join would mutate a "locked" document. BIR record-retention (commonly 10 yr) may legally override erasure. Flagged open policy decision; not resolved here. See [[project_audit_log_immutable_pii_convention]].
@@ -210,9 +214,9 @@ It also forces three cross-module contracts to be designed correctly: **DTR owns
 1. A client can be given a billing rate + terms + VAT/EWT flags, saved and edited, via the client page.
 2. `Generate SOA` produces a detailed, per-guard draft from DTR using the **frozen** assignment stamp; days × rate × line amounts are correct; subtotal/VAT/EWT/total computed (VAT/EWT clearly marked placeholder).
 3. A mid-period transfer splits correctly: the guard's days appear on each client's SOA per the posting they were recorded under.
-4. Worked days with no posting are surfaced in the unattributed panel, excluded from the bill, and re-attachable; they are never silently billed or dropped.
-5. `Finalize` assigns a unique, gapless, concurrency-safe SOA number, freezes the document, and refuses re-generation; `Mark paid` works.
-6. `reconcilePeriod` proves `Σ billed + unattributed = payslip days` per guard, and flags DTR-changed-after-payroll.
+4. Worked days with no posting are excluded from the bill, surfaced in the **period-level** unattributed view (catches guards with zero postings too), and re-attachable; never silently billed or dropped.
+5. `Finalize` assigns a unique, gapless, concurrency-safe SOA number, freezes the document, and refuses re-generation; `Mark paid` works **only on a finalized SOA** (draft → paid is rejected).
+6. `generateInvoice` runs the local check (billed ≤ payslip days); the separate `reconcilePeriod` proves `Σ billed + unattributed = payslip days` per guard and flags DTR-changed-after-payroll.
 7. The worked-day definition is DTR-owned and shared; payroll consumes it with **zero behavior change** (payroll suite green).
 8. **Prior slices' demos still pass** — full `pnpm test` + `typecheck` + `lint` green; Slice 1/2/3 golden paths untouched.
 9. Browser walk (Playwright) of the §4 demo, screenshots read, incl. the transfer split + unattributed panel.
@@ -224,6 +228,7 @@ It also forces three cross-module contracts to be designed correctly: **DTR owns
 | Deferred | Lives in |
 |---|---|
 | Per-post / armed-vs-unarmed rates; full per-client OT/NSD/Saturday/emergency **rate stack** | later "rate-stack" slice |
+| Holiday / rest-day **premium on the client bill** — MVP bills holiday-worked & rest-day-worked days at the flat man-day rate (no premium) | "rate-stack" slice |
 | Exact VAT / 2% EWT treatment + wage-pass-through vs agency-fee rate model | after CGoC answers (§7.9) |
 | Summary-by-post SOA view (cheap rollup over the same lines) | later |
 | "Sent to client" status; payment **aging**, partial payments, credit notes/adjustments | later |
