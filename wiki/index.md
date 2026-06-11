@@ -32,6 +32,10 @@
 - [slices/1-first-payslip.md](slices/1-first-payslip.md) — Slice 1: HR + Clients/Detachments + Assignments + DTR + Payroll (4-deduction) + SSS R3 + BIR 2316. **SHIPPED** (`slice-1-done` tag, 2026-05-24).
 - [slices/1-first-payslip-ux-walk-findings.md](slices/1-first-payslip-ux-walk-findings.md) — UX-walk findings from Slice 1 that feed Slice 2 scope.
 - [slices/2-multi-client-at-scale.md](slices/2-multi-client-at-scale.md) — Slice 2: sidebar + Employees rename + multi-select + typeahead/search + edit on masters + required_headcount + payroll calendar + BIR 2316 completion. **CONTRACT DRAFT** (2026-05-24).
+- [slices/4-billing-and-soa.md](slices/4-billing-and-soa.md) — Slice 4: `billing` module + per-client rate + detailed Statement of Account from DTR + draft→finalized→paid + unattributed-days guard + period reconciliation. **CONTRACT DRAFT** (2026-06-11). Closes the pay-guard/bill-client money cycle.
+
+## Reviews
+- [reviews/2026-06-12-hr-operations-compliance-review.md](reviews/2026-06-12-hr-operations-compliance-review.md) — HR/payroll-ops + PH-compliance review of everything through Slice 4, from a guard-agency HR head's seat. **The ranked gap register + recommended slice sequence is the planning backbone for Slices 5+.** Read before scoping any new slice.
 
 ## Runbooks
 - [runbooks/README.md](runbooks/README.md) — convention; populated as ops procedures emerge.

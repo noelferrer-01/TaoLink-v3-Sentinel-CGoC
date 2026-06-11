@@ -20,9 +20,24 @@ import { dtr, type DtrEntry } from '@/modules/dtr';
 
 `DtrEntry`, `NewDtrEntry`, `DtrPeriodClose`, `NewDtrPeriodClose` types are re-exported.
 
+> The module also exposes Slice-2 period helpers (`isPeriodClosed`, `summarizePeriod`, `bulkFillWorked`) and the Slice-4 billing readers below. All are re-exported from `@/modules/dtr`.
+
+### Billing readers + the worked-day definition (Slice 4)
+
+DTR owns the canonical definition of a *worked day* and the readers billing prices off. Both payroll and billing consume these so "what counts as worked" can never drift between what's paid and what's billed.
+
+| Export | Signature | What it does |
+|---|---|---|
+| `WORKED_DTR_STATUSES` | `readonly ['worked','holiday_worked','restday_worked']` | The canonical worked (billable / payable) day set. Owned here because DTR owns `dtr_status`. Payroll and billing both import it. |
+| `billedDaysByEmployeeDetachment` | `(clientId, start, end) => Promise<BilledDays[]>` | Worked man-days per `(employee, detachment)` for ONE client in `[start, end]`, attributed by the **frozen** `dtr_entries.assignment_id` → detachment → client join. Never calls `getActiveAssignment` — so editing assignment history later can't rewrite an issued invoice. The line source for `billing.generateInvoice`. |
+| `listUnattributedWorkedDays` | `(start, end) => Promise<UnattributedDay[]>` | Period-level, **all clients**: worked days whose `assignment_id IS NULL` (unbillable until re-attached). Catches guards with zero postings the entire period — a per-client view would miss them. |
+| `reattributeDtrDay` | `(dtrEntryId, opts?: { actorUserId? }) => Promise<DtrEntry>` | Re-resolve the active assignment for an existing DTR row's date and stamp it, so a day recorded before its posting existed isn't stuck unbillable. Throws if the guard still has no active posting on that date. Audits `dtr.reattributed`. |
+
+Types `BilledDays` and `UnattributedDay` are re-exported.
+
 ### Status values
 
-`dtr_status` enum: `'worked' | 'absent' | 'leave' | 'holiday_worked' | 'restday_worked'`. Defaults to `'worked'` if not specified.
+`dtr_status` enum: `'worked' | 'absent' | 'leave' | 'holiday_worked' | 'restday_worked'`. Defaults to `'worked'` if not specified. The worked-day subset used by payroll and billing is `WORKED_DTR_STATUSES` (above).
 
 ### Auto-assignment resolution
 
@@ -59,4 +74,8 @@ The `assignment_id` column is **nullable** because:
 - Backfill from paper records may not know which assignment applied.
 - Status values like `'absent'` and `'leave'` don't require an assignment.
 
-Payroll math (Phase 6) must handle NULL `assignmentId` rows explicitly — typically by treating them as "headquarters / overhead" hours or flagging them for review.
+Payroll math (Phase 6) must handle NULL `assignmentId` rows explicitly — typically by treating them as "headquarters / overhead" hours or flagging them for review. Billing surfaces these via `listUnattributedWorkedDays` and never bills them silently.
+
+### "Still no active posting on that date — assign the guard first"
+**Trigger:** `reattributeDtrDay` called on a DTR row whose guard has no active assignment covering that row's date. There is nothing to re-resolve to.
+**Fix:** create/extend the guard's assignment so it covers the date, then re-attach. (Re-attach re-resolves via `getActiveAssignment`, the same lookup `recordDTR` uses.)

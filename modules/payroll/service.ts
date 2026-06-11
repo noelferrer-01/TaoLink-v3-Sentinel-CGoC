@@ -13,7 +13,8 @@ import { payRuns, payslips, type PayRun, type Payslip } from './schema';
 import { computePayrollLine, type PayrollRates } from './compute';
 import { employees } from '@/modules/hr';
 import { persons } from '@/modules/persons';
-import { dtrEntries, type DtrEntry } from '@/modules/dtr/schema';
+import { dtrEntries } from '@/modules/dtr/schema';
+import { WORKED_DTR_STATUSES } from '@/modules/dtr';
 import {
   sssBracketForMonthly,
   philhealthEE,
@@ -32,10 +33,6 @@ const GLOBAL_CALENDAR_SENTINEL = '00000000-0000-0000-0000-000000000000';
 
 // Statuses to EXCLUDE from the payroll run (non-active statuses).
 const EXCLUDED_STATUSES = ['applicant', 'terminated'] as const;
-
-// DTR statuses that count as a worked day. Typed against DtrEntry['status']
-// so renaming/removing a dtr_status enum value fails compilation here, not silently in payroll.
-const WORKED_STATUSES: ReadonlyArray<DtrEntry['status']> = ['worked', 'holiday_worked', 'restday_worked'];
 
 /**
  * Resolve whether this cut is the final cut of the month.
@@ -102,7 +99,7 @@ export async function runPayroll(
 
       // 3b. Count worked days.
       const daysWorked = entries.filter((e) =>
-        (WORKED_STATUSES as readonly string[]).includes(e.status),
+        (WORKED_DTR_STATUSES as readonly string[]).includes(e.status),
       ).length;
 
       // Slice-1: OT hours not yet captured via UI.

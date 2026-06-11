@@ -70,3 +70,6 @@ docker-compose.override.yml
 
 # Playwright MCP scratch (snapshots, screenshots, console logs from dev verification)
 .playwright-mcp/
+
+# Visual brainstorming companion (superpowers)
+.superpowers/

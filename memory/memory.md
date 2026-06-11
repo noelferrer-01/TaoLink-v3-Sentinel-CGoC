@@ -6,6 +6,9 @@
 ## General
 - [general.md](general.md) — cross-cutting project facts, environment, working-style preferences
 
+## Roadmap guide
+- **[../wiki/reviews/2026-06-12-hr-operations-compliance-review.md](../wiki/reviews/2026-06-12-hr-operations-compliance-review.md)** — HR/compliance gap register + recommended slice sequence (through Slice 4). The planning backbone for what to build next; read before scoping Slice 5+.
+
 ## Domains
 - [domains/architecture.md](domains/architecture.md) — Sentinel layer model, contracts, open architectural calls
 - [domains/commander-group.md](domains/commander-group.md) — client facts, scale, sites, org, key pain points
