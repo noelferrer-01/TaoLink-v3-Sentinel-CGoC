@@ -21,6 +21,7 @@
 import { eq, and, inArray, sql } from 'drizzle-orm';
 import { getDb, type DbOrTx } from '@/core/db';
 import { isPgError } from '@/core/errors';
+import { todayIso } from '@/core/dates';
 import { audit } from '@/modules/audit';
 import { events } from '@/modules/events';
 import { persons, personCredentials, type Person, type NewPerson, type PersonCredential } from './schema';
@@ -85,6 +86,42 @@ function uniqueViolationMessage(err: unknown): string | null {
     }
   }
   return null;
+}
+
+// ─── Audit PII masking ──────────────────────────────────────────────────────────
+
+/**
+ * Fields whose raw value is government-ID / licence-number PII. `redactPerson`
+ * removes these from the live row, but an audit `before`/`after` diff would
+ * otherwise retain the cleartext number forever — silently defeating the
+ * redaction guarantee (ADR 0017). We still record THAT the field changed (via
+ * `changedFields`), but the value is reduced to a presence marker, never the
+ * secret itself.
+ */
+const SENSITIVE_AUDIT_FIELDS = new Set<string>([
+  'philsysNumber', 'sssNumber', 'tinNumber', 'philhealthNumber',
+  'pagibigNumber', 'umidNumber', 'passportNumber', 'driversLicenseNumber',
+  'credNumber',
+]);
+
+/**
+ * Builds a before/after audit payload over `changedFields`, replacing any
+ * sensitive ID/number value with a non-PII presence marker (`null` when empty,
+ * `'«set»'` when a value is present). Non-sensitive fields pass through verbatim.
+ */
+function auditDiff(
+  changedFields: string[],
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+): { before: Record<string, unknown>; after: Record<string, unknown> } {
+  const mask = (field: string, value: unknown): unknown => {
+    if (!SENSITIVE_AUDIT_FIELDS.has(field)) return value;
+    return value == null || value === '' ? null : '«set»';
+  };
+  return {
+    before: Object.fromEntries(changedFields.map((k) => [k, mask(k, before[k])])),
+    after:  Object.fromEntries(changedFields.map((k) => [k, mask(k, after[k])])),
+  };
 }
 
 // ─── createPerson ─────────────────────────────────────────────────────────────
@@ -415,8 +452,7 @@ export async function updatePerson(
     action:  'person.updated',
     target:  { kind: 'person', id },
     payload: {
-      before:        Object.fromEntries(changedFields.map((k) => [k, (before as Record<string, unknown>)[k]])),
-      after:         Object.fromEntries(changedFields.map((k) => [k, (updated as Record<string, unknown>)[k]])),
+      ...auditDiff(changedFields, before as Record<string, unknown>, updated as Record<string, unknown>),
       changedFields,
     },
   });
@@ -470,60 +506,68 @@ export async function redactPerson(
   if (before.passportNumber)       clearedIdTypes.push('passport');
   if (before.driversLicenseNumber) clearedIdTypes.push('drivers_license');
 
-  const [updated] = await db
-    .update(persons)
-    .set({
-      // Tombstone marker
-      redactedAt: new Date(),
+  // Atomicity: the identity blank-out AND the credential-wallet scrub must commit
+  // together. Two separate statements could leave a tombstoned person with live
+  // PII credentials if the second failed — so both run in ONE transaction.
+  // Audit/events run AFTER commit (the house pattern), so they aren't rolled back.
+  const { updated, credentialsDeleted } = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .update(persons)
+      .set({
+        // Tombstone marker
+        redactedAt: new Date(),
 
-      // Clear identity — firstName/lastName are NOT NULL so use placeholder
-      firstName:   '[redacted]',
-      lastName:    '[redacted]',
-      middleName:  null,
-      suffix:      null,
-      dateOfBirth: null,
-      sex:         null,
+        // Clear identity — firstName/lastName are NOT NULL so use placeholder
+        firstName:   '[redacted]',
+        lastName:    '[redacted]',
+        middleName:  null,
+        suffix:      null,
+        dateOfBirth: null,
+        sex:         null,
 
-      // Clear all IDs — unique slots vacated; PII is truly removed (not parked)
-      philsysNumber:        null,
-      sssNumber:            null,
-      tinNumber:            null,
-      philhealthNumber:     null,
-      pagibigNumber:        null,
-      umidNumber:           null,
-      passportNumber:       null,
-      driversLicenseNumber: null,
+        // Clear all IDs — unique slots vacated; PII is truly removed (not parked)
+        philsysNumber:        null,
+        sssNumber:            null,
+        tinNumber:            null,
+        philhealthNumber:     null,
+        pagibigNumber:        null,
+        umidNumber:           null,
+        passportNumber:       null,
+        driversLicenseNumber: null,
 
-      // Reset anchor type
-      anchorIdType: 'none',
+        // Reset anchor type
+        anchorIdType: 'none',
 
-      // Clear address / contact
-      addressLine1: null,
-      addressLine2: null,
-      city:         null,
-      province:     null,
-      postalCode:   null,
-      phone:        null,
-      email:        null,
+        // Clear address / contact
+        addressLine1: null,
+        addressLine2: null,
+        city:         null,
+        province:     null,
+        postalCode:   null,
+        phone:        null,
+        email:        null,
 
-      // quarantinedIds is for the dedup backfill case only — null it so we
-      // don't accidentally surface PII through findPersonByAnyId after redaction.
-      quarantinedIds: null,
+        // quarantinedIds is for the dedup backfill case only — null it so we
+        // don't accidentally surface PII through findPersonByAnyId after redaction.
+        quarantinedIds: null,
 
-      updatedAt: new Date(),
-    })
-    .where(eq(persons.id, id))
-    .returning();
-  if (!updated) throw new Error(`[persons/redactPerson] update returned no row for ${id}`);
+        updatedAt: new Date(),
+      })
+      .where(eq(persons.id, id))
+      .returning();
+    if (!row) throw new Error(`[persons/redactPerson] update returned no row for ${id}`);
 
-  // Slice 3b: the credential wallet holds PII too (licence numbers, notes such as
-  // an assigned firearm). Redaction must scrub it — delete the rows outright.
-  // The audit history of those credentials lives in `audit_log`, not here, so it
-  // survives. (Returns the deleted count for the audit payload.)
-  const deletedCreds = await db
-    .delete(personCredentials)
-    .where(eq(personCredentials.personId, id))
-    .returning({ id: personCredentials.id });
+    // Slice 3b: the credential wallet holds PII too (licence numbers, notes such as
+    // an assigned firearm). Redaction must scrub it — delete the rows outright.
+    // The audit history of those credentials lives in `audit_log`, not here, so it
+    // survives.
+    const del = await tx
+      .delete(personCredentials)
+      .where(eq(personCredentials.personId, id))
+      .returning({ id: personCredentials.id });
+
+    return { updated: row, credentialsDeleted: del.length };
+  });
 
   await audit.record({
     actor:   actorUserId ?? null,
@@ -533,7 +577,7 @@ export async function redactPerson(
       previousAnchorIdType: before.anchorIdType,
       // Types only — actual values are NOT logged (would re-leak PII).
       clearedIdTypes,
-      credentialsDeleted: deletedCreds.length,
+      credentialsDeleted,
     },
   });
   await events.publish('person.redacted', { id });
@@ -656,6 +700,15 @@ export async function updateCredential(
   const safePatch = { ...patch } as Record<string, unknown>;
   for (const field of IMMUTABLE) delete safePatch[field];
 
+  // When a credential becomes 'valid' by human assertion through this edit,
+  // record the actor as its verifier — mirroring addCredential, which the edit
+  // path previously skipped. Never overwrite an existing verifier (a re-save of
+  // an already-verified credential keeps its original provenance).
+  if (safePatch.status === 'valid' && !before.verifiedByUserId && actorUserId) {
+    safePatch.verifiedByUserId = actorUserId;
+    safePatch.verifiedOn = todayIso();
+  }
+
   const [updated] = await db
     .update(personCredentials)
     .set({ ...safePatch, updatedAt: new Date() })
@@ -675,8 +728,7 @@ export async function updateCredential(
       credId:   id,
       credType: updated.credType,
       changedFields,
-      before:   Object.fromEntries(changedFields.map((k) => [k, (before as Record<string, unknown>)[k]])),
-      after:    Object.fromEntries(changedFields.map((k) => [k, (updated as Record<string, unknown>)[k]])),
+      ...auditDiff(changedFields, before as Record<string, unknown>, updated as Record<string, unknown>),
     },
   });
   await events.publish('person.credential.updated', { personId: updated.personId, credId: id, changedFields });

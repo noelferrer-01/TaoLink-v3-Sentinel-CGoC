@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { hr, READINESS_KIND_LABELS, type ReadinessKind } from '@/modules/hr';
+import { hr, READINESS_KIND_LABELS, FIREARM_LINK_UNVERIFIED_LABEL, type ReadinessKind } from '@/modules/hr';
 import { CRED_TYPE_LABELS } from '@/modules/persons';
 import { PageShell } from '@/components/page-shell';
 import { Pagination, clampPageSize } from '@/components/pagination';
@@ -80,6 +80,13 @@ export default async function ReadinessPage({
                   <span className={`status-pill is-cred-${issue.kind}`}>
                     {READINESS_KIND_LABELS[issue.kind as ReadinessKind]}
                   </span>
+                  {/* Firearm caveat rides alongside the state — shown for a valid
+                      LTOPF AND when it's expiring/expired/revoked (ADR 0018). */}
+                  {issue.firearmLinkUnverified && (
+                    <span className="status-pill is-cred-unverified" style={{ marginLeft: '0.35rem' }}>
+                      {FIREARM_LINK_UNVERIFIED_LABEL}
+                    </span>
+                  )}
                 </td>
                 <td style={{ color: 'var(--muted)' }}>{formatDate(issue.expiresOn)}</td>
               </tr>

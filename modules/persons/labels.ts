@@ -157,7 +157,8 @@ export type CredState = 'valid' | 'expiring' | 'expired' | 'revoked' | 'pending'
 /**
  * Derives the display state from a credential's expiry + stored status.
  *
- *   revoked / pending  → pass through (revoked stays revoked, NOT expired)
+ *   revoked / expired / pending → pass through (the stored status is authoritative;
+ *                       a blank or stale future date must NOT mask an explicit lapse)
  *   no expiry          → valid (e.g. a one-off clearance with no lapse date)
  *   expiry in the past → expired
  *   expiry within window (inclusive of today) → expiring
@@ -174,6 +175,7 @@ export function deriveCredState(
   windowDays = 60,
 ): CredState {
   if (status === 'revoked') return 'revoked';   // kept DISTINCT from expired
+  if (status === 'expired') return 'expired';   // explicit lapse — never let a null/future date read as valid
   if (status === 'pending') return 'pending';
   if (!expiresOn) return 'valid';
   if (expiresOn < today) return 'expired';

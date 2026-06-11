@@ -12,7 +12,7 @@
  * TDD: red → green per function.
  */
 
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { closeDb, getDb } from '@/core/db';
 import { persons, personCredType, personCredStatus } from './schema';
@@ -38,6 +38,8 @@ import {
   listCredentialsForPersons,
 } from './service';
 import { auditLog } from '@/modules/audit/schema';
+import { auth } from '@/modules/auth';
+import { todayIso } from '@/core/dates';
 
 // ─── Cleanup ──────────────────────────────────────────────────────────────────
 
@@ -209,6 +211,18 @@ describe('deriveCredState', () => {
 
   it('returns pending when status is pending', () => {
     expect(deriveCredState('2027-01-01', 'pending', today)).toBe('pending');
+  });
+
+  it('honors a stored status=expired even when the expiry date is blank', () => {
+    // Regression: a clerk sets Status=Expired but leaves the date empty. Without
+    // honoring the stored status, the no-expiry branch returned 'valid' and the
+    // credential silently cleared the readiness requirement.
+    expect(deriveCredState(null, 'expired', today)).toBe('expired');
+  });
+
+  it('honors a stored status=expired even when the expiry date is in the future', () => {
+    // An explicitly-expired licence is expired regardless of a stale future date.
+    expect(deriveCredState('2027-01-01', 'expired', today)).toBe('expired');
   });
 
   it('returns valid when there is no expiry date', () => {
@@ -607,6 +621,23 @@ describe('persons service (integration)', () => {
         updatePerson('00000000-0000-0000-0000-000000000000', { firstName: 'Ghost' }),
       ).rejects.toThrow(/not found/i);
     });
+
+    it('masks government-ID numbers in the audit payload (PII must not survive in audit_log)', async () => {
+      // redactPerson nulls the live IDs, but the person.updated audit row used to
+      // retain the cleartext number forever — defeating the redaction guarantee.
+      const p = await createPerson({ firstName: 'Mask', lastName: 'Me' });
+      await updatePerson(p.id, { anchorIdType: 'sss', sssNumber: '34-9999999-1' });
+
+      const rows = await getDb()
+        .select()
+        .from(auditLog)
+        .where(sql`target_kind = 'person' AND target_id = ${p.id} AND action = 'person.updated'`);
+      expect(rows.length).toBe(1);
+      const payload = rows[0]!.payload as { changedFields: string[] };
+      expect(payload.changedFields).toContain('sssNumber');
+      // The raw SSS number must not be recoverable from the audit log.
+      expect(JSON.stringify(payload)).not.toContain('34-9999999-1');
+    });
   });
 
   // ─── redactPerson ─────────────────────────────────────────────────────────────
@@ -688,6 +719,17 @@ describe('credentials service (integration)', () => {
   afterAll(async () => {
     await cleanup();
     await closeDb();
+  });
+
+  // Real users for the verifier FK (person_credentials.verified_by_user_id).
+  // Unique-per-run emails; left in the test DB (harmless), the way auth/approvals
+  // tests do. `cleanup` truncates persons CASCADE, which leaves users untouched.
+  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  let verifierId: string;
+  let editorId: string;
+  beforeAll(async () => {
+    verifierId = (await auth.createUser({ email: `creds-verifier-${stamp}@sentinel.test`, password: 'temp-pw-not-used-1234567890' })).id;
+    editorId   = (await auth.createUser({ email: `creds-editor-${stamp}@sentinel.test`,   password: 'temp-pw-not-used-1234567890' })).id;
   });
 
   async function makePerson() {
@@ -806,6 +848,52 @@ describe('credentials service (integration)', () => {
       // Scoped to the RIGHT person → succeeds.
       const ok = await updateCredential(cred.id, { status: 'revoked' }, null, { expectedPersonId: a.id });
       expect(ok.status).toBe('revoked');
+    });
+
+    it('stamps the editing actor as verifier when a credential becomes valid via edit', async () => {
+      const p = await makePerson();
+      const cred = await addCredential({ personId: p.id, credType: 'nbi_clearance', status: 'pending' });
+      expect(cred.verifiedByUserId).toBeNull();
+
+      // A clerk flips Pending → Valid. Mirrors addCredentialAction's "asserting it
+      // valid = you verified it" provenance, which the edit path previously dropped.
+      const updated = await updateCredential(cred.id, { status: 'valid' }, verifierId);
+      expect(updated.status).toBe('valid');
+      expect(updated.verifiedByUserId).toBe(verifierId);
+      expect(updated.verifiedOn).toBe(todayIso());
+    });
+
+    it('preserves the original verifier when an already-valid credential is re-saved', async () => {
+      const p = await makePerson();
+      // Added valid with an explicit original verifier (e.g. recruitment carry-forward).
+      const cred = await addCredential({
+        personId: p.id, credType: 'sosia_license', status: 'valid',
+        verifiedByUserId: verifierId, verifiedOn: '2026-01-01',
+      });
+
+      // A DIFFERENT actor edits the expiry — the original verifier must stand.
+      const updated = await updateCredential(cred.id, { status: 'valid', expiresOn: '2030-01-01' }, editorId);
+      expect(updated.verifiedByUserId).toBe(verifierId);
+      expect(updated.verifiedOn).toBe('2026-01-01');
+    });
+
+    it('masks the credential number in the audit payload (PII must not survive in audit_log)', async () => {
+      const p = await makePerson();
+      const cred = await addCredential({ personId: p.id, credType: 'nbi_clearance', credNumber: 'NBI-OLD-123' });
+      await updateCredential(cred.id, { credNumber: 'NBI-NEW-7654321' }, verifierId);
+
+      const rows = await getDb()
+        .select()
+        .from(auditLog)
+        .where(sql`target_kind = 'person' AND target_id = ${p.id} AND action = 'person.credential.updated'`);
+      expect(rows.length).toBe(1);
+      const payload = rows[0]!.payload as { changedFields: string[] };
+      // The change is still recorded...
+      expect(payload.changedFields).toContain('credNumber');
+      // ...but neither the old nor the new number may appear anywhere in the payload.
+      const blob = JSON.stringify(payload);
+      expect(blob).not.toContain('NBI-OLD-123');
+      expect(blob).not.toContain('NBI-NEW-7654321');
     });
   });
 

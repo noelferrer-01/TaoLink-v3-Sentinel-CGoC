@@ -1135,6 +1135,22 @@ describe('hr.listReadinessIssues (Slice 3b)', () => {
     expect(mine[0]!.firearmLinkUnverified).toBe(true);
   });
 
+  it('keeps the firearm caveat on an EXPIRED LTOPF (the caveat must not vanish in a worse state)', async () => {
+    // ADR 0018: an armed post never gets a clean all-clear on firearms. The caveat
+    // flag has to ride along even when the LTOPF itself is expired/revoked — the
+    // radar page renders it, so dropping it here would silently hide the warning
+    // exactly when the firearms licence is in its worst state.
+    const { person } = await makeGuard('CG-ARM-3', true);
+    await addValidBaseSet(person.id);
+    await addCredential({ personId: person.id, credType: 'ltopf_license', status: 'valid', expiresOn: '2025-01-01' }); // expired by date
+    const { rows } = await hr.listReadinessIssues({ today, armedOnly: true });
+    const mine = rows.filter((r) => r.employeeCode === 'CG-ARM-3');
+    expect(mine).toHaveLength(1);
+    expect(mine[0]!.credType).toBe('ltopf_license');
+    expect(mine[0]!.kind).toBe('expired');
+    expect(mine[0]!.firearmLinkUnverified).toBe(true);
+  });
+
   it('returns no issues for a fully-valid unarmed guard', async () => {
     const { person } = await makeGuard('CG-OK-1', false);
     await addValidBaseSet(person.id);

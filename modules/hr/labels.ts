@@ -58,10 +58,16 @@ export const ALLOWED_TRANSITIONS: Record<Status, readonly Status[]> = {
 
 /**
  * The kinds of issue the readiness radar reports for a required credential.
- * `unverified` is the LTOPF-specific "valid — but firearm linkage unverified"
- * row (ADR 0018 — the radar never gives a clean all-clear on firearms). The
- * others map 1:1 to a derived credential state; `missing` means no credential
- * row of that required type exists at all.
+ * `unverified` is the LTOPF-specific row for a *valid* firearms licence that the
+ * radar still surfaces because the firearm-to-guard link isn't tracked yet
+ * (ADR 0018 — never a clean all-clear on firearms). The others map 1:1 to a
+ * derived credential state; `missing` means no credential row of that required
+ * type exists at all.
+ *
+ * The firearm caveat itself is carried by the separate `firearmLinkUnverified`
+ * flag on the issue (set for an LTOPF in ANY state), and the radar renders it as
+ * its own badge — so the caveat shows even when the licence is expiring/expired,
+ * not only when it is valid.
  */
 export type ReadinessKind = 'missing' | 'expiring' | 'expired' | 'revoked' | 'pending' | 'unverified';
 
@@ -71,5 +77,8 @@ export const READINESS_KIND_LABELS: Record<ReadinessKind, string> = {
   expired:    'Expired',
   revoked:    'Revoked',
   pending:    'Pending verification',
-  unverified: 'Valid — firearm link unverified',
+  unverified: 'Valid',
 };
+
+/** The caveat badge shown whenever an issue carries `firearmLinkUnverified`. */
+export const FIREARM_LINK_UNVERIFIED_LABEL = 'Firearm link unverified';

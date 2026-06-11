@@ -42,6 +42,7 @@ export {
   PAY_FREQUENCY_LABELS,
   ALLOWED_TRANSITIONS,
   READINESS_KIND_LABELS,
+  FIREARM_LINK_UNVERIFIED_LABEL,
   type Status,
   type EmploymentType,
   type PayFrequency,
