@@ -622,11 +622,12 @@ describe('persons service (integration)', () => {
       ).rejects.toThrow(/not found/i);
     });
 
-    it('masks government-ID numbers in the audit payload (PII must not survive in audit_log)', async () => {
-      // redactPerson nulls the live IDs, but the person.updated audit row used to
-      // retain the cleartext number forever — defeating the redaction guarantee.
-      const p = await createPerson({ firstName: 'Mask', lastName: 'Me' });
-      await updatePerson(p.id, { anchorIdType: 'sss', sssNumber: '34-9999999-1' });
+    it('records WHICH identity fields changed but never their values (append-only audit is PII-free)', async () => {
+      // The audit log is DB-immutable, so PII can't be scrubbed later — it must
+      // never be written. person.updated records the changed field NAMES only;
+      // the old/new values (names, ID numbers) are not embedded.
+      const p = await createPerson({ firstName: 'Zxqfirst', lastName: 'Zxqlast' });
+      await updatePerson(p.id, { firstName: 'Renamedzz', anchorIdType: 'sss', sssNumber: '34-9999999-1' });
 
       const rows = await getDb()
         .select()
@@ -634,9 +635,14 @@ describe('persons service (integration)', () => {
         .where(sql`target_kind = 'person' AND target_id = ${p.id} AND action = 'person.updated'`);
       expect(rows.length).toBe(1);
       const payload = rows[0]!.payload as { changedFields: string[] };
+      // Accountability is kept — we know which fields a clerk touched...
       expect(payload.changedFields).toContain('sssNumber');
-      // The raw SSS number must not be recoverable from the audit log.
-      expect(JSON.stringify(payload)).not.toContain('34-9999999-1');
+      expect(payload.changedFields).toContain('firstName');
+      // ...but none of the actual values are recoverable from the audit log.
+      const blob = JSON.stringify(payload);
+      expect(blob).not.toContain('34-9999999-1');   // ID value
+      expect(blob).not.toContain('Renamedzz');       // new name
+      expect(blob).not.toContain('Zxqfirst');        // old name
     });
   });
 
@@ -877,23 +883,32 @@ describe('credentials service (integration)', () => {
       expect(updated.verifiedOn).toBe('2026-01-01');
     });
 
-    it('masks the credential number in the audit payload (PII must not survive in audit_log)', async () => {
+    it('masks the credential number and notes in the audit payload but keeps non-PII detail', async () => {
       const p = await makePerson();
-      const cred = await addCredential({ personId: p.id, credType: 'nbi_clearance', credNumber: 'NBI-OLD-123' });
-      await updateCredential(cred.id, { credNumber: 'NBI-NEW-7654321' }, verifierId);
+      const cred = await addCredential({ personId: p.id, credType: 'nbi_clearance', credNumber: 'NBI-OLD-123', status: 'pending' });
+      await updateCredential(cred.id, {
+        credNumber: 'NBI-NEW-7654321',
+        notes:      'assigned firearm M16 #SN-XYZ',
+        status:     'revoked',
+        expiresOn:  '2030-01-01',
+      }, verifierId);
 
       const rows = await getDb()
         .select()
         .from(auditLog)
         .where(sql`target_kind = 'person' AND target_id = ${p.id} AND action = 'person.credential.updated'`);
       expect(rows.length).toBe(1);
-      const payload = rows[0]!.payload as { changedFields: string[] };
-      // The change is still recorded...
+      const payload = rows[0]!.payload as { changedFields: string[]; before: Record<string, unknown>; after: Record<string, unknown> };
       expect(payload.changedFields).toContain('credNumber');
-      // ...but neither the old nor the new number may appear anywhere in the payload.
+      // PII values (number + free-text notes) are masked out of the payload...
       const blob = JSON.stringify(payload);
       expect(blob).not.toContain('NBI-OLD-123');
       expect(blob).not.toContain('NBI-NEW-7654321');
+      expect(blob).not.toContain('SN-XYZ');
+      // ...but useful non-PII detail survives for accountability.
+      expect(payload.before.status).toBe('pending');
+      expect(payload.after.status).toBe('revoked');
+      expect(payload.after.expiresOn).toBe('2030-01-01');
     });
   });
 
@@ -908,6 +923,31 @@ describe('credentials service (integration)', () => {
 
       // Wallet is gone — no licence numbers / notes left attached to the tombstone.
       expect(await listCredentials(p.id)).toEqual([]);
+    });
+
+    it('never embeds personal values in the person’s audit trail (immutable log stays PII-free)', async () => {
+      // The audit log is append-only (DB-enforced), so it can't be scrubbed at
+      // redaction. The guarantee is that PII was NEVER written to it — so after a
+      // full lifecycle + redaction, none of the person's values are recoverable.
+      const p = await makePerson();                                                  // person.created (Juan Dela Cruz)
+      await updatePerson(p.id, { anchorIdType: 'sss', sssNumber: '34-7777777-1' });   // person.updated
+      const cred = await addCredential({ personId: p.id, credType: 'nbi_clearance', credNumber: 'NBI-SECRET-1', notes: 'firearm SN-XYZ' });
+      await updateCredential(cred.id, { credNumber: 'NBI-SECRET-2' }, verifierId);     // person.credential.updated
+      await redactPerson(p.id);
+
+      const rows = await getDb()
+        .select()
+        .from(auditLog)
+        .where(sql`target_kind = 'person' AND target_id = ${p.id}`);
+      const blob = JSON.stringify(rows.map((r) => r.payload));
+      expect(blob).not.toContain('Dela Cruz');     // name
+      expect(blob).not.toContain('Juan');
+      expect(blob).not.toContain('34-7777777-1');  // SSS number
+      expect(blob).not.toContain('NBI-SECRET-1');  // old credential number
+      expect(blob).not.toContain('NBI-SECRET-2');  // new credential number
+      expect(blob).not.toContain('SN-XYZ');        // credential notes
+      // The audit rows themselves still exist — accountability is preserved.
+      expect(rows.length).toBeGreaterThan(0);
     });
   });
 

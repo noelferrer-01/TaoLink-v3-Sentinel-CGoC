@@ -88,34 +88,38 @@ function uniqueViolationMessage(err: unknown): string | null {
   return null;
 }
 
-// ─── Audit PII masking ──────────────────────────────────────────────────────────
+// ─── Audit PII handling ─────────────────────────────────────────────────────────
+//
+// The audit log is append-only — DB-enforced immutable (migration 0001: an
+// UPDATE/DELETE trigger blocks any change to a row). So PII can NEVER be erased
+// from it after the fact. The rule therefore has to be applied at write time:
+// never EMBED a person's identity VALUES in an audit payload — reference the
+// person by id and record only WHICH fields changed. When the Person is redacted,
+// their PII is gone from `persons`, and the audit — holding only references — has
+// nothing left to leak. This matches how every other module already audits (by
+// id/code, not by value); identity logging was the outlier.
+//
+// `persons` is entirely identity, so `person.updated` records `changedFields`
+// ONLY. Credentials mix PII (number, notes) with non-PII (status, dates), so the
+// credential payload keeps the useful non-PII values and masks just the PII ones.
+
+/** Credential fields whose value is PII; masked to a presence marker in audit. */
+const CREDENTIAL_PII_FIELDS = new Set<string>(['credNumber', 'notes']);
 
 /**
- * Fields whose raw value is government-ID / licence-number PII. `redactPerson`
- * removes these from the live row, but an audit `before`/`after` diff would
- * otherwise retain the cleartext number forever — silently defeating the
- * redaction guarantee (ADR 0017). We still record THAT the field changed (via
- * `changedFields`), but the value is reduced to a presence marker, never the
- * secret itself.
+ * Builds a before/after audit payload over `changedFields`, replacing the value
+ * of any PII field (`piiFields`) with a non-PII presence marker (`null` when
+ * empty, `'«set»'` when a value was present). Non-PII fields pass through, so the
+ * audit still shows useful detail (e.g. status valid→revoked, an expiry change).
  */
-const SENSITIVE_AUDIT_FIELDS = new Set<string>([
-  'philsysNumber', 'sssNumber', 'tinNumber', 'philhealthNumber',
-  'pagibigNumber', 'umidNumber', 'passportNumber', 'driversLicenseNumber',
-  'credNumber',
-]);
-
-/**
- * Builds a before/after audit payload over `changedFields`, replacing any
- * sensitive ID/number value with a non-PII presence marker (`null` when empty,
- * `'«set»'` when a value is present). Non-sensitive fields pass through verbatim.
- */
-function auditDiff(
+function maskedDiff(
   changedFields: string[],
   before: Record<string, unknown>,
   after: Record<string, unknown>,
+  piiFields: Set<string>,
 ): { before: Record<string, unknown>; after: Record<string, unknown> } {
   const mask = (field: string, value: unknown): unknown => {
-    if (!SENSITIVE_AUDIT_FIELDS.has(field)) return value;
+    if (!piiFields.has(field)) return value;
     return value == null || value === '' ? null : '«set»';
   };
   return {
@@ -243,8 +247,10 @@ export async function createPerson(input: CreatePersonInput, opts?: CreatePerson
     actor:   input.actorUserId ?? null,
     action:  'person.created',
     target:  { kind: 'person', id: created.id },
+    // The Person is referenced by target id — the name (PII) is NOT embedded, so
+    // it can't outlive redaction in this append-only log. anchorIdType is a type,
+    // not a value; formatWarning is a generic advisory with no ID in it.
     payload: {
-      name: `${created.lastName}, ${created.firstName}`,
       anchorIdType,
       ...(formatWarning ? { formatWarning } : {}),
     },
@@ -451,10 +457,10 @@ export async function updatePerson(
     actor:   actorUserId ?? null,
     action:  'person.updated',
     target:  { kind: 'person', id },
-    payload: {
-      ...auditDiff(changedFields, before as Record<string, unknown>, updated as Record<string, unknown>),
-      changedFields,
-    },
+    // `persons` is entirely identity, so every value here would be PII. Record
+    // only WHICH fields changed — never the before/after values. The accountability
+    // ("who changed which identity fields, when") is kept; the PII is not embedded.
+    payload: { changedFields },
   });
   await events.publish('person.updated', { id, changedFields });
 
@@ -728,7 +734,9 @@ export async function updateCredential(
       credId:   id,
       credType: updated.credType,
       changedFields,
-      ...auditDiff(changedFields, before as Record<string, unknown>, updated as Record<string, unknown>),
+      // Keep the useful non-PII detail (status, expiry, verifier); mask the PII
+      // values (credential number, free-text notes) so they can't outlive redaction.
+      ...maskedDiff(changedFields, before as Record<string, unknown>, updated as Record<string, unknown>, CREDENTIAL_PII_FIELDS),
     },
   });
   await events.publish('person.credential.updated', { personId: updated.personId, credId: id, changedFields });

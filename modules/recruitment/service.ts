@@ -167,12 +167,13 @@ export async function createApplicant(input: CreateApplicantInput): Promise<Appl
   }
 
   // Audit + events run after commit — not inside the transaction.
-  // Name comes from the identity input (the role row no longer carries it).
+  // Link to the Person by id only — the name (PII) must not be embedded in the
+  // append-only audit log, where it could outlive that person's redaction.
   await audit.record({
     actor: input.actorUserId ?? null,
     action: 'recruitment.applicant.created',
     target: { kind: 'recruitment_applicant', id: created.id },
-    payload: { name: `${input.firstName.trim()} ${input.lastName.trim()}` },
+    payload: { personId: created.personId },
   });
   await events.publish('recruitment.applicant.created', { id: created.id });
   return created;

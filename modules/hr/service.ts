@@ -134,12 +134,14 @@ export async function createEmployee(input: CreateEmployeeInput): Promise<Employ
   }
 
   // Audit + events run after commit — not inside the transaction.
-  // Name comes from the identity input (the role row no longer carries it).
+  // Reference the employee by code only — the name (PII) lives on the Person and
+  // must not be embedded in the append-only audit log, where it could outlive that
+  // person's redaction. (person.created carries no name either, by the same rule.)
   await audit.record({
     actor: actorUserId ?? null,
     action: 'hr.employee.created',
     target: { kind: 'hr_employee', id: created.id },
-    payload: { employeeCode: created.employeeCode, name: `${firstName} ${lastName}` },
+    payload: { employeeCode: created.employeeCode },
   });
   await events.publish('hr.employee.created', { id: created.id, employeeCode: created.employeeCode });
   return created;

@@ -55,6 +55,21 @@ describe('hr.createEmployee + state machine', () => {
     expect(Number(e.basicSalary)).toBe(18000);
   });
 
+  it('does not embed the employee name in the append-only audit payload (PII)', async () => {
+    const e = await hr.createEmployee({
+      employeeCode: 'CG-NOPII', firstName: 'Zxqfirst', lastName: 'Zxqlast',
+      basicSalary: 18000, hiredOn: '2026-05-01',
+    });
+    const rows = await getDb().select().from(auditLog)
+      .where(sql`target_kind = 'hr_employee' AND target_id = ${e.id} AND action = 'hr.employee.created'`);
+    expect(rows.length).toBe(1);
+    const blob = JSON.stringify(rows[0]!.payload);
+    // Referenced by code, never by name — so the name can't outlive redaction here.
+    expect(blob).toContain('CG-NOPII');
+    expect(blob).not.toContain('Zxqfirst');
+    expect(blob).not.toContain('Zxqlast');
+  });
+
   it('allows two employees to share an email (uniqueness retired at T12 — persons.email is non-unique by design)', async () => {
     const e1 = await hr.createEmployee({ employeeCode: 'CG-1', firstName: 'A', lastName: 'B', basicSalary: 18000, hiredOn: '2026-05-01', email: 'shared@x.com' });
     const e2 = await hr.createEmployee({ employeeCode: 'CG-2', firstName: 'C', lastName: 'D', basicSalary: 18000, hiredOn: '2026-05-01', email: 'shared@x.com' });

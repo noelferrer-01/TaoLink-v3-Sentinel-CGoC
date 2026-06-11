@@ -23,6 +23,7 @@ import {
   listCredentials,
 } from '@/modules/persons';
 import { runPayroll, listPayslips } from '@/modules/payroll';
+import { auditLog } from '@/modules/audit/schema';
 import { recruitment } from './index';
 import { DOC_TO_CRED_TYPE, DOC_TYPE_LABELS, type DocType } from './labels';
 
@@ -55,6 +56,21 @@ describe('recruitment service', () => {
     expect(a.pipelineStage).toBe('applied');
     const got = await recruitment.getApplicant(a.id);
     expect(got?.documents.length).toBe(9);
+  });
+
+  it('does not embed the applicant name in the append-only audit payload (PII)', async () => {
+    const a = await recruitment.createApplicant({
+      firstName: 'Zxqfirst', lastName: 'Zxqlast', source: 'referral', appliedOn: '2026-05-29',
+    });
+    const rows = await getDb().select().from(auditLog)
+      .where(sql`target_kind = 'recruitment_applicant' AND target_id = ${a.id} AND action = 'recruitment.applicant.created'`);
+    expect(rows.length).toBe(1);
+    const payload = rows[0]!.payload as { personId: string };
+    // Linked to the Person by id (redactable), never by name.
+    expect(payload.personId).toBe(a.personId);
+    const blob = JSON.stringify(payload);
+    expect(blob).not.toContain('Zxqfirst');
+    expect(blob).not.toContain('Zxqlast');
   });
 
   it('createApplicant for an armed post includes the LTOPF license', async () => {
