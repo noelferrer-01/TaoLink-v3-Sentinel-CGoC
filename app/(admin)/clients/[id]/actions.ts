@@ -2,7 +2,9 @@
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
+import { z } from 'zod';
 import { clients } from '@/modules/clients';
+import { billing } from '@/modules/billing';
 import { getSessionFromCookie } from '@/modules/auth';
 
 /**
@@ -51,6 +53,82 @@ export async function updateClientAction(
       message = `We couldn't save those changes. ${raw}`;
     }
     return { kind: 'error', message };
+  }
+}
+
+// ─── Billing config action (Slice 4) ─────────────────────────────────────────
+
+/**
+ * Zod schema for the billing config form. ratePerManday is validated as a
+ * string because Postgres numeric columns are returned as strings by Drizzle —
+ * we keep it a string all the way through to avoid float rounding.
+ */
+const billingConfigSchema = z.object({
+  ratePerManday: z
+    .string()
+    .trim()
+    .min(1, 'Please enter the billing rate.')
+    .regex(
+      /^\d+(\.\d{1,2})?$/,
+      'Rate must be a number with up to 2 decimal places (e.g. 500 or 1250.50).',
+    )
+    .refine((v) => parseFloat(v) > 0, 'Rate must be greater than zero.'),
+  paymentTermsDays: z.coerce
+    .number({ invalid_type_error: 'Payment terms must be a whole number of days.' })
+    .int('Payment terms must be a whole number of days.')
+    .positive('Payment terms must be at least 1 day.'),
+  chargesVat: z.coerce.boolean(),
+  clientWithholdsEwt: z.coerce.boolean(),
+});
+
+export type SaveBillingConfigResult =
+  | { kind: 'ok' }
+  | { kind: 'error'; message: string };
+
+export async function saveBillingConfigAction(
+  clientId: string,
+  formData: FormData,
+): Promise<SaveBillingConfigResult> {
+  const session = await getSessionFromCookie();
+  if (!session) {
+    return {
+      kind: 'error',
+      message: 'Your session expired. Please sign in again.',
+    };
+  }
+
+  const parsed = billingConfigSchema.safeParse({
+    ratePerManday: formData.get('ratePerManday'),
+    paymentTermsDays: formData.get('paymentTermsDays'),
+    // Checkbox inputs are absent from FormData when unchecked — treat absence as false.
+    chargesVat: formData.get('chargesVat') === 'on',
+    clientWithholdsEwt: formData.get('clientWithholdsEwt') === 'on',
+  });
+
+  if (!parsed.success) {
+    return {
+      kind: 'error',
+      message: parsed.error.issues[0]?.message ?? 'Please check the form.',
+    };
+  }
+
+  try {
+    await billing.setClientBillingConfig({
+      clientId,
+      ratePerManday: parsed.data.ratePerManday,
+      paymentTermsDays: parsed.data.paymentTermsDays,
+      chargesVat: parsed.data.chargesVat,
+      clientWithholdsEwt: parsed.data.clientWithholdsEwt,
+      actorUserId: session.user.id,
+    });
+    revalidatePath(`/clients/${clientId}`);
+    return { kind: 'ok' };
+  } catch (e) {
+    const raw = e instanceof Error ? e.message : String(e);
+    return {
+      kind: 'error',
+      message: `We couldn't save the billing config. ${raw}`,
+    };
   }
 }
 

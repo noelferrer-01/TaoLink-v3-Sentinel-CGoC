@@ -2,9 +2,11 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { clients } from '@/modules/clients';
 import { payrollCalendars } from '@/modules/payroll-calendars';
+import { billing } from '@/modules/billing';
 import { PageShell } from '@/components/page-shell';
 import { Pagination, clampPageSize } from '@/components/pagination';
 import { AddDetachmentForm } from './add-detachment-form';
+import { BillingSection } from './billing-section';
 import { ClientDetailBody } from './client-detail-body';
 import { DetachmentsList } from './detachments-list';
 
@@ -25,7 +27,7 @@ export default async function ClientDetailPage({
   const page = parsePage(sp.page);
   const pageSize = clampPageSize(sp.size);
 
-  const [client, detachmentResult, allCalendars] = await Promise.all([
+  const [client, detachmentResult, allCalendars, billingConfig] = await Promise.all([
     clients.getClient(id),
     clients.listDetachmentsWithDeploymentPage({
       clientId: id,
@@ -33,6 +35,7 @@ export default async function ClientDetailPage({
       offset: (page - 1) * pageSize,
     }),
     payrollCalendars.list(),
+    billing.getClientBillingConfig(id),
   ]);
   if (!client) notFound();
 
@@ -58,6 +61,8 @@ export default async function ClientDetailPage({
         allCalendars={allCalendars}
         currentCalendar={currentCalendar}
       />
+
+      <BillingSection clientId={client.id} config={billingConfig} />
 
       <div className="section-rule" style={{ marginTop: '2.5rem' }}>
         <h2>Detachments</h2>
